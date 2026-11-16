@@ -42,14 +42,36 @@ func tableExists(t *testing.T, s *Store, name string) bool {
 	return n == 1
 }
 
+// embeddedVersion is the highest version the binary ships, and embeddedCount is
+// how many files it embeds. The assertions below compare against these rather
+// than a literal: they are about the migrator applying every file exactly once,
+// and a new migration must not fail them.
+func embeddedVersion(t *testing.T) int {
+	t.Helper()
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	return known[len(known)-1].version
+}
+
+func embeddedCount(t *testing.T) int {
+	t.Helper()
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	return len(known)
+}
+
 func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	s := openTemp(t)
 
 	if !tableExists(t, s, "schema_migrations") {
 		t.Fatal("schema_migrations was not created")
 	}
-	if got := schemaVersion(t, s); got != 1 {
-		t.Fatalf("schema version = %d, want 1", got)
+	if got, want := schemaVersion(t, s), embeddedVersion(t); got != want {
+		t.Fatalf("schema version = %d, want %d", got, want)
 	}
 }
 
@@ -90,16 +112,16 @@ func TestMigrateRerunIsNoOp(t *testing.T) {
 	}
 	defer func() { _ = second.Close() }()
 
-	if got := schemaVersion(t, second); got != 1 {
-		t.Fatalf("schema version after re-open = %d, want 1", got)
+	if got, want := schemaVersion(t, second), embeddedVersion(t); got != want {
+		t.Fatalf("schema version after re-open = %d, want %d", got, want)
 	}
 
 	var rows int
 	if err := second.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if want := embeddedCount(t); rows != want {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, want)
 	}
 }
 
@@ -324,8 +346,8 @@ func TestConcurrentMigrateAppliesOnce(t *testing.T) {
 	if err := s.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if want := embeddedCount(t); rows != want {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, want)
 	}
 }
 
