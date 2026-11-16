@@ -1,0 +1,68 @@
+package httpapi
+
+import (
+	"log/slog"
+	"net/http"
+)
+
+// server carries the dependencies every handler and middleware needs. There is
+// no package-level state: one server value owns one Deps, which is what lets a
+// test run two independent panels in one process.
+type server struct {
+	deps   Deps
+	logger *slog.Logger
+}
+
+// New builds the HTTP handler for the panel: the middleware chain and every
+// route. The returned handler is ready for httptest or a real listener.
+//
+// The chain runs outermost first:
+//
+//	request ID -> recover -> security headers -> session -> CSRF -> audit -> route
+//
+// Request ID is first so every later line can be correlated; recover is next so
+// a panic in anything inside it still becomes a JSON 500; headers are set before
+// any body is written; session resolves the cookie for both the CSRF check and
+// the handlers; CSRF guards every unsafe method; audit records the outcome last,
+// after the handler has decided it.
+func New(deps Deps) (http.Handler, error) {
+	if err := deps.validate(); err != nil {
+		return nil, err
+	}
+	s := &server{deps: deps, logger: deps.Logger}
+	return s.routes(), nil
+}
+
+// routes builds the mux and wraps it in the chain. Patterns use the go1.22
+// method+path syntax, so the method is part of the route: a GET to a POST-only
+// path is a 405 from the mux, not a handler that has to check the method itself.
+func (s *server) routes() http.Handler {
+	mux := http.NewServeMux()
+
+	// Public: login is the only endpoint reachable without a session. Every
+	// other route is wrapped in requireAuth.
+	mux.Handle("POST /api/login", http.HandlerFunc(s.handleLogin))
+	mux.Handle("POST /api/logout", s.requireAuth(http.HandlerFunc(s.handleLogout)))
+
+	mux.Handle("GET /api/me", s.requireAuth(http.HandlerFunc(s.handleMe)))
+	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handlePassword)))
+
+	mux.Handle("GET /api/settings", s.requireAuth(http.HandlerFunc(s.handleGetSettings)))
+	mux.Handle("PUT /api/settings", s.requireAuth(http.HandlerFunc(s.handlePutSettings)))
+
+	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
+
+	return s.middleware(mux)
+}
+
+// middleware applies the chain in the order documented on New.
+func (s *server) middleware(next http.Handler) http.Handler {
+	h := next
+	h = s.withAudit(h)
+	h = s.withCSRF(h)
+	h = s.withSession(h)
+	h = withSecurityHeaders(h)
+	h = s.withRecover(h)
+	h = withRequestID(h)
+	return h
+}
