@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,34 @@ type argonParams struct {
 	parallelism uint8
 	saltLen     uint32
 	keyLen      uint32
+}
+
+// DefaultUsername is the single admin account's name (decision 3: one account,
+// no roles). Install creates it and `panel reset-password` keeps it.
+const DefaultUsername = "admin"
+
+// PasswordAlphabet leaves out the characters an operator reading a console
+// confuses: 0 and O, 1 and I, l.
+const PasswordAlphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// GeneratedPasswordLen characters from a 57-symbol alphabet is about 116 bits,
+// well past the point where the password itself is the weak link.
+const GeneratedPasswordLen = 20
+
+// GeneratePassword returns a random password drawn from PasswordAlphabet. It is
+// the one generator: install and `panel reset-password` both call it, so a
+// password from either path has the same shape.
+func GeneratePassword() (string, error) {
+	limit := big.NewInt(int64(len(PasswordAlphabet)))
+	out := make([]byte, GeneratedPasswordLen)
+	for i := range out {
+		n, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return "", fmt.Errorf("auth: generate password: %w", err)
+		}
+		out[i] = PasswordAlphabet[n.Int64()]
+	}
+	return string(out), nil
 }
 
 // Hash derives an argon2id hash of password with the package's current costs and

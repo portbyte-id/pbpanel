@@ -80,6 +80,23 @@ func NewService(st *store.Store, clock Clock, idle func() time.Duration, maxAtte
 	}
 }
 
+// OfflineService builds the service the CLI uses: `panel install` creating the
+// first account and `panel reset-password` replacing it. Only SetPassword,
+// HasAdmin and Username are called on it, and all three work straight off the
+// store.
+//
+// The three login policy functions belong to login, which the CLI never
+// performs, so they return zero: a login attempted through this service fails
+// closed (a session created here would expire at once) rather than running with
+// limits nobody configured.
+func OfflineService(st *store.Store) *Service {
+	return NewService(st, SystemClock{},
+		func() time.Duration { return 0 },
+		func() int { return 0 },
+		func() time.Duration { return 0 },
+	)
+}
+
 // Sessions exposes the session store for the HTTP layer.
 func (s *Service) Sessions() *SessionStore { return s.sessions }
 
