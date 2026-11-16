@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -52,6 +54,26 @@ func embedded(t *testing.T) (count, latest int) {
 		t.Fatalf("loadMigrations: %v", err)
 	}
 	return len(known), known[len(known)-1].version
+}
+
+// The tests above derive their expectations from loadMigrations, so a parser
+// that silently returned nothing would agree with itself. This pins the count
+// to the files actually embedded, independently of the parser.
+func TestEmbeddedMigrationFilesAreParsed(t *testing.T) {
+	entries, err := fs.ReadDir(embeddedMigrations(), ".")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var sqlFiles int
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			sqlFiles++
+		}
+	}
+	count, _ := embedded(t)
+	if count != sqlFiles {
+		t.Fatalf("parsed %d migrations but %d .sql files are embedded", count, sqlFiles)
+	}
 }
 
 func TestOpenMigratesEmptyDatabase(t *testing.T) {
