@@ -196,6 +196,18 @@ func (r *Registry) Get(ctx context.Context, name string) (Setting, error) {
 	return Setting{Meta: metaCopy(k.meta), Value: raw}, nil
 }
 
+// Validate reports whether value is acceptable for name without storing it. It
+// is what lets a caller with a side effect (the listener rebind for panel.port)
+// check the value first and only then act, instead of acting on a value Set
+// would have refused.
+func (r *Registry) Validate(name, value string) error {
+	k, err := r.lookup(name)
+	if err != nil {
+		return err
+	}
+	return validate(k, value)
+}
+
 // Set validates, stores, then notifies every subscriber once. A rejected value
 // changes nothing and returns the validator's message. Writing a value that is
 // already in effect still counts as a successful write and still notifies.
