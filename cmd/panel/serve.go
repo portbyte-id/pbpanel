@@ -85,6 +85,17 @@ func serve(ctx context.Context, _ []string) error {
 		return fmt.Errorf("serve: panel.port: %w", err)
 	}
 
+	// Building the stack touches neither Docker nor the disk; a failure here is
+	// a wiring problem, and the nginx routes then answer 503.
+	var nginxDeps *httpapi.NginxDeps
+	nginxStack, err := newNginxStack(st, layout, jobsMgr, logger)
+	if err != nil {
+		logger.Error("nginx is not available", "error", err)
+		nginxStack = nil
+	} else {
+		nginxDeps = nginxStack.deps()
+	}
+
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
 	var listener *httpapi.Listener
@@ -95,8 +106,9 @@ func serve(ctx context.Context, _ []string) error {
 		Audit: audit.New(st.DB(),
 			audit.WithMirrorPath(filepath.Join(layout.LogsDir(), "audit.log")),
 			audit.WithLogger(logger)),
-		Jobs: jobsMgr,
-		UI:   ui,
+		Jobs:  jobsMgr,
+		UI:    ui,
+		Nginx: nginxDeps,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
@@ -123,7 +135,9 @@ func serve(ctx context.Context, _ []string) error {
 
 	// After the listener: a slow image build or an absent Docker must not keep
 	// the operator out of the panel that can show them why.
-	_ = startNginx(ctx, st, layout, jobsMgr, logger)
+	if nginxStack != nil {
+		nginxStack.start(ctx, logger)
+	}
 
 	<-ctx.Done()
 	logger.Info("panel stopping")

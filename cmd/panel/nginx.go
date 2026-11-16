@@ -8,6 +8,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
@@ -23,6 +24,7 @@ type nginxStack struct {
 	Global     *nginx.Global
 	Sites      *sites.Manager
 	Reconciler *sites.Reconciler
+	Paths      nginx.Paths
 }
 
 // newNginxStack wires the Docker client, the config editor, the nginx service
@@ -69,7 +71,7 @@ func newNginxStack(st *store.Store, layout install.Layout, jobsMgr *jobs.Manager
 	}
 
 	return &nginxStack{
-		Editor: ed, Service: live, Global: global, Sites: mgr,
+		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
@@ -80,20 +82,22 @@ func newNginxStack(st *store.Store, layout install.Layout, jobsMgr *jobs.Manager
 	}, nil
 }
 
-// startNginx builds the stack and reconciles it in the background. The panel
-// must be reachable when nginx is not, because that is when an operator needs
-// it, so a failure is logged and kept in the reconciler's status, never fatal.
-func startNginx(ctx context.Context, st *store.Store, layout install.Layout, jobsMgr *jobs.Manager, logger *slog.Logger) *nginxStack {
-	stack, err := newNginxStack(st, layout, jobsMgr, logger)
-	if err != nil {
-		logger.Error("nginx is not available", "error", err)
-		return nil
-	}
+// start reconciles nginx in the background. The panel must be reachable when
+// nginx is not, because that is when an operator needs it, so a failure is
+// logged and kept in the reconciler's status, never fatal.
+func (n *nginxStack) start(ctx context.Context, logger *slog.Logger) {
 	go func() {
-		status := stack.Reconciler.Run(ctx)
+		status := n.Reconciler.Run(ctx)
 		if status.OK {
 			logger.Info("nginx reconciled", "steps", len(status.Steps))
 		}
 	}()
-	return stack
+}
+
+// deps is the stack as the HTTP layer takes it.
+func (n *nginxStack) deps() *httpapi.NginxDeps {
+	return &httpapi.NginxDeps{
+		Sites: n.Sites, Global: n.Global, History: n.Editor,
+		Service: n.Service, Reconciler: n.Reconciler, Paths: n.Paths,
+	}
 }

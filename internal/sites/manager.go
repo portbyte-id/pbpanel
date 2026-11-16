@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
@@ -263,10 +262,10 @@ func (m *Manager) prepareRoot(s Site) (created bool, err error) {
 		return false, fmt.Errorf("sites: write %s: %w", index, err)
 	}
 	for _, p := range []string{s.Root, index} {
-		if err := m.fs.Chown(p, install.WWWUID, install.WWWGID); err != nil {
+		if err := m.fs.Chown(p, nginx.WWWUID, nginx.WWWGID); err != nil {
 			_ = m.fs.Remove(index)
 			_ = m.fs.Remove(s.Root)
-			return false, fmt.Errorf("sites: give %s to %s: %w", p, install.WWWUser, err)
+			return false, fmt.Errorf("sites: give %s to %s: %w", p, nginx.WWWUser, err)
 		}
 	}
 	return true, nil

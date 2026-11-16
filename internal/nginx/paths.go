@@ -54,3 +54,13 @@ func (p Paths) SitesRoot() string { return path.Join(p.Root, "services", "sites"
 
 // SiteRoot is a site's default web root.
 func (p Paths) SiteRoot(domain string) string { return path.Join(p.SitesRoot(), domain) }
+
+// The shared account nginx workers run as and web roots belong to. These repeat
+// install.WWWUser, install.WWWUID and install.WWWGID: the install package
+// imports the HTTP layer, which imports this one, so it cannot be imported
+// here. A test in cmd/panel holds the two sets equal.
+const (
+	WWWUser = "www"
+	WWWUID  = 1500
+	WWWGID  = 1500
+)

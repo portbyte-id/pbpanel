@@ -8,7 +8,6 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
-	"github.com/portbyte-id/server-panel/internal/install"
 )
 
 // Names and images. The image is the official one plus the `www` account at the
@@ -60,7 +59,7 @@ func Spec(p Paths) docker.Spec {
 func Dockerfile() []byte {
 	return fmt.Appendf(nil,
 		"FROM %s\nRUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
-		BaseImage, install.WWWGID, install.WWWUser, install.WWWUID, install.WWWUser, install.WWWUser)
+		BaseImage, WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
 }
 
 // ImagePresent reports whether the derived image exists locally.
@@ -229,4 +228,17 @@ func (r *Runtime) ImagePresent(ctx context.Context) (bool, error) { return Image
 // EnsureContainer creates, recreates or starts the container so it matches Spec.
 func (r *Runtime) EnsureContainer(ctx context.Context) (docker.EnsureResult, error) {
 	return docker.Ensure(ctx, r.eng, Spec(r.p), r.p.Root)
+}
+
+// State is the nginx container as Docker reports it. The bool is false when
+// there is no such container.
+func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
+	c, err := s.eng.ContainerInspect(ctx, ContainerName)
+	if errors.Is(err, docker.ErrNotFound) {
+		return docker.Container{}, false, nil
+	}
+	if err != nil {
+		return docker.Container{}, false, err
+	}
+	return c, true, nil
 }

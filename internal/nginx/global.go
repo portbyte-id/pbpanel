@@ -153,3 +153,10 @@ func (g *Global) ConfLinks(content []byte) []string {
 	}
 	return missing
 }
+
+// ReadWith replaces how nginx.conf is read and returns g. It exists for tests
+// that have no real filesystem.
+func (g *Global) ReadWith(read func(string) ([]byte, error)) *Global {
+	g.read = read
+	return g
+}
