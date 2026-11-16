@@ -34,23 +34,30 @@ func commandSet(stdout io.Writer) []*command {
 		},
 		{
 			name:    "info",
-			summary: "show port, URL, version and database path (step 0.12)",
+			summary: "show port, URL, version and database path",
 			usage:   "panel info",
-			run:     notImplemented("info", "0.12"),
+			run: func(ctx context.Context, _ []string) error {
+				return info(ctx, stdout, databasePath())
+			},
 		},
 		{
 			name:    "reset-password",
-			summary: "set a new admin password and revoke sessions (step 0.12)",
+			summary: "set a new admin password and revoke sessions",
 			usage:   "panel reset-password",
-			run:     notImplemented("reset-password", "0.12"),
+			run: func(ctx context.Context, _ []string) error {
+				return resetPassword(ctx, stdout, databasePath())
+			},
 		},
 		{
 			name:    "set",
-			summary: "change one setting through the registry validators (step 0.12)",
+			summary: "change one setting through the registry validators",
 			usage:   "panel set <key> <value>",
+			help:    setHelp,
 			minArgs: 2,
 			maxArgs: 2,
-			run:     notImplemented("set", "0.12"),
+			run: func(ctx context.Context, args []string) error {
+				return setSetting(ctx, stdout, databasePath(), args[0], args[1])
+			},
 		},
 		{
 			name:    "firewall restore",
