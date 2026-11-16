@@ -74,7 +74,37 @@ func TestCertDirectoryMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm&0o002 != 0 {
-		t.Errorf("certificate directory mode = %04o, must not be world-writable", perm)
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("certificate directory mode = %04o, want 0700", perm)
+	}
+}
+
+// TestCertDirectoryModeIsRepaired covers an operator-loosened directory and a
+// regeneration that must not leave a temp file behind.
+func TestCertDirectoryModeIsRepaired(t *testing.T) {
+	paths := certPathsIn(t)
+	if err := GenerateSelfSigned(paths, []string{"192.0.2.8"}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	dir := paths.CertFile[:len(paths.CertFile)-len("/panel.crt")]
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+	if err := GenerateSelfSigned(paths, []string{"192.0.2.8"}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("directory mode after repair = %04o, want 0700", perm)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("directory holds %d entries after regeneration, want exactly the cert and key", len(entries))
 	}
 }

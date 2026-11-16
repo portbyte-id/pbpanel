@@ -55,6 +55,10 @@ const (
 	// whole point of keeping the key in its own file.
 	certFileMode os.FileMode = 0o644
 	keyFileMode  os.FileMode = 0o600
+
+	// dirMode keeps the directory root-only: nothing but the daemon needs to
+	// list or traverse it.
+	dirMode os.FileMode = 0o700
 )
 
 // GenerateSelfSigned writes a self-signed certificate and key to paths. It
@@ -114,11 +118,16 @@ func GenerateSelfSigned(paths CertPaths, hosts []string) error {
 		return fmt.Errorf("httpapi: marshal key: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(paths.CertFile), 0o750); err != nil {
-		return fmt.Errorf("httpapi: create certificate directory: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.KeyFile), 0o750); err != nil {
-		return fmt.Errorf("httpapi: create key directory: %w", err)
+	for _, dir := range []string{filepath.Dir(paths.CertFile), filepath.Dir(paths.KeyFile)} {
+		if err := os.MkdirAll(dir, dirMode); err != nil {
+			return fmt.Errorf("httpapi: create certificate directory: %w", err)
+		}
+		// MkdirAll leaves an existing directory as it was, and the umask can
+		// only tighten a new one: set the mode explicitly so a repair
+		// re-establishes it.
+		if err := os.Chmod(dir, dirMode); err != nil {
+			return fmt.Errorf("httpapi: chmod certificate directory: %w", err)
+		}
 	}
 
 	// os.WriteFile applies its mode only when it creates the file: rewriting an
@@ -135,11 +144,37 @@ func GenerateSelfSigned(paths CertPaths, hosts []string) error {
 }
 
 // writeFileMode writes data to path with exactly mode, on create and on rewrite.
-func writeFileMode(path string, data []byte, mode os.FileMode) error {
-	if err := os.WriteFile(path, data, mode); err != nil {
+//
+// The data goes to a temp file created with mode and is renamed over path, so
+// the key is never in a file looser than mode: rewriting an existing 0644 file
+// in place would expose the new key until a later chmod. The rename is also
+// atomic, so a crash leaves the old pair, not a truncated key.
+func writeFileMode(path string, data []byte, mode os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, mode)
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	// CreateTemp opens 0600; widen to mode (the certificate) only after the
+	// content is written, and set it exactly in case of a umask.
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(tmp.Name(), mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // commonName picks the name for the certificate subject. Browsers ignore the CN
