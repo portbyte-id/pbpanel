@@ -1,0 +1,6 @@
+# Files allowed to use a shell string. One repo-relative path per line.
+#
+# Empty on purpose: nothing in the panel may invoke `sh -c` or `bash -c` yet.
+# Add a path here only when a documented reason exists, and keep the reason in
+# the same commit (see docs/development-plan.md §1.4 and step 7.6, where a cron
+# "shell" job writes a script file and runs it with `/bin/sh <file>`).

@@ -1,0 +1,33 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - forbidigo
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # Argument vectors only. Process spawning that bypasses exec.Command is
+        # banned outright: it has no place in the panel.
+        - pattern: '^syscall\.Exec$'
+          msg: 'spawn processes through exec.Command with an argument vector'
+        - pattern: '^os\.StartProcess$'
+          msg: 'spawn processes through exec.Command with an argument vector'
+        - pattern: '^os\.ExpandEnv$'
+          msg: 'no shell-style expansion: settings come from the registry, not the environment'
+
+# NOTE: forbidigo matches identifiers, not call arguments, so it cannot express
+# `sh -c` / `bash -c` on its own. That rule lives in scripts/lint-conventions.sh,
+# which is run by `make lint` and by the CI lint job. Keep both.
+
+formatters:
+  enable:
+    - gofmt
