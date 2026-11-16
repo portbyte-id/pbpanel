@@ -1,7 +1,7 @@
 # Server Panel — Development Plan
 
 Date: 2026-11-16. Source: [plan.md](plan.md) (decisions, layout, architecture, stages).
-Status: not started. This document turns the ten stages of `plan.md` §4 into milestones with
+Status: M0 built and smoke-tested on Ubuntu; M1 in progress. This document turns the ten stages of `plan.md` §4 into milestones with
 ordered steps, deliverables, tests, and exit gates. Where this file and `plan.md` disagree,
 `plan.md` wins and this file is corrected.
 
@@ -123,6 +123,23 @@ recover from the CLI.
 Fresh VM → copy binary → `panel install` → log in over HTTPS → change `panel.port` in the UI →
 panel answers on the new port and not the old one → `panel reset-password` → old session is
 rejected, new password logs in → `panel info` shows the new port → reboot → panel is back.
+
+### Status (2026-11-17)
+
+M0 is built and the exit gate passes on a real host: `scripts/smoke/0-foundation.sh` ran 28/28
+on Ubuntu 26.04 with the full unit hardening list (including `MemoryDenyWriteExecute`), reboot
+included. Not run: the web tests (vitest) and the Playwright journey after the last changes, and
+the EL8–EL10 hosts (M0 is Ubuntu only by design).
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 0.1–0.7 | done | Package tests under `go test ./cmd/... ./internal/...`; `scripts/lint-conventions.sh`. |
+| 0.8 | done | Not built until the first VM run showed `panel serve` was a stub. `httpapi.Listener` binds the new port before closing the old one after a grace period; a `panel.port` write whose bind fails is refused and stores nothing. Listener tests on two free ports, a busy port and concurrent changes; handler tests in `rebind_test.go`. |
+| 0.9–0.10 | done | `internal/jobs`, `internal/osdep` tests. |
+| 0.11 | done | Idempotency and step-order tests. The first VM run found that install never copied the binary to `/www/panel/bin/panel`; a `binary` step now does, with a regression test. |
+| 0.12–0.13 | done | CLI tests; UI shell embedded and served by `panel serve`. |
+| 0.14 | done | `scripts/smoke/lib.sh` and `0-foundation.sh`; `SMOKE_DRY_RUN=1` prints the plan. |
+| 0.15 | done | `docs/security-review-m0.md`: no High or Critical findings; three Medium fixed with regression tests; six Low recorded as open. |
 
 ### Risks specific to M0
 
