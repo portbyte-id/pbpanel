@@ -48,8 +48,8 @@ test("login, change a setting, log out", async ({ page }) => {
 
   // 7. The sidebar offers the future sections as disabled controls, so nothing
   //    looks clickable that has no page behind it yet.
-  const sites = page.getByRole("button", { name: /Sites — not built yet/i })
-  await expect(sites).toBeDisabled()
+  const php = page.getByRole("button", { name: /PHP — not built yet/i })
+  await expect(php).toBeDisabled()
 
   // 8. Log out. The session is revoked server-side, so the guard sends us back
   //    to the login page even on a fresh navigation.

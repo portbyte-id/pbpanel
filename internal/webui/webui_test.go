@@ -109,7 +109,9 @@ func TestClientRouteFallsBackToIndex(t *testing.T) {
 		t.Fatalf("Handler: %v", err)
 	}
 
-	for _, path := range []string{"/settings", "/audit", "/settings/deep"} {
+	// A site's page carries its domain, and every domain has a dot: an
+	// extension is not what tells a route from a file.
+	for _, path := range []string{"/settings", "/audit", "/settings/deep", "/sites/a.test", "/sites/www.example.com", "/sites/app.js"} {
 		t.Run(path, func(t *testing.T) {
 			rec := get(t, h, path)
 			if rec.Code != http.StatusOK {
@@ -133,9 +135,10 @@ func TestMissingAssetIs404(t *testing.T) {
 		t.Fatalf("Handler: %v", err)
 	}
 
-	rec := get(t, h, "/assets/index-gone.js")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+	for _, path := range []string{"/assets/index-gone.js", "/assets/gone", "/favicon.ico", "/robots.txt"} {
+		if rec := get(t, h, path); rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", path, rec.Code)
+		}
 	}
 }
 

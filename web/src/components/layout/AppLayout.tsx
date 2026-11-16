@@ -32,6 +32,8 @@ export function AppLayout() {
 }
 
 function pageTitle(path: string): string {
+  if (path.startsWith("/sites")) return "Sites"
+  if (path.startsWith("/nginx")) return "Nginx"
   if (path.startsWith("/settings")) return "Settings"
   if (path.startsWith("/audit")) return "Audit log"
   return "Server Panel"

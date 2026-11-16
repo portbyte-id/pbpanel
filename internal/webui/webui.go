@@ -62,14 +62,26 @@ func Handler(fsys fs.FS) (http.Handler, error) {
 			return
 		}
 
-		// A missing file with an extension was a real request for a real asset;
-		// a path without one is a client-side route.
-		if path.Ext(name) != "" {
+		if looksLikeAsset(name) {
 			http.NotFound(w, r)
 			return
 		}
 		serveIndex(w, r, fsys)
 	}), nil
+}
+
+// looksLikeAsset reports whether a path with no file behind it was a request
+// for a file rather than a client-side route.
+//
+// An extension alone does not say so: a site's page is /sites/example.com, and
+// every domain has a dot. What the build produces is files under assets/ and a
+// few at the top level (favicon.ico, robots.txt), so those two shapes are the
+// ones a missing file is reported for. Everything else is a route.
+func looksLikeAsset(name string) bool {
+	if strings.HasPrefix(name, hashedPrefix) {
+		return true
+	}
+	return !strings.Contains(name, "/") && path.Ext(name) != ""
 }
 
 // serveIndex writes index.html with no-store. It is read and written directly

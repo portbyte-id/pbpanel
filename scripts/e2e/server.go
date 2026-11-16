@@ -12,20 +12,29 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
+	"github.com/portbyte-id/server-panel/internal/confedit"
+	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
+	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/settings"
+	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
 	"github.com/portbyte-id/server-panel/internal/webui"
 	"github.com/portbyte-id/server-panel/web"
@@ -41,6 +50,170 @@ func main() {
 		fmt.Fprintln(os.Stderr, "e2e-server:", err)
 		os.Exit(1)
 	}
+}
+
+// --- a stand-in for nginx ------------------------------------------------------
+//
+// The journey needs sites and a config that can be rejected, and the machine
+// running it may have no Docker. So the HTTP layer and the sites model are the
+// real ones, and what sits behind them is this: files in memory, and a
+// "validator" that refuses any file containing `bogus_directive` with a message
+// shaped like nginx's. What real nginx does with a config is covered by the
+// integration test in internal/sites and by scripts/smoke/1-nginx-sites.sh.
+
+type memFS struct {
+	mu    sync.Mutex
+	files map[string][]byte
+	dirs  map[string]bool
+}
+
+type memInfo struct{ fs.FileInfo }
+
+func (m *memFS) ReadFile(n string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if b, ok := m.files[n]; ok {
+		return b, nil
+	}
+	return nil, &fs.PathError{Op: "open", Path: n, Err: fs.ErrNotExist}
+}
+
+func (m *memFS) Stat(n string) (fs.FileInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.files[n]; ok || m.dirs[n] {
+		return memInfo{}, nil
+	}
+	return nil, &fs.PathError{Op: "stat", Path: n, Err: fs.ErrNotExist}
+}
+
+func (m *memFS) MkdirAll(n string, _ fs.FileMode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dirs[n] = true
+	return nil
+}
+
+func (m *memFS) WriteFile(n string, d []byte, _ fs.FileMode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[n] = d
+	return nil
+}
+
+func (m *memFS) Remove(n string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.files, n)
+	delete(m.dirs, n)
+	return nil
+}
+
+func (m *memFS) Chown(string, int, int) error { return nil }
+
+// fakeNginx is the applier, the history, the service and the reconcile status.
+type fakeNginx struct {
+	fs *memFS
+
+	mu       sync.Mutex
+	versions map[string][]confedit.Version
+	content  map[string][]byte
+}
+
+const brokenMarker = "bogus_directive"
+
+func (f *fakeNginx) Apply(_ context.Context, ch confedit.Change) (confedit.Result, error) {
+	for _, file := range ch.Files {
+		if file.Delete {
+			continue
+		}
+		for i, line := range strings.Split(string(file.Content), "\n") {
+			if strings.Contains(line, brokenMarker) {
+				return confedit.Result{}, &confedit.ApplyError{
+					Stage: confedit.StageValidate, Service: "nginx",
+					Output: fmt.Sprintf("nginx: [emerg] unknown directive %q in %s:%d\nnginx: configuration file /www/panel/nginx/nginx.conf test failed\n",
+						brokenMarker, file.Path, i+1),
+					Err: errors.New("nginx -t rejected the configuration (exit 1)"),
+				}
+			}
+		}
+	}
+	res := confedit.Result{Versions: map[string]int{}}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range ch.Files {
+		if file.Delete {
+			_ = f.fs.Remove(file.Path)
+			continue
+		}
+		_ = f.fs.WriteFile(file.Path, file.Content, 0o644)
+		v := len(f.versions[file.Path]) + 1
+		f.versions[file.Path] = append([]confedit.Version{{
+			Path: file.Path, Version: v, CreatedAt: time.Now().UTC(),
+			Size: int64(len(file.Content)), Reason: ch.Reason,
+		}}, f.versions[file.Path]...)
+		f.content[file.Path+"#"+strconv.Itoa(v)] = file.Content
+		res.Versions[file.Path] = v
+	}
+	return res, nil
+}
+
+func (f *fakeNginx) History(_ context.Context, p string) ([]confedit.Version, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]confedit.Version(nil), f.versions[p]...), nil
+}
+
+func (f *fakeNginx) ReadVersion(_ context.Context, p string, v int) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.content[p+"#"+strconv.Itoa(v)]
+	if !ok {
+		return nil, confedit.ErrNoVersion
+	}
+	return c, nil
+}
+
+func (f *fakeNginx) Restore(ctx context.Context, p string, v int, _ []confedit.Service) (confedit.Result, error) {
+	c, err := f.ReadVersion(ctx, p, v)
+	if err != nil {
+		return confedit.Result{}, err
+	}
+	return f.Apply(ctx, confedit.Change{Files: []confedit.File{{Path: p, Content: c}}, Reason: fmt.Sprintf("restore version %d", v)})
+}
+
+func (f *fakeNginx) Name() string                             { return "nginx" }
+func (f *fakeNginx) Validate(context.Context) (string, error) { return "", nil }
+func (f *fakeNginx) Reload(context.Context) error             { return nil }
+func (f *fakeNginx) Healthy(context.Context) error            { return nil }
+func (f *fakeNginx) State(context.Context) (docker.Container, bool, error) {
+	return docker.Container{State: docker.ContainerState{Running: true, Status: "running", StartedAt: time.Now().UTC()}}, true, nil
+}
+
+func (f *fakeNginx) Status() sites.Status {
+	return sites.Status{Done: true, OK: true, At: time.Now().UTC(), Steps: []sites.Step{{Name: "container", Detail: "stand-in for the e2e run", OK: true}}}
+}
+
+func fakeNginxDeps(st *store.Store) (*httpapi.NginxDeps, error) {
+	paths := nginx.Paths{Root: "/www"}
+	mfs := &memFS{files: map[string][]byte{}, dirs: map[string]bool{}}
+	fake := &fakeNginx{fs: mfs, versions: map[string][]confedit.Version{}, content: map[string][]byte{}}
+
+	conf, err := paths.RenderMainConf()
+	if err != nil {
+		return nil, err
+	}
+	mfs.files[paths.ConfPath()] = conf
+
+	mgr, err := sites.New(sites.Options{Store: st, Applier: fake, Service: fake, Paths: paths, FS: mfs})
+	if err != nil {
+		return nil, err
+	}
+	return &httpapi.NginxDeps{
+		Sites:   mgr,
+		Global:  nginx.NewGlobal(st, fake, fake, paths).ReadWith(mfs.ReadFile),
+		History: fake, Service: fake, Reconciler: fake, Paths: paths,
+	}, nil
 }
 
 func run(addr, password, dataDir string) error {
@@ -90,6 +263,11 @@ func run(addr, password, dataDir string) error {
 		return err
 	}
 
+	nginxDeps, err := fakeNginxDeps(st)
+	if err != nil {
+		return err
+	}
+
 	handler, err := httpapi.New(httpapi.Deps{
 		Store:    st,
 		Settings: reg,
@@ -98,6 +276,7 @@ func run(addr, password, dataDir string) error {
 		Jobs:     jobsMgr,
 		UI:       ui,
 		Logger:   logger,
+		Nginx:    nginxDeps,
 	})
 	if err != nil {
 		return err
