@@ -158,6 +158,99 @@ failure.
 | 1.11 | UI | Sites list, create dialog (kind, domains, root or proxy target), site detail with tabs: Overview (feature controls with detached state), Config (CodeMirror 6 with nginx highlighting, validate-on-save, diff against current, history with restore), Logs placeholder. Nginx page: settings form + raw editor + history. | Vitest for forms and detached rendering; Playwright: create static site, break config, see rollback error. |
 | 1.12 | Smoke | `scripts/smoke/1-nginx-sites.sh`. | — |
 
+### Status (2026-11-17)
+
+Steps 1.1–1.9 are built and tested; 1.10–1.12 (API, UI, smoke) are not started. The boot
+reconcile (1.9) is wired into `panel serve` and runs in the background after the listener starts,
+so a host with nginx reachable gets its container, but there is no HTTP route or UI for sites yet.
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 1.1 | done | `scripts/spikes/1.1-nginx-www.sh`, all checks pass for both variants on Docker 29.9 (WSL Ubuntu 26.04, `nginx:1.29`). |
+| 1.2 | done | `internal/docker`; fake-Engine tests on a Unix socket, plus `go test -tags integration ./internal/docker/` against a real Engine. |
+| 1.3 | done | `internal/docker/unit.go`; `Decide` and `Ensure` table tests; the integration test covers create, no-op, start, recreate and re-create after a manual removal. |
+| 1.4 | done | `internal/confedit`; failure injected at write, validate, reload and health; unix tests for mode, owner and symlinks (owner test needs root). |
+| 1.5 | done | `internal/nginx` renderers; golden files in `internal/nginx/testdata` (`go test ./internal/nginx -update` rewrites them). Rendered config passes `nginx -t` in `TestRealNginxEndToEnd`. |
+| 1.6 | done | `internal/sites` + migration `0007_sites.sql`; fake-confedit tests for create, delete, duplicates, and undo after a failed apply or a failed chown. |
+| 1.7 | done | `sites.Detail` scans the site file for literal `include` lines; `Update` refuses a detached control with `DetachedError`; `Regenerate` is the way back. |
+| 1.8 | done | `nginx.Global`: settings form (`panel-main.conf`, `panel-http.conf`) and raw `nginx.conf`. A bad raw edit is rolled back with nginx still serving, against a real Engine. |
+| 1.9 | done | `sites.Reconciler`, wired in `cmd/panel/nginx.go`. Deleting the container by hand and re-running the reconcile restores it, against a real Engine. |
+
+**Decision 1.1 — derived image.** The nginx container runs from a locally built
+`FROM nginx:<ver>` + `groupadd -g 1500 www && useradd -u 1500 -g www …` image, not from the
+official image with a mounted passwd entry. Both work. The derived image wins because:
+
+- A mounted `/etc/passwd` is a copy of the image's file taken at one moment. An image update that
+  adds or renumbers a system user is hidden behind the stale copy with no error.
+- It would be the one bind mount whose path differs between host and container, and the one
+  mounted over a file the image owns, which is exactly what the mount rule (risk 8) forbids.
+  With the derived image `Spec.Validate` can require every mount to sit under `/www`.
+- The build is a one-`RUN` Dockerfile posted to `/build` with the classic builder: no CLI, no
+  BuildKit session, about a second. It is the same shape M8 needs, at none of M8's scope.
+
+Also confirmed by the spike: host networking serves without a published port; `nginx -t` works
+both by exec in the running container and by a one-shot container with the same mounts (for when
+the service is down); `SIGHUP` to the container's PID 1 reloads; the image's `/etc/nginx` stays
+intact when the panel config lives at `/www/panel/nginx` and nginx is started with
+`-c /www/panel/nginx/nginx.conf`, so `include /etc/nginx/mime.types;` keeps working. The
+entrypoint is `nginx` directly; the image's `/docker-entrypoint.sh` only edits files under
+`/etc/nginx` that the panel does not use.
+
+**Deviations and additions.**
+
+- 1.2 gained `ImageBuild` (not in the step's list) because of decision 1.1, and `ContainerKill`,
+  `ContainerWait` and `RunOnce` for signal reloads (risk 9) and one-shot validation.
+- 1.2: the API version is pinned to 1.44 in every request path; `Ping` fails with an upgrade
+  message on an older Engine. Pull and build results are confirmed by inspecting the image, not
+  by the progress stream ending (risk 11 applied early).
+- 1.3: `Ensure` refuses to replace a container that lacks the `panel.managed` label, so a name
+  clash with a hand-started container is an error, not a removal. It also recreates when the
+  image ID behind an unchanged tag has changed, which the spec hash alone cannot see.
+- 1.4: an apply writes a journal of the previous file contents under
+  `/www/panel/history/.pending/` before its first write and removes it when it ends.
+  `Editor.Recover()` replays a leftover journal; step 1.9 must call it at boot before any reload.
+  Without it a daemon killed between "write" and "validate" would leave an unvalidated config
+  for the next reload to load.
+- 1.4: `Change.Services` is a list (validate all, reload all, health-check all, in order), which
+  is what step 2.6 needs. History is recorded only for applies that went live, and also captures
+  content found on disk that the history did not end with (first touch, or an edit over SSH).
+- Migration `0006_config_history.sql` adds the history index.
+
+**Deviations and additions in 1.5–1.9.**
+
+- 1.5: `worker_processes` is a main-context directive and `client_max_body_size` and `gzip` are
+  http-context, so one file cannot carry both. The form owns two files: `panel-main.conf` (included
+  at the top of `nginx.conf`) and `panel-http.conf` (inside `http {}`). `nginx.conf` also carries a
+  `default_server` that answers `444`, so a Host no site claims does not fall through to the first
+  site, and a `$connection_upgrade` map that proxy sites use for WebSockets.
+- 1.5/1.7: a fourth include, `names.conf` (`server_name`), exists so that "edit domains" rewrites
+  an include file and nothing else, as step 1.7 requires. The plan's list had no file for it.
+- 1.5: site logs are `access_log`/`error_log` lines in the site file, under
+  `/www/panel/logs/sites/`, the only logs directory mounted into the container. The master's own
+  `error_log` goes to `/dev/stderr`, so it shows in `docker logs`.
+- 1.6: a custom web root must lie below `/www/services/sites`, because that is the only web-root
+  tree the container mounts. `golang.org/x/net/idna` was added for punycode; it brings
+  `golang.org/x/text`.
+- 1.6: the web root is created before the config is applied and removed again, without touching
+  anything the operator put there, if the apply fails. An existing directory is never modified.
+- 1.8: settings are stored in `nginx_settings` and written before the apply, and put back if the
+  apply fails. A failed apply leaves neither the files nor the database changed.
+- 1.9: the order differs from the plan's literal text so nginx never starts on files nobody
+  validated. Boot runs `Recover`, builds the image if missing (a job), writes only the panel-owned
+  files that are missing or differ, validated by `nginx -t` in a one-shot container, then ensures the
+  container, then reloads once, unless the container was just created or started and so read the
+  files itself. A config that fails `nginx -t` at boot stops the run before the container is touched
+  and the validator's output is kept in the reconciler's status.
+- 1.9: the reconcile runs in a goroutine and its outcome is `Reconciler.Status()`; Docker being
+  absent or the image build failing never stops the panel from serving.
+- A reload is a signal, so a configuration that passes `nginx -t` but fails at runtime (a bind error)
+  is not seen by `Healthy`, which only catches a master that exited or restarted. Step 1.12's smoke
+  should check a real request after a change.
+
+**Open for 1.10 onwards.** `TestRepairFixesALoosenedMode` in `internal/install` fails in WSL at the
+committed `HEAD` as well as in the working tree; it is not caused by 1.5–1.9. The Docker integration test and the unix-only tests do not run in CI as
+configured (CI has no `-tags integration` job); they were run by hand in WSL.
+
 ### Exit gate (smoke 1)
 
 Create a static site and a reverse-proxy site (proxy to a throwaway `python3 -m http.server`);
