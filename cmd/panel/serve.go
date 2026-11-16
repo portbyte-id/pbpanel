@@ -121,6 +121,10 @@ func serve(ctx context.Context, _ []string) error {
 
 	go sweepSessions(ctx, authSvc, logger)
 
+	// After the listener: a slow image build or an absent Docker must not keep
+	// the operator out of the panel that can show them why.
+	_ = startNginx(ctx, st, layout, jobsMgr, logger)
+
 	<-ctx.Done()
 	logger.Info("panel stopping")
 
