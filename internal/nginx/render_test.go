@@ -65,6 +65,20 @@ func TestGoldenFiles(t *testing.T) {
 	golden(t, "acme.conf", mustRender(t, b, err))
 	b, err = RenderProxy("http://127.0.0.1:3000")
 	golden(t, "proxy.conf", mustRender(t, b, err))
+
+	phpSite := Site{Domain: "c.test", Kind: KindPHP, Root: "/www/services/sites/c.test"}
+	b, err = testPaths.RenderSiteFile(phpSite)
+	golden(t, "site-php.conf", mustRender(t, b, err))
+	b, err = testPaths.RenderPHP("/www/panel/run/php-8.3-c_test.sock")
+	golden(t, "php.conf", mustRender(t, b, err))
+}
+
+func TestRenderPHPRefusesASocketOutsideTheRunDir(t *testing.T) {
+	for _, socket := range []string{"", "/tmp/x.sock", "/www/panel/run/../x.sock", "/www/panel/run/a.sock; return 200", "127.0.0.1:9000"} {
+		if _, err := testPaths.RenderPHP(socket); err == nil {
+			t.Errorf("php.conf was rendered for socket %q", socket)
+		}
+	}
 }
 
 func TestSettingsRenderEveryField(t *testing.T) {

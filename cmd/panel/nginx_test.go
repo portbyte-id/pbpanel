@@ -5,7 +5,16 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/php"
 )
+
+// The same holds for php: pools run as the account that owns the web roots.
+func TestPHPAndInstallAgreeOnTheWWWAccount(t *testing.T) {
+	if php.WWWUser != install.WWWUser || php.WWWUID != install.WWWUID || php.WWWGID != install.WWWGID {
+		t.Fatalf("php has %s %d:%d, install has %s %d:%d",
+			php.WWWUser, php.WWWUID, php.WWWGID, install.WWWUser, install.WWWUID, install.WWWGID)
+	}
+}
 
 // The nginx package cannot import install (install imports the HTTP layer,
 // which imports nginx), so it repeats the www account. The two must agree: the

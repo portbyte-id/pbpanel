@@ -20,6 +20,7 @@ const (
 	FeatureNames  Feature = "names"
 	FeatureACME   Feature = "acme"
 	FeatureProxy  Feature = "proxy"
+	FeaturePHP    Feature = "php"
 )
 
 var featureFile = map[Feature]string{
@@ -27,6 +28,7 @@ var featureFile = map[Feature]string{
 	FeatureNames:  nginx.IncludeNames,
 	FeatureACME:   nginx.IncludeACME,
 	FeatureProxy:  nginx.IncludeProxy,
+	FeaturePHP:    nginx.IncludePHP,
 }
 
 // FeatureStatus is whether a site file still includes a feature's file.
@@ -66,6 +68,9 @@ func (m *Manager) featuresOf(s Site) []Feature {
 	f := []Feature{FeatureListen, FeatureNames, FeatureACME}
 	if s.Kind == KindProxy {
 		f = append(f, FeatureProxy)
+	}
+	if s.Kind == KindPHP {
+		f = append(f, FeaturePHP)
 	}
 	return f
 }

@@ -13,10 +13,11 @@ import (
 // Kind is how a site serves requests.
 type Kind string
 
-// Site kinds. PHP joins them in M2.
+// Site kinds.
 const (
 	KindStatic Kind = "static"
 	KindProxy  Kind = "proxy"
+	KindPHP    Kind = "php"
 )
 
 // Names of a site's include files. The panel owns their content; the site file
@@ -27,6 +28,7 @@ const (
 	IncludeNames  = "names.conf"
 	IncludeACME   = "acme.conf"
 	IncludeProxy  = "proxy.conf"
+	IncludePHP    = "php.conf"
 )
 
 // Site is what the templates need about one site.
@@ -117,6 +119,12 @@ server {
     location / {
         try_files $uri $uri/ =404;
     }
+{{- else if .PHPSite}}
+
+    root {{.Root}};
+    index index.php index.html index.htm;
+
+    include {{.PHP}};
 {{- else}}
 
     include {{.Proxy}};
@@ -149,6 +157,23 @@ location / {
 }
 `
 
+// phpIncludeTemplate sends a request for a file that does not exist to
+// index.php, which is what front-controller applications expect, and passes
+// only scripts that exist to FPM, so a crafted path cannot make PHP run a
+// file that is not a script.
+const phpIncludeTemplate = `# Managed by PB panel (PHP version and pool).
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+location ~ \.php$ {
+    try_files $uri =404;
+    include /etc/nginx/fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    fastcgi_pass unix:{{.Socket}};
+}
+`
+
 var tmpl = template.Must(template.New("nginx").Option("missingkey=error").Parse(""))
 
 func init() {
@@ -161,6 +186,7 @@ func init() {
 		"names":           namesIncludeTemplate,
 		"acme":            acmeIncludeTemplate,
 		"proxy":           proxyIncludeTemplate,
+		"php":             phpIncludeTemplate,
 	} {
 		template.Must(tmpl.New(name).Parse(text))
 	}
@@ -210,12 +236,14 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 		Listen, Names, ACME, Proxy string
 		AccessLog, ErrorLog, Root  string
 		Static                     bool
+		PHPSite                    bool
+		PHP                        string
 	}{
 		s.Domain, p.SiteIncludesDir(s.Domain),
 		p.SiteInclude(s.Domain, IncludeListen), p.SiteInclude(s.Domain, IncludeNames),
 		p.SiteInclude(s.Domain, IncludeACME), p.SiteInclude(s.Domain, IncludeProxy),
 		p.AccessLog(s.Domain), p.ErrorLog(s.Domain), s.Root,
-		s.Kind == KindStatic,
+		s.Kind == KindStatic, s.Kind == KindPHP, p.SiteInclude(s.Domain, IncludePHP),
 	})
 }
 
@@ -244,6 +272,17 @@ func RenderProxy(target string) ([]byte, error) {
 		return nil, err
 	}
 	return execute("proxy", struct{ Target string }{t})
+}
+
+// RenderPHP renders php.conf for a pool socket.
+func (p Paths) RenderPHP(socket string) ([]byte, error) {
+	if err := safeToken("php socket", socket); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(socket, p.RunDir()+"/") || path.Clean(socket) != socket {
+		return nil, fmt.Errorf("nginx: php socket %q is outside %s, where the container cannot see it", socket, p.RunDir())
+	}
+	return execute("php", struct{ Socket string }{socket})
 }
 
 // CheckProxyTarget validates a proxy target and returns its canonical form:
@@ -287,7 +326,7 @@ func checkSite(p Paths, s Site) error {
 		return err
 	}
 	switch s.Kind {
-	case KindStatic:
+	case KindStatic, KindPHP:
 		if err := safeToken("web root", s.Root); err != nil {
 			return err
 		}

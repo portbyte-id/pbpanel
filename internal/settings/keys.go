@@ -1,11 +1,30 @@
 package settings
 
+import (
+	"errors"
+	"regexp"
+	"strings"
+)
+
 // Groups shown on the Settings page, in this order.
 const (
 	groupPanel   = "Panel"
 	groupLogin   = "Login"
 	groupSession = "Session"
+	groupPHP     = "PHP"
 )
+
+// KeyPHPVersions names the versions offered on the PHP page.
+const KeyPHPVersions = "php.versions"
+
+var phpVersionsRe = regexp.MustCompile(`^[0-9]\.[0-9]{1,2}(\s*,\s*[0-9]\.[0-9]{1,2})*$`)
+
+func validatePHPVersions(value string) error {
+	if !phpVersionsRe.MatchString(strings.TrimSpace(value)) {
+		return errors.New("must be PHP versions separated by commas, for example 8.3,8.4")
+	}
+	return nil
+}
 
 // defaultKeys is the panel's key table. Every key here is a setting the panel
 // actually reads; a key nobody reads is a dead setting on the Settings page.
@@ -61,6 +80,16 @@ func defaultKeys() []key {
 				Group:       groupSession,
 			},
 			check: positiveDuration,
+		},
+		{
+			meta: Meta{
+				Name:        KeyPHPVersions,
+				Type:        TypeString,
+				Default:     "8.2,8.3,8.4,8.5",
+				Description: "PHP versions offered on the PHP page, separated by commas. Each needs an official php:<version>-fpm image.",
+				Group:       groupPHP,
+			},
+			check: validatePHPVersions,
 		},
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/sites"
 )
 
@@ -43,6 +44,11 @@ type NginxDeps struct {
 	Service    NginxService
 	Reconciler ReconcileStatus
 	Paths      nginx.Paths
+
+	// PHP carries the PHP versions. Nil leaves the PHP routes answering 503.
+	PHP PHPManager
+	// PHPReconcile reports how each PHP version came out of the boot reconcile.
+	PHPReconcile func() []sites.PHPStep
 }
 
 // nginxRoutes registers the routes of development plan step 1.10. They are
@@ -79,6 +85,8 @@ func (s *server) nginxRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/config-history/{file}/{version}/restore", h(s.handleHistoryRestore))
 
 	mux.Handle("GET /api/services/nginx", h(s.handleNginxService))
+
+	s.phpRoutes(mux, h)
 }
 
 // applyResponse is what a successful change returns besides its own data.
@@ -104,8 +112,17 @@ func (s *server) writeNginxError(w http.ResponseWriter, r *http.Request, err err
 		setting  *nginx.SettingsError
 		detached *sites.DetachedError
 		apply    *confedit.ApplyError
+		phpInput *php.InputError
 	)
 	switch {
+	case errors.As(err, &phpInput):
+		writeJSON(w, http.StatusUnprocessableEntity, errorEnvelope{Error: errInvalidInput, Detail: phpInput.Error(), Field: phpInput.Field})
+	case errors.Is(err, php.ErrUnknownVersion):
+		writeError(w, http.StatusNotFound, errNotFound, "no such PHP version")
+	case errors.Is(err, php.ErrNotReady):
+		writeError(w, http.StatusConflict, errConflict, "that PHP version is not installed; pull it first")
+	case errors.Is(err, php.ErrBusy):
+		writeError(w, http.StatusConflict, errConflict, "that PHP version is already being pulled")
 	case errors.As(err, &invalid):
 		writeJSON(w, http.StatusUnprocessableEntity, errorEnvelope{Error: errInvalidInput, Detail: invalid.Error(), Field: invalid.Field})
 	case errors.As(err, &setting):
@@ -136,7 +153,11 @@ func (s *server) writeApplyError(w http.ResponseWriter, r *http.Request, ae *con
 	case confedit.StageValidate:
 		status = http.StatusUnprocessableEntity
 		env.Error = errConfigRejected
-		env.Detail = "nginx rejected the configuration; the previous files are back in place"
+		who := "nginx"
+		if strings.HasPrefix(ae.Service, "php-") {
+			who = "PHP " + strings.TrimPrefix(ae.Service, "php-")
+		}
+		env.Detail = who + " rejected the configuration; the previous files are back in place"
 	case confedit.StagePrepare:
 		status = http.StatusBadRequest
 		env.Error = errBadRequest
@@ -187,6 +208,8 @@ type createSiteRequest struct {
 	Kind        string   `json:"kind"`
 	Root        string   `json:"root"`
 	ProxyTarget string   `json:"proxy_target"`
+	PHPVersion  string   `json:"php_version"`
+	PHPInfo     bool     `json:"phpinfo"`
 }
 
 type siteResponse struct {
@@ -203,6 +226,7 @@ func (s *server) handleCreateSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 	res, err := n.Sites.Create(r.Context(), sites.CreateInput{
 		Domain: req.Domain, Aliases: req.Aliases, Kind: sites.Kind(req.Kind),
 		Root: req.Root, ProxyTarget: req.ProxyTarget,
+		PHPVersion: req.PHPVersion, PHPInfo: req.PHPInfo,
 	})
 	if err != nil {
 		s.writeNginxError(w, r, err)
@@ -374,10 +398,22 @@ var siteHistoryFile = regexp.MustCompile(`^sites/[a-z0-9][a-z0-9.-]*\.conf$`)
 // panel-owned files are rendered from the database, so restoring one from
 // history would make the file and the database disagree.
 func historyPath(n *NginxDeps, file string) (string, bool) {
+	if m := phpHistoryFile.FindStringSubmatch(file); m != nil && n.PHP != nil {
+		return n.PHP.Paths().IniPath(m[1]), true
+	}
 	if file != nginxConfHistoryFile && !siteHistoryFile.MatchString(file) {
 		return "", false
 	}
 	return path.Join(n.Paths.Dir(), file), true
+}
+
+// historyServices is what a restore of the file validates and reloads through:
+// the PHP version for its php.ini, nginx for everything else.
+func historyServices(n *NginxDeps, file string) []confedit.Service {
+	if m := phpHistoryFile.FindStringSubmatch(file); m != nil && n.PHP != nil {
+		return []confedit.Service{n.PHP.Service(m[1], false)}
+	}
+	return []confedit.Service{n.Service}
 }
 
 func (s *server) historyTarget(n *NginxDeps, w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -445,7 +481,7 @@ func (s *server) handleHistoryRestore(n *NginxDeps, w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	res, err := n.History.Restore(r.Context(), p, v, []confedit.Service{n.Service})
+	res, err := n.History.Restore(r.Context(), p, v, historyServices(n, r.PathValue("file")))
 	if err != nil {
 		s.writeNginxError(w, r, err)
 		return

@@ -49,6 +49,9 @@ func (p Paths) AccessLog(domain string) string {
 }
 func (p Paths) ErrorLog(domain string) string { return path.Join(p.SiteLogDir(), domain+".error.log") }
 
+// RunDir holds the PHP-FPM sockets, shared with the PHP containers.
+func (p Paths) RunDir() string { return path.Join(p.Root, "panel", "run") }
+
 // SitesRoot is the directory whose subdirectories are web roots.
 func (p Paths) SitesRoot() string { return path.Join(p.Root, "services", "sites") }
 
