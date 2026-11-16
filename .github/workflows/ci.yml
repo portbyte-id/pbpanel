@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  web:
+    name: Web build and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: npx tsc --noEmit
+        working-directory: web
+
+  static:
+    name: Static linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o panel-linux-amd64 ./cmd/panel
+      - name: Assert the binary is static
+        run: |
+          set -eu
+          file panel-linux-amd64
+          if ! file panel-linux-amd64 | grep -q "statically linked"; then
+            echo "::error::panel-linux-amd64 is not statically linked"
+            exit 1
+          fi
+          if readelf -l panel-linux-amd64 | grep -q "INTERP"; then
+            echo "::error::panel-linux-amd64 has a dynamic loader"
+            exit 1
+          fi
+
+  lint:
+    name: Conventions and linters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Convention greps
+        run: sh scripts/lint-conventions.sh
+      - name: gofmt
+        run: |
+          set -eu
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt needed on:"
+            echo "$out"
+            exit 1
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
