@@ -9,6 +9,7 @@ import { ApiError, type Site } from "@/lib/api"
 import { useSites } from "@/lib/queries"
 
 export function kindLabel(kind: Site["kind"]): string {
+  if (kind === "php") return "PHP"
   return kind === "proxy" ? "Reverse proxy" : "Static files"
 }
 

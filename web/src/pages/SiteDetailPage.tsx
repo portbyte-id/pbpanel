@@ -5,6 +5,7 @@ import { useState } from "react"
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
 import { SiteControls } from "@/components/SiteControls"
+import { SitePHP } from "@/components/SitePHP"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -51,17 +52,23 @@ export function SiteDetailPage({ domain }: { domain: string }) {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          {data.kind === "php" && <TabsTrigger value="php">PHP</TabsTrigger>}
           <TabsTrigger value="config">Config</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
           <Overview detail={data} />
         </TabsContent>
+        {data.kind === "php" && (
+          <TabsContent value="php">
+            <SitePHP detail={data} />
+          </TabsContent>
+        )}
         <TabsContent value="config">
           <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />
         </TabsContent>
         <TabsContent value="logs">
-          <Logs domain={data.domain} />
+          <Logs domain={data.domain} php={data.kind === "php"} />
         </TabsContent>
       </Tabs>
     </div>
@@ -92,6 +99,12 @@ function Overview({ detail }: { detail: SiteDetail }) {
         <dd className="font-mono text-xs break-all">
           {detail.kind === "proxy" ? detail.proxy_target : detail.root}
         </dd>
+        {detail.kind === "php" && (
+          <>
+            <dt className="text-muted-foreground">PHP version</dt>
+            <dd>{detail.php_version}</dd>
+          </>
+        )}
         <dt className="text-muted-foreground">Site file</dt>
         <dd className="font-mono text-xs break-all">
           {detail.site_file}
@@ -185,7 +198,7 @@ function DangerZone({ detail }: { detail: SiteDetail }) {
             <DialogTitle>Delete {detail.domain}?</DialogTitle>
             <DialogDescription>
               nginx stops answering for this site and its configuration is removed.
-              {detail.kind === "static" &&
+              {detail.kind !== "proxy" &&
                 ` The files in ${detail.root} are kept; remove them yourself if you no longer need them.`}
             </DialogDescription>
           </DialogHeader>
@@ -222,13 +235,14 @@ function DangerZone({ detail }: { detail: SiteDetail }) {
   )
 }
 
-function Logs({ domain }: { domain: string }) {
+function Logs({ domain, php }: { domain: string; php: boolean }) {
   return (
     <div className="flex flex-col gap-2 text-sm">
       <p>The panel does not show logs yet. Until it does, they are on the server at:</p>
       <ul className="font-mono text-xs">
         <li>/www/panel/logs/sites/{domain}.access.log</li>
         <li>/www/panel/logs/sites/{domain}.error.log</li>
+        {php && <li>/www/panel/logs/sites/{domain}.php.log</li>}
       </ul>
     </div>
   )

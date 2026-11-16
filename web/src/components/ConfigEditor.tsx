@@ -6,6 +6,7 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language"
 import { nginx } from "@codemirror/legacy-modes/mode/nginx"
+import { properties } from "@codemirror/legacy-modes/mode/properties"
 import { unifiedMergeView } from "@codemirror/merge"
 import { Compartment, EditorState } from "@codemirror/state"
 import { EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view"
@@ -38,7 +39,7 @@ const theme = EditorView.theme({
 })
 
 /**
- * A CodeMirror editor for an nginx config.
+ * A CodeMirror editor for a config file: nginx syntax, or ini for php.ini.
  *
  * `value` is the text to show. The editor owns its document while the operator
  * types, and is only overwritten when `value` differs from what it holds: after
@@ -52,11 +53,14 @@ export function ConfigEditor({
   onChange,
   original,
   label,
+  language = "nginx",
 }: {
   value: string
   onChange: (value: string) => void
   original?: string
   label: string
+  /** Fixed for the life of the editor. */
+  language?: "nginx" | "ini"
 }) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -76,7 +80,7 @@ export function ConfigEditor({
           history(),
           bracketMatching(),
           highlightActiveLine(),
-          StreamLanguage.define(nginx),
+          StreamLanguage.define(language === "ini" ? properties : nginx),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": label }),

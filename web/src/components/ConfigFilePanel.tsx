@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { api, ApiError, type ConfigVersion } from "@/lib/api"
 import {
   type ConfigSource,
+  configService,
   useConfigFile,
   useConfigHistory,
   useRestoreConfigVersion,
@@ -33,6 +34,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
   const [saved, setSaved] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null)
+  const service = configService(source)
 
   if (file.isPending) {
     return <p className="text-muted-foreground text-sm">Loading the file…</p>
@@ -61,7 +63,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
     save.mutate(text, {
       onSuccess: () => {
         setDraft(null)
-        setSaved("Saved. nginx accepted the file and reloaded.")
+        setSaved(`Saved. ${service} accepted the file and reloaded.`)
       },
     })
   }
@@ -82,7 +84,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
     restore.mutate(version, {
       onSuccess: () => {
         setDraft(null)
-        setSaved(`Version ${version} restored. nginx accepted it and reloaded.`)
+        setSaved(`Version ${version} restored. ${service} accepted it and reloaded.`)
       },
     })
   }
@@ -117,11 +119,12 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
           setSaved(null)
         }}
         original={showDiff ? current : undefined}
+        language={source.kind === "php-ini" ? "ini" : "nginx"}
       />
 
       <div className="flex flex-wrap items-center gap-3">
         <Button onClick={submit} disabled={!dirty || save.isPending}>
-          {save.isPending ? "Checking with nginx…" : "Save and reload"}
+          {save.isPending ? `Checking with ${service}…` : "Save and reload"}
         </Button>
         <Button
           variant="outline"

@@ -5,6 +5,7 @@ import { appRoute } from "@/routes/_app"
 import { auditRoute } from "@/routes/_app/audit"
 import { appIndexRoute } from "@/routes/_app/index"
 import { nginxRoute } from "@/routes/_app/nginx"
+import { phpRoute } from "@/routes/_app/php"
 import { settingsRoute } from "@/routes/_app/settings"
 import { siteRoute } from "@/routes/_app/site"
 import { sitesRoute } from "@/routes/_app/sites"
@@ -24,6 +25,7 @@ const routeTree = rootRoute.addChildren([
     sitesRoute,
     siteRoute,
     nginxRoute,
+    phpRoute,
     settingsRoute,
     auditRoute,
   ]),

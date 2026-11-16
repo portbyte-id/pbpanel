@@ -10,6 +10,8 @@ import {
   api,
   type CreateSiteInput,
   type NginxSettings,
+  type PHPSettings,
+  type PoolSettings,
   type SettingsResponse,
   type SettingWrite,
   type UpdateSiteInput,
@@ -27,6 +29,10 @@ export const queryKeys = {
   nginxConf: ["nginx", "conf"] as const,
   nginxService: ["nginx", "service"] as const,
   configHistory: (file: string) => ["config-history", file] as const,
+  php: ["php"] as const,
+  phpSettings: (version: string) => ["php", version, "settings"] as const,
+  phpIni: (version: string) => ["php", version, "ini"] as const,
+  sitePool: (domain: string) => ["sites", domain, "pool"] as const,
 }
 
 /**
@@ -112,10 +118,25 @@ export function useLogin() {
  * A raw config file the operator edits. Site files and nginx.conf share one
  * editor, so they share one address.
  */
-export type ConfigSource = { kind: "site"; domain: string } | { kind: "nginx" }
+export type ConfigSource =
+  | { kind: "site"; domain: string }
+  | { kind: "nginx" }
+  | { kind: "php-ini"; version: string }
 
 function configFileKey(source: ConfigSource) {
-  return source.kind === "site" ? queryKeys.siteFile(source.domain) : queryKeys.nginxConf
+  switch (source.kind) {
+    case "site":
+      return queryKeys.siteFile(source.domain)
+    case "php-ini":
+      return queryKeys.phpIni(source.version)
+    default:
+      return queryKeys.nginxConf
+  }
+}
+
+/** The service that checks and reloads a raw file, as the operator knows it. */
+export function configService(source: ConfigSource): string {
+  return source.kind === "php-ini" ? `PHP ${source.version}` : "nginx"
 }
 
 export function useSites() {
@@ -169,7 +190,16 @@ export function useRegenerateSite(domain: string) {
 export function useConfigFile(source: ConfigSource) {
   return useQuery({
     queryKey: configFileKey(source),
-    queryFn: () => (source.kind === "site" ? api.siteFile(source.domain) : api.nginxConf()),
+    queryFn: () => {
+      switch (source.kind) {
+        case "site":
+          return api.siteFile(source.domain)
+        case "php-ini":
+          return api.phpIni(source.version)
+        default:
+          return api.nginxConf()
+      }
+    },
   })
 }
 
@@ -181,10 +211,16 @@ export function useConfigFile(source: ConfigSource) {
 export function useSaveConfigFile(source: ConfigSource) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (content: string) =>
-      source.kind === "site"
-        ? api.saveSiteFile(source.domain, content)
-        : api.saveNginxConf(content),
+    mutationFn: (content: string) => {
+      switch (source.kind) {
+        case "site":
+          return api.saveSiteFile(source.domain, content)
+        case "php-ini":
+          return api.savePHPIni(source.version, content)
+        default:
+          return api.saveNginxConf(content)
+      }
+    },
     onSuccess: () => invalidateConfig(client, source),
   })
 }
@@ -235,6 +271,67 @@ export function useNginxService() {
     // The container can stop behind the panel's back; the status is a reading,
     // not a fact, so it is taken again while the page is open.
     refetchInterval: 10_000,
+  })
+}
+
+/**
+ * The PHP versions. A pull changes a version's state behind the page, so the
+ * list is re-read every few seconds while one is running.
+ */
+export function usePHP() {
+  return useQuery({
+    queryKey: queryKeys.php,
+    queryFn: () => api.php(),
+    refetchInterval: (query) =>
+      query.state.data?.versions.some((v) => v.state === "pulling") ? 3_000 : 15_000,
+  })
+}
+
+export function usePullPHP() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => api.pullPHP(version),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.php, exact: true }),
+  })
+}
+
+export function usePHPSettings(version: string) {
+  return useQuery({
+    queryKey: queryKeys.phpSettings(version),
+    queryFn: () => api.phpSettings(version),
+  })
+}
+
+export function useSavePHPSettings(version: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: PHPSettings) => api.savePHPSettings(version, settings),
+    onSuccess: (saved) => client.setQueryData(queryKeys.phpSettings(version), saved),
+  })
+}
+
+export function useSitePool(domain: string) {
+  return useQuery({ queryKey: queryKeys.sitePool(domain), queryFn: () => api.sitePool(domain) })
+}
+
+export function useSaveSitePool(domain: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: PoolSettings) => api.saveSitePool(domain, settings),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.sitePool(domain) }),
+  })
+}
+
+/** A switch changes the site, its pool (new socket) and both versions' site lists. */
+export function useSwitchPHP(domain: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => api.switchPHP(domain, version),
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: queryKeys.sites }),
+        client.invalidateQueries({ queryKey: queryKeys.php, exact: true }),
+      ]),
   })
 }
 

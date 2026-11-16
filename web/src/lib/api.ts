@@ -74,7 +74,7 @@ export interface AuditResponse {
   limit: number
 }
 
-export type SiteKind = "static" | "proxy"
+export type SiteKind = "static" | "proxy" | "php"
 
 export interface Site {
   domain: string
@@ -83,12 +83,14 @@ export interface Site {
   root?: string
   proxy_target?: string
   php_version: string | null
+  /** The FPM pool name of a PHP site. */
+  php_pool?: string
   created_at: string
 }
 
 /** Whether a site file still includes the file one panel control writes. */
 export interface SiteFeature {
-  feature: "listen" | "names" | "acme" | "proxy"
+  feature: "listen" | "names" | "acme" | "proxy" | "php"
   include: string
   attached: boolean
   reason?: string
@@ -106,6 +108,82 @@ export interface CreateSiteInput {
   kind: SiteKind
   root?: string
   proxy_target?: string
+  /** PHP sites only. */
+  php_version?: string
+  /** PHP sites only: put a phpinfo() page in a new folder. */
+  phpinfo?: boolean
+}
+
+export type PHPState = "absent" | "pulling" | "ready" | "failed"
+
+export interface ContainerStatus {
+  exists: boolean
+  running: boolean
+  status: string
+  started_at?: string
+  error?: string
+}
+
+export interface PHPVersion {
+  version: string
+  image: string
+  digest: string
+  state: PHPState
+  /** The end of a failed pull's output. */
+  output: string
+  updated_at: string | null
+  /** False for a version that left the supported list; it cannot be pulled again. */
+  supported: boolean
+  container: ContainerStatus
+  /** Domains that run on this version. */
+  sites: string[]
+}
+
+export interface PHPReconcileStep {
+  version: string
+  sites: number
+  ok: boolean
+  detail: string
+}
+
+export interface PHPList {
+  versions: PHPVersion[]
+  reconcile: PHPReconcileStep[]
+}
+
+/** The php.ini directives the form owns. */
+export interface PHPSettings {
+  memory_limit: string
+  upload_max_filesize: string
+  post_max_size: string
+  max_execution_time: number
+  date_timezone: string
+}
+
+export type PoolMode = "static" | "dynamic" | "ondemand"
+
+export interface PoolSettings {
+  pm: PoolMode
+  max_children: number
+  start_servers: number
+  min_spare_servers: number
+  max_spare_servers: number
+  max_requests: number
+  idle_timeout: number
+}
+
+export interface Pool {
+  name: string
+  version: string
+  socket: string
+  file: string
+  settings: PoolSettings
+}
+
+export interface JobRef {
+  id: string
+  kind: string
+  state: string
 }
 
 export interface UpdateSiteInput {
@@ -380,6 +458,61 @@ export class ApiClient {
 
   async nginxService(): Promise<NginxServiceStatus> {
     return this.request<NginxServiceStatus>("/api/services/nginx")
+  }
+
+  async php(): Promise<PHPList> {
+    return this.request<PHPList>("/api/php")
+  }
+
+  /** Starts the pull job. The version reads `pulling` until the job ends. */
+  async pullPHP(version: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(
+      `/api/php/${encodeURIComponent(version)}/pull`,
+      { method: "POST" },
+    )
+    return res.job
+  }
+
+  async phpSettings(version: string): Promise<PHPSettings> {
+    return this.request<PHPSettings>(`/api/php/${encodeURIComponent(version)}/settings`)
+  }
+
+  async savePHPSettings(version: string, settings: PHPSettings): Promise<PHPSettings> {
+    return this.request<PHPSettings>(`/api/php/${encodeURIComponent(version)}/settings`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    })
+  }
+
+  async phpIni(version: string): Promise<ConfigFile> {
+    return this.request<ConfigFile>(`/api/php/${encodeURIComponent(version)}/ini`)
+  }
+
+  /** PUT php.ini. A 422 `config_rejected` carries PHP's output. */
+  async savePHPIni(version: string, content: string): Promise<ApplyResponse> {
+    return this.request<ApplyResponse>(`/api/php/${encodeURIComponent(version)}/ini`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    })
+  }
+
+  async sitePool(domain: string): Promise<Pool> {
+    return this.request<Pool>(`/api/sites/${encodeURIComponent(domain)}/pool`)
+  }
+
+  async saveSitePool(domain: string, settings: PoolSettings): Promise<Pool & ApplyResponse> {
+    return this.request<Pool & ApplyResponse>(`/api/sites/${encodeURIComponent(domain)}/pool`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    })
+  }
+
+  /** Moves a site to another PHP version; on any failure it stays on the old one. */
+  async switchPHP(domain: string, version: string): Promise<SiteResponse> {
+    return this.request<SiteResponse>(`/api/sites/${encodeURIComponent(domain)}/php-version`, {
+      method: "PUT",
+      body: JSON.stringify({ version }),
+    })
   }
 
   /** `file` is a `history_file` key; it contains a slash, so it is escaped whole. */
