@@ -138,17 +138,40 @@ func newRegistry(st Store, keys []key) (*Registry, error) {
 	if st == nil {
 		return nil, errors.New("settings: nil store")
 	}
-	r := &Registry{keys: keys, byName: make(map[string]int, len(keys)), store: st}
+	byName, err := indexKeys(keys)
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{keys: keys, byName: byName, store: st}, nil
+}
+
+// indexKeys runs the boot-time key table checks and maps each name to its
+// position. Both New and Catalog go through it, so the path that only describes
+// keys cannot accept a table New would reject.
+func indexKeys(keys []key) (map[string]int, error) {
+	byName := make(map[string]int, len(keys))
 	for i, k := range keys {
 		if err := checkKey(k); err != nil {
 			return nil, err
 		}
-		if _, dup := r.byName[k.meta.Name]; dup {
+		if _, dup := byName[k.meta.Name]; dup {
 			return nil, fmt.Errorf("settings: key %s is registered twice", k.meta.Name)
 		}
-		r.byName[k.meta.Name] = i
+		byName[k.meta.Name] = i
 	}
-	return r, nil
+	return byName, nil
+}
+
+// Catalog returns the key table as groups, without a store and without reading
+// any value. It is for a caller that only needs to describe the keys: `panel set
+// --help` lists what it accepts, and the registry is the only place that list
+// lives.
+func Catalog() ([]Group, error) {
+	keys := defaultKeys()
+	if _, err := indexKeys(keys); err != nil {
+		return nil, err
+	}
+	return groupsOf(keys), nil
 }
 
 // Get returns one key's metadata and the value in effect. A stored value that
@@ -280,9 +303,13 @@ func (r *Registry) Snapshot(ctx context.Context) ([]Setting, error) {
 // Groups returns the registry as an ordered, grouped list of metadata. Groups
 // appear in the order their first key is registered.
 func (r *Registry) Groups() []Group {
-	out := make([]Group, 0, len(r.keys))
-	index := make(map[string]int, len(r.keys))
-	for _, k := range r.keys {
+	return groupsOf(r.keys)
+}
+
+func groupsOf(keys []key) []Group {
+	out := make([]Group, 0, len(keys))
+	index := make(map[string]int, len(keys))
+	for _, k := range keys {
 		i, ok := index[k.meta.Group]
 		if !ok {
 			i = len(out)
