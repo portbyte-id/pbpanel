@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -22,6 +23,12 @@ const (
 	// for a short write transaction to drain and short enough that a wedged
 	// request fails instead of hanging the panel.
 	busyTimeoutMS = 5000
+
+	walRetryDelay = 10 * time.Millisecond
+
+	// SQLite result codes, from https://www.sqlite.org/rescode.html.
+	sqliteBusy        = 5
+	sqlitePrimaryMask = 0xff
 )
 
 // Store is the panel's SQLite database.
@@ -35,12 +42,6 @@ func Open(path string) (*Store, error) {
 	db, err := openDB(path)
 	if err != nil {
 		return nil, err
-	}
-	// journal_mode(WAL) is silently refused on filesystems without shared
-	// memory, and the pool's concurrency assumes WAL, so read it back.
-	if err := checkPragmas(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("store: %s: %w", path, err)
 	}
 	if err := migrate(context.Background(), db, embeddedMigrations()); err != nil {
 		_ = db.Close()
@@ -65,7 +66,46 @@ func openDB(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
+	if err := checkPragmas(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	if err := setWAL(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
 	return db, nil
+}
+
+// setWAL runs once per open rather than in the DSN. journal_mode is stored in
+// the database header, so the mode persists and later connections pick it up;
+// setting it on every connection would instead have each new connection take an
+// exclusive lock to re-assert it, which collides with a second process
+// (`panel set` runs against a live daemon) and fails with SQLITE_BUSY.
+//
+// That switch needs an exclusive lock, and SQLite answers SQLITE_BUSY at once
+// instead of invoking the busy handler, so the race between two processes is
+// retried here until the busy timeout runs out.
+func setWAL(db *sql.DB) error {
+	deadline := time.Now().Add(busyTimeoutMS * time.Millisecond)
+	for {
+		var mode string
+		err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode)
+		switch {
+		case err == nil && strings.EqualFold(mode, "wal"):
+			return nil
+		case err == nil:
+			return fmt.Errorf("journal_mode is %q, want wal: the data directory must be on a local filesystem", mode)
+		case !isBusy(err) || time.Now().After(deadline):
+			return fmt.Errorf("enable wal: %w", err)
+		}
+		time.Sleep(walRetryDelay)
+	}
+}
+
+func isBusy(err error) bool {
+	var serr *sqlite.Error
+	return errors.As(err, &serr) && serr.Code()&sqlitePrimaryMask == sqliteBusy
 }
 
 // Close releases the connection pool.
@@ -116,7 +156,6 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) (err error) 
 func dsn(path string) string {
 	q := url.Values{}
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS))
-	q.Add("_pragma", "journal_mode(WAL)")
 	// Immediate transactions take the write lock at BEGIN, so a transaction
 	// never has to upgrade a read lock halfway through and fail with
 	// SQLITE_BUSY, which the busy timeout cannot rescue.
@@ -125,14 +164,6 @@ func dsn(path string) string {
 }
 
 func checkPragmas(db *sql.DB) error {
-	var mode string
-	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
-		return fmt.Errorf("read journal_mode: %w", err)
-	}
-	if !strings.EqualFold(mode, "wal") {
-		return fmt.Errorf("journal_mode is %q, want wal: the data directory must be on a local filesystem", mode)
-	}
-
 	var timeout int
 	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
 		return fmt.Errorf("read busy_timeout: %w", err)
