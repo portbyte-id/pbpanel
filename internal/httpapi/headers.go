@@ -1,6 +1,9 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // securityHeaders are the browser-facing protections the panel promises on
 // every response. They are constants rather than settings: an operator who
@@ -39,6 +42,12 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", referrerPolicy)
+		// API bodies carry the CSRF token (login, /api/me) and settings; none
+		// may land in a browser or proxy cache. The SPA's own files set their
+		// cache headers later, so only /api/ is covered here.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

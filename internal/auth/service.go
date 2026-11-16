@@ -64,6 +64,14 @@ type Service struct {
 	// unknown-user path still runs a verification without timing the wall
 	// clock. Production always uses Verify.
 	verify func(encoded, password string) (bool, error)
+
+	// loginMu makes check -> verify -> record-failure one step. Without it
+	// the throttle is checked before any of N concurrent guesses has been
+	// counted, so all N pass and all N are verified: the lockout would bound
+	// sequential guesses only, and every parallel request would also hold a
+	// 64 MiB argon2 derivation. One admin logs in rarely, so serialising
+	// logins costs nothing real.
+	loginMu sync.Mutex
 }
 
 // NewService wires the package together. idle, maxAttempts and lockout are
@@ -154,6 +162,9 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) er
 // and trusting one would let a client pick a fresh counter for every attempt and
 // bypass the throttle entirely.
 func (s *Service) VerifyLogin(ctx context.Context, username, password, ip, userAgent string) (Session, error) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+
 	retryAt, locked := s.throttle.Check(ip)
 	if locked {
 		return Session{}, lockoutError(retryAt)
