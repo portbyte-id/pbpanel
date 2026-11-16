@@ -1,11 +1,12 @@
+// Command panel is the server panel: one binary with a daemon role, install and
+// upgrade, and a root-only recovery CLI.
 package main
 
 import (
-	"fmt"
-
-	"github.com/portbyte-id/server-panel/internal/version"
+	"context"
+	"os"
 )
 
 func main() {
-	fmt.Println(version.Version)
+	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
