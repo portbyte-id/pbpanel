@@ -32,6 +32,7 @@ smoke_init() {
 	SMOKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/smoke.XXXXXX") || exit 2
 	trap smoke_cleanup EXIT INT TERM
 	COOKIE_JAR=$SMOKE_TMP/cookies
+	CSRF=
 	: > "$COOKIE_JAR"
 }
 
@@ -134,8 +135,7 @@ http_status() {
 # the CSRF token in $CSRF. Prints the HTTP status of the login.
 api_login() {
 	if [ "$SMOKE_DRY_RUN" = 1 ]; then
-		CSRF=dry-run-csrf
-		printf '200'
+			printf '200'
 		return 0
 	fi
 	: > "$COOKIE_JAR"
@@ -144,7 +144,9 @@ api_login() {
 		-H 'Content-Type: application/json' \
 		-d "{\"username\":\"$3\",\"password\":\"$4\"}" \
 		"https://$1:$2/api/login" 2>/dev/null || true)
-	CSRF=$(sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p' "$_body" 2>/dev/null)
+	# api_login runs in a command substitution, so a variable would die with its
+	# subshell; the token goes through a file that api_call reads.
+	sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p' "$_body" > "$SMOKE_TMP/csrf" 2>/dev/null
 	printf '%s' "$_code"
 }
 
@@ -152,6 +154,7 @@ api_login() {
 # cookie jar and CSRF token from api_login. Prints the HTTP status.
 api_call() {
 	if [ "$SMOKE_DRY_RUN" = 1 ]; then printf '200'; return 0; fi
+	CSRF=$(cat "$SMOKE_TMP/csrf" 2>/dev/null)
 	if [ -n "${5:-}" ]; then
 		curl -sk --max-time 15 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
 			-X "$1" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \

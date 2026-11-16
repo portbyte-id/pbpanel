@@ -88,12 +88,6 @@ func commandSet(stdout io.Writer) []*command {
 	}
 }
 
-// serve stays a stub until the daemon lands in steps 0.7 and 0.11. It is a named
-// function rather than a closure so that step 0.7 replaces one body.
-func serve(context.Context, []string) error {
-	return fmt.Errorf("serve: the daemon is not implemented yet (step 0.7)")
-}
-
 func notImplemented(name, step string) func(context.Context, []string) error {
 	return func(context.Context, []string) error {
 		return fmt.Errorf("%s: not implemented yet (step %s)", name, step)

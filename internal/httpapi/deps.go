@@ -36,6 +36,11 @@ type Deps struct {
 	UI     http.Handler
 	Logger *slog.Logger
 
+	// Rebind moves the live listener to a new port and returns only after the
+	// new one is serving; an error means nothing changed. Nil disables live
+	// port changes (the httptest suites, which have no listener).
+	Rebind func(port int) error
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

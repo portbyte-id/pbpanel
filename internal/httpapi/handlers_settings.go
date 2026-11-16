@@ -114,7 +114,16 @@ func (s *server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				"settings["+itoa(i)+"].name is required")
 			return
 		}
+		undo, err := s.applyLive(r, write)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errInvalidSetting,
+				"settings["+itoa(i)+"] ("+write.Name+"): "+err.Error())
+			return
+		}
 		if err := s.deps.Settings.Set(r.Context(), write.Name, write.Value); err != nil {
+			if undo != nil {
+				undo()
+			}
 			s.writeSettingError(w, r, write, i, err)
 			return
 		}
@@ -139,4 +148,34 @@ func (s *server) writeSettingError(w http.ResponseWriter, r *http.Request, write
 	default:
 		s.writeInternal(w, r, err)
 	}
+}
+
+// applyLive performs the side effect a setting needs before it is stored. Today
+// that is one key: panel.port moves the listener first, so a port that cannot be
+// bound is refused and the stored value never changes to something the daemon is
+// not serving on. The returned undo puts the old port back if storing fails
+// afterwards. A value the registry would reject is left for Set to report, so
+// validation messages stay in one place.
+func (s *server) applyLive(r *http.Request, write settingWrite) (undo func(), err error) {
+	if write.Name != "panel.port" || s.deps.Rebind == nil {
+		return nil, nil
+	}
+	if s.deps.Settings.Validate(write.Name, write.Value) != nil {
+		return nil, nil
+	}
+	port, convErr := strconv.Atoi(write.Value)
+	if convErr != nil {
+		return nil, nil
+	}
+	old, getErr := s.deps.Settings.Int(r.Context(), write.Name)
+	if getErr != nil {
+		return nil, getErr
+	}
+	if old == port {
+		return nil, nil
+	}
+	if err := s.deps.Rebind(port); err != nil {
+		return nil, err
+	}
+	return func() { _ = s.deps.Rebind(old) }, nil
 }
