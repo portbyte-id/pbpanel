@@ -40,6 +40,26 @@ func protectedRoutes() []protectedRoute {
 		{name: "audit", method: http.MethodGet, path: "/api/audit"},
 		{name: "job events", method: http.MethodGet, path: "/api/jobs/00000000000000000000000000000000/events",
 			okStatus: http.StatusNotFound},
+
+		// The nginx and sites routes. This harness has no nginx, so a request
+		// that passes the session and CSRF checks reaches the handler and gets
+		// its 503; handlers_nginx_test.go covers them with nginx present.
+		{name: "sites list", method: http.MethodGet, path: "/api/sites", okStatus: http.StatusServiceUnavailable},
+		{name: "sites create", method: http.MethodPost, path: "/api/sites", body: map[string]string{"domain": "a.test", "kind": "static"}, okStatus: http.StatusServiceUnavailable},
+		{name: "site get", method: http.MethodGet, path: "/api/sites/a.test", okStatus: http.StatusServiceUnavailable},
+		{name: "site put", method: http.MethodPut, path: "/api/sites/a.test", body: map[string]any{"aliases": []string{}}, okStatus: http.StatusServiceUnavailable},
+		{name: "site delete", method: http.MethodDelete, path: "/api/sites/a.test?confirm=a.test", okStatus: http.StatusServiceUnavailable},
+		{name: "site file get", method: http.MethodGet, path: "/api/sites/a.test/file", okStatus: http.StatusServiceUnavailable},
+		{name: "site file put", method: http.MethodPut, path: "/api/sites/a.test/file", body: map[string]string{"content": "x"}, okStatus: http.StatusServiceUnavailable},
+		{name: "site regenerate", method: http.MethodPost, path: "/api/sites/a.test/regenerate?confirm=a.test", okStatus: http.StatusServiceUnavailable},
+		{name: "nginx settings get", method: http.MethodGet, path: "/api/nginx/settings", okStatus: http.StatusServiceUnavailable},
+		{name: "nginx settings put", method: http.MethodPut, path: "/api/nginx/settings", body: map[string]string{"worker_processes": "auto"}, okStatus: http.StatusServiceUnavailable},
+		{name: "nginx conf get", method: http.MethodGet, path: "/api/nginx/conf", okStatus: http.StatusServiceUnavailable},
+		{name: "nginx conf put", method: http.MethodPut, path: "/api/nginx/conf", body: map[string]string{"content": "x"}, okStatus: http.StatusServiceUnavailable},
+		{name: "history list", method: http.MethodGet, path: "/api/config-history/nginx.conf", okStatus: http.StatusServiceUnavailable},
+		{name: "history version", method: http.MethodGet, path: "/api/config-history/nginx.conf/1", okStatus: http.StatusServiceUnavailable},
+		{name: "history restore", method: http.MethodPost, path: "/api/config-history/nginx.conf/1/restore", okStatus: http.StatusServiceUnavailable},
+		{name: "nginx service", method: http.MethodGet, path: "/api/services/nginx", okStatus: http.StatusServiceUnavailable},
 	}
 }
 

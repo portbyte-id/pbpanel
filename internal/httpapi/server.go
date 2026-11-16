@@ -61,6 +61,8 @@ func (s *server) routes() http.Handler {
 
 	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
 
+	s.nginxRoutes(mux)
+
 	// The jobs SSE handler is served by internal/jobs and guarded here, so a job
 	// id is not a way to read another session's output without a session.
 	mux.Handle(jobs.EventsPattern, s.requireAuth(http.HandlerFunc(s.deps.Jobs.ServeEvents)))

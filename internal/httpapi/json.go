@@ -14,6 +14,13 @@ import (
 type errorEnvelope struct {
 	Error  string `json:"error"`
 	Detail string `json:"detail"`
+	// Field names the rejected input of an invalid_input error.
+	Field string `json:"field,omitempty"`
+	// Output is a validator's text, verbatim (`nginx -t`). It is the one place a
+	// message from outside this package is passed through: the operator needs
+	// the file and line nginx names, and it describes their config, not the
+	// server.
+	Output string `json:"output,omitempty"`
 }
 
 // Error classes. These are the values of the envelope's `error` field and the
@@ -27,6 +34,12 @@ const (
 	errInvalidCSRF    = "invalid_csrf_token"
 	errInvalidLogin   = "invalid_credentials"
 	errInvalidSetting = "invalid_setting"
+	errInvalidInput   = "invalid_input"
+	errConflict       = "conflict"
+	errConfigRejected = "config_rejected"
+	errApplyFailed    = "apply_failed"
+	errDetached       = "detached"
+	errUnavailable    = "unavailable"
 )
 
 // writeJSON sends v as JSON with status. Encoding happens into a buffer first

@@ -41,6 +41,10 @@ type Deps struct {
 	// port changes (the httptest suites, which have no listener).
 	Rebind func(port int) error
 
+	// Nginx carries the nginx and sites features. Nil leaves their routes
+	// answering 503, which is what a host without Docker looks like.
+	Nginx *NginxDeps
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string
