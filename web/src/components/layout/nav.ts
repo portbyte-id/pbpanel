@@ -7,6 +7,7 @@ import {
   Gauge,
   Globe,
   LockKeyhole,
+  Network,
   Settings,
   ShieldCheck,
   Terminal,
@@ -29,7 +30,6 @@ export interface NavSection {
 /** Sections for future milestones. Every one of these is disabled today. */
 export const futureSections: NavSection[] = [
   { label: "Dashboard", icon: Gauge, milestone: "M5" },
-  { label: "Sites", icon: Globe, milestone: "M2" },
   { label: "PHP", icon: Terminal, milestone: "M3" },
   { label: "Files", icon: FolderTree, milestone: "M4" },
   { label: "Firewall", icon: ShieldCheck, milestone: "M4" },
@@ -40,6 +40,8 @@ export const futureSections: NavSection[] = [
 
 /** Sections this build implements. */
 export const builtSections: NavSection[] = [
+  { label: "Sites", icon: Globe, path: "/sites" },
+  { label: "Nginx", icon: Network, path: "/nginx" },
   { label: "Settings", icon: Settings, path: "/settings" },
   { label: "Audit", icon: FileText, path: "/audit" },
 ]

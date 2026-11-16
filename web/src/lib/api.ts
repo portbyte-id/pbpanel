@@ -15,6 +15,8 @@
 export interface ErrorEnvelope {
   error: string
   detail: string
+  field?: string
+  output?: string
 }
 
 /** Header the server compares against the session's CSRF token. */
@@ -72,18 +74,136 @@ export interface AuditResponse {
   limit: number
 }
 
+export type SiteKind = "static" | "proxy"
+
+export interface Site {
+  domain: string
+  aliases: string[]
+  kind: SiteKind
+  root?: string
+  proxy_target?: string
+  php_version: string | null
+  created_at: string
+}
+
+/** Whether a site file still includes the file one panel control writes. */
+export interface SiteFeature {
+  feature: "listen" | "names" | "acme" | "proxy"
+  include: string
+  attached: boolean
+  reason?: string
+}
+
+export interface SiteDetail extends Site {
+  site_file: string
+  site_file_missing: boolean
+  features: SiteFeature[]
+}
+
+export interface CreateSiteInput {
+  domain: string
+  aliases: string[]
+  kind: SiteKind
+  root?: string
+  proxy_target?: string
+}
+
+export interface UpdateSiteInput {
+  aliases?: string[]
+  proxy_target?: string
+}
+
+/** A change that went live. Warnings did not stop it. */
+export interface ApplyResponse {
+  warnings: string[]
+}
+
+export interface SiteResponse extends ApplyResponse {
+  site: Site
+}
+
+export interface DeleteSiteResponse extends ApplyResponse {
+  web_root: string
+}
+
+/** A raw config file the operator edits: a site file or nginx.conf. */
+export interface ConfigFile {
+  path: string
+  content: string
+  /** Key of this file under `/api/config-history`. */
+  history_file: string
+  missing?: boolean
+  /** nginx.conf only: what stopped working because an include line is gone. */
+  missing_links?: string[]
+}
+
+export interface ConfigVersion {
+  path: string
+  version: number
+  created_at: string
+  sha256: string
+  size: number
+  reason: string
+}
+
+export interface NginxSettings {
+  worker_processes: string
+  client_max_body_size: string
+  gzip: boolean
+  keepalive_timeout: number
+  client_body_timeout: number
+  client_header_timeout: number
+  send_timeout: number
+  server_tokens: boolean
+}
+
+export interface ReconcileStep {
+  name: string
+  detail: string
+  ok: boolean
+}
+
+export interface NginxServiceStatus {
+  container: {
+    exists: boolean
+    running: boolean
+    status: string
+    started_at?: string
+    error?: string
+  }
+  reconcile: {
+    done: boolean
+    ok: boolean
+    steps: ReconcileStep[]
+    at: string
+    error?: string
+    output?: string
+  }
+}
+
 /** A failed request. `code` is the envelope's `error`, `detail` its sentence. */
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
   readonly detail: string
+  /** The input the server rejected, for an `invalid_input` error. */
+  readonly field: string | null
+  /** A validator's own text (`nginx -t`), shown verbatim. */
+  readonly output: string | null
 
-  constructor(status: number, code: string, detail: string) {
+  constructor(
+    status: number,
+    code: string,
+    detail: string,
+    extra: { field?: string; output?: string } = {},
+  ) {
     super(detail || code)
     this.name = "ApiError"
     this.status = status
     this.code = code
     this.detail = detail
+    this.field = extra.field ?? null
+    this.output = extra.output ?? null
   }
 
   get isUnauthorized(): boolean {
@@ -190,6 +310,101 @@ export class ApiClient {
     return this.request<AuditResponse>(`/api/audit${query}`)
   }
 
+  async sites(): Promise<Site[]> {
+    return (await this.request<{ sites: Site[] }>("/api/sites")).sites
+  }
+
+  async site(domain: string): Promise<SiteDetail> {
+    return this.request<SiteDetail>(`/api/sites/${encodeURIComponent(domain)}`)
+  }
+
+  async createSite(input: CreateSiteInput): Promise<SiteResponse> {
+    return this.request<SiteResponse>("/api/sites", { method: "POST", body: JSON.stringify(input) })
+  }
+
+  /** PUT /api/sites/{domain}. Each field rewrites only its own include file. */
+  async updateSite(domain: string, input: UpdateSiteInput): Promise<SiteResponse> {
+    return this.request<SiteResponse>(`/api/sites/${encodeURIComponent(domain)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+
+  /** DELETE /api/sites/{domain}. The domain is repeated as the confirmation. */
+  async deleteSite(domain: string): Promise<DeleteSiteResponse> {
+    const d = encodeURIComponent(domain)
+    return this.request<DeleteSiteResponse>(`/api/sites/${d}?confirm=${d}`, { method: "DELETE" })
+  }
+
+  async siteFile(domain: string): Promise<ConfigFile> {
+    return this.request<ConfigFile>(`/api/sites/${encodeURIComponent(domain)}/file`)
+  }
+
+  /** PUT the site file. A 422 `config_rejected` carries nginx's output. */
+  async saveSiteFile(domain: string, content: string): Promise<ApplyResponse> {
+    return this.request<ApplyResponse>(`/api/sites/${encodeURIComponent(domain)}/file`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    })
+  }
+
+  /** Rewrites the site file from the template, discarding the operator's edits. */
+  async regenerateSite(domain: string): Promise<ApplyResponse> {
+    const d = encodeURIComponent(domain)
+    return this.request<ApplyResponse>(`/api/sites/${d}/regenerate?confirm=${d}`, {
+      method: "POST",
+    })
+  }
+
+  async nginxSettings(): Promise<NginxSettings> {
+    return this.request<NginxSettings>("/api/nginx/settings")
+  }
+
+  async saveNginxSettings(settings: NginxSettings): Promise<NginxSettings> {
+    return this.request<NginxSettings>("/api/nginx/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    })
+  }
+
+  async nginxConf(): Promise<ConfigFile> {
+    return this.request<ConfigFile>("/api/nginx/conf")
+  }
+
+  async saveNginxConf(content: string): Promise<ApplyResponse> {
+    return this.request<ApplyResponse>("/api/nginx/conf", {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    })
+  }
+
+  async nginxService(): Promise<NginxServiceStatus> {
+    return this.request<NginxServiceStatus>("/api/services/nginx")
+  }
+
+  /** `file` is a `history_file` key; it contains a slash, so it is escaped whole. */
+  async configHistory(file: string): Promise<ConfigVersion[]> {
+    const res = await this.request<{ versions: ConfigVersion[] }>(
+      `/api/config-history/${encodeURIComponent(file)}`,
+    )
+    return res.versions
+  }
+
+  async configVersion(file: string, version: number): Promise<string> {
+    const res = await this.request<{ content: string }>(
+      `/api/config-history/${encodeURIComponent(file)}/${version}`,
+    )
+    return res.content
+  }
+
+  /** Restores a version. It is validated like any edit and can be rejected. */
+  async restoreConfigVersion(file: string, version: number): Promise<ApplyResponse> {
+    return this.request<ApplyResponse>(
+      `/api/config-history/${encodeURIComponent(file)}/${version}/restore`,
+      { method: "POST" },
+    )
+  }
+
   /**
    * One request through the whole contract: headers, envelope, 401 handling.
    * `T` is the success body; a 204 resolves to undefined.
@@ -218,7 +433,10 @@ export class ApiClient {
       const envelope: ErrorEnvelope = isErrorEnvelope(body)
         ? body
         : { error: `http_${res.status}`, detail: res.statusText || "the request failed" }
-      const error = new ApiError(res.status, envelope.error, envelope.detail)
+      const error = new ApiError(res.status, envelope.error, envelope.detail, {
+        field: typeof envelope.field === "string" ? envelope.field : undefined,
+        output: typeof envelope.output === "string" ? envelope.output : undefined,
+      })
       // A 401 on login is a wrong password, not an expired session: redirecting
       // there would replace the form's own message with a pointless reload.
       if (error.isUnauthorized && !isLoginPath(path)) {

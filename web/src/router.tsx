@@ -4,7 +4,10 @@ import type { QueryClient } from "@tanstack/react-query"
 import { appRoute } from "@/routes/_app"
 import { auditRoute } from "@/routes/_app/audit"
 import { appIndexRoute } from "@/routes/_app/index"
+import { nginxRoute } from "@/routes/_app/nginx"
 import { settingsRoute } from "@/routes/_app/settings"
+import { siteRoute } from "@/routes/_app/site"
+import { sitesRoute } from "@/routes/_app/sites"
 import { loginRoute } from "@/routes/login"
 import { rootRoute } from "@/routes/__root"
 
@@ -16,7 +19,14 @@ import { rootRoute } from "@/routes/__root"
  */
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([appIndexRoute, settingsRoute, auditRoute]),
+  appRoute.addChildren([
+    appIndexRoute,
+    sitesRoute,
+    siteRoute,
+    nginxRoute,
+    settingsRoute,
+    auditRoute,
+  ]),
 ])
 
 export function createAppRouter(queryClient: QueryClient) {

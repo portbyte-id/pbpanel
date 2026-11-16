@@ -1,7 +1,7 @@
 # Server Panel — Development Plan
 
 Date: 2026-11-16. Source: [plan.md](plan.md) (decisions, layout, architecture, stages).
-Status: M0 built and smoke-tested on Ubuntu; M1 in progress. This document turns the ten stages of `plan.md` §4 into milestones with
+Status: M0 and M1 built and smoke-tested on Ubuntu. This document turns the ten stages of `plan.md` §4 into milestones with
 ordered steps, deliverables, tests, and exit gates. Where this file and `plan.md` disagree,
 `plan.md` wins and this file is corrected.
 
@@ -177,9 +177,11 @@ failure.
 
 ### Status (2026-11-17)
 
-Steps 1.1–1.9 are built and tested; 1.10–1.12 (API, UI, smoke) are not started. The boot
-reconcile (1.9) is wired into `panel serve` and runs in the background after the listener starts,
-so a host with nginx reachable gets its container, but there is no HTTP route or UI for sites yet.
+All twelve steps are built, and the exit gate passed: `scripts/smoke/1-nginx-sites.sh` ran 64
+checks green against the Ubuntu 26.04 sandbox VM on 2026-11-17, including the daemon restart with
+the container removed by hand and the reboot. Against the definition of done in §1.3 three items
+are still open, listed under "Open after M1" below, so the milestone is built and gated but not
+yet done by that definition.
 
 | Step | State | Evidence |
 |------|-------|----------|
@@ -264,7 +266,52 @@ entrypoint is `nginx` directly; the image's `/docker-entrypoint.sh` only edits f
   is not seen by `Healthy`, which only catches a master that exited or restarted. Step 1.12's smoke
   should check a real request after a change.
 
-**Open for 1.10 onwards.** `TestRepairFixesALoosenedMode` in `internal/install` fails in WSL at the
+| Step | State | Evidence |
+|------|-------|----------|
+| 1.10 | done | `internal/httpapi/handlers_nginx.go`; `httptest` coverage in `handlers_nginx_test.go`, and every route is in the 401/CSRF matrix of `routes_test.go`. |
+| 1.11 | done | Sites list, create dialog, site detail (Overview, Config, Logs placeholder), Nginx page. Vitest for the forms and detached rendering; Playwright `web/e2e/sites.spec.ts`. |
+| 1.12 | done | `scripts/smoke/1-nginx-sites.sh`, 64 checks passed on the Ubuntu sandbox. |
+
+**Deviations and additions in 1.10–1.12.**
+
+- 1.10: the error envelope gained two optional fields, `field` (the rejected input) and `output`
+  (the validator's text, verbatim). A rejected config is `422 config_rejected`; a failure at
+  reload or health is `502 apply_failed`; a failed rollback is `500` with the cause in the log only.
+- 1.10: `DELETE /api/sites/{domain}` and `POST …/regenerate` need `?confirm=<domain>`.
+- 1.10: one route beyond the plan's list, `GET /api/config-history/{file}/{version}`, returns a
+  version's content so the editor can show a diff before a restore. `{file}` is `nginx.conf` or
+  `sites/<domain>.conf`, URL-escaped. The panel-owned files have no history routes: they are
+  rendered from the database, and restoring one would make the two disagree.
+- 1.10: without a Docker client the routes answer `503 unavailable` instead of being absent.
+- 1.10: `internal/install` imports `internal/httpapi`, so `nginx` and `sites` cannot import
+  `install`. The `www` account constants are repeated in `nginx`, and a test in `cmd/panel` holds
+  them equal.
+- 1.11: the editor is CodeMirror 6 with the legacy nginx mode; "Show changes" is a unified diff
+  against the saved file (`@codemirror/merge`). The bundle is about 800 kB (260 kB gzipped) and is
+  not code-split.
+- 1.11: the Playwright journey runs against the real HTTP layer and sites model with a stand-in for
+  nginx (`scripts/e2e/server.go`), because the machine that runs it may have no Docker. The
+  stand-in refuses any file containing `bogus_directive`. Real nginx is covered by
+  `TestRealNginxEndToEnd` and by the smoke.
+- 1.11 found a defect in M0's `internal/webui`: a deep link to `/sites/example.com` was answered
+  `404`, because a path with a dot was taken for a missing asset. Only paths under `assets/` and
+  top-level files are treated that way now.
+- 1.12: the smoke takes an installed panel (run smoke 0 first), and resets the admin password
+  unless `SMOKE_PASSWORD` is given.
+
+**Open after M1.** Against §1.3:
+
+- Item 2: the smoke ran on the sandbox VM as it was after smoke 0, not on a reverted snapshot, and
+  with a binary cross-compiled from the working tree and installed with `panel upgrade`, not the
+  CI release binary.
+- Item 3: smoke 0 was not re-run after the M1 build.
+- Item 4: the nginx common settings live in their own table (`nginx_settings`) and form, not in
+  the settings registry, because a change to them has to go through confedit and be rolled back
+  with it. They have defaults and validation; "restart required" does not apply.
+- Item 1: there is no `eslint` script in `web/package.json`, so that check was not run.
+
+Also: nothing in M1 has run on EL9 (the Rocky 9 host was unreachable; EL9 is M9's scope). Request bodies are capped at 1 MiB, below confedit's 2 MiB file limit, so a config file
+between the two can be read but not saved through the API. `TestRepairFixesALoosenedMode` in `internal/install` fails in WSL at the
 committed `HEAD` as well as in the working tree; it is not caused by 1.5–1.9. The Docker integration test and the unix-only tests do not run in CI as
 configured (CI has no `-tags integration` job); they were run by hand in WSL.
 
