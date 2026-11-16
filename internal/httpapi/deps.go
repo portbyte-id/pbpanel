@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
+	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
@@ -28,7 +30,11 @@ type Deps struct {
 	Settings *settings.Registry
 	Auth     *auth.Service
 	Audit    AuditWriter
-	Logger   *slog.Logger
+	Jobs     *jobs.Manager
+	// UI serves the embedded single-page app. Nil leaves the panel API-only,
+	// which is what the httptest suites want: they assert on JSON, not HTML.
+	UI     http.Handler
+	Logger *slog.Logger
 
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
@@ -48,6 +54,8 @@ func (d *Deps) validate() error {
 		return errors.New("httpapi: Deps.Auth is required")
 	case d.Audit == nil:
 		return errors.New("httpapi: Deps.Audit is required")
+	case d.Jobs == nil:
+		return errors.New("httpapi: Deps.Jobs is required")
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()

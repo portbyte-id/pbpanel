@@ -15,6 +15,11 @@ type protectedRoute struct {
 	method string
 	path   string
 	body   any
+	// okStatus is the status a request with a session and no CSRF header must
+	// get. Zero means 200. A route whose path names a record that does not
+	// exist answers 404 to a well-formed request, and that still proves it
+	// reached the handler.
+	okStatus int
 }
 
 // protectedRoutes is every route except login. Login is the deliberate
@@ -33,6 +38,8 @@ func protectedRoutes() []protectedRoute {
 		{name: "settings put", method: http.MethodPut, path: "/api/settings",
 			body: map[string]any{"settings": []map[string]string{{"name": "login.max_attempts", "value": "6"}}}},
 		{name: "audit", method: http.MethodGet, path: "/api/audit"},
+		{name: "job events", method: http.MethodGet, path: "/api/jobs/00000000000000000000000000000000/events",
+			okStatus: http.StatusNotFound},
 	}
 }
 
@@ -145,8 +152,12 @@ func TestSafeMethodsNeedNoCSRF(t *testing.T) {
 		}
 		t.Run(route.name, func(t *testing.T) {
 			rec := h.do(route.method, route.path, s.cookie, "", route.body)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			want := route.okStatus
+			if want == 0 {
+				want = http.StatusOK
+			}
+			if rec.Code != want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, want, rec.Body.String())
 			}
 		})
 	}

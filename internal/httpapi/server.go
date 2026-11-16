@@ -3,6 +3,8 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+
+	"github.com/portbyte-id/server-panel/internal/jobs"
 )
 
 // server carries the dependencies every handler and middleware needs. There is
@@ -58,6 +60,36 @@ func (s *server) routes() http.Handler {
 	mux.Handle("PUT /api/settings", s.requireAuth(http.HandlerFunc(s.handlePutSettings)))
 
 	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
+
+	// The jobs SSE handler is served by internal/jobs and guarded here, so a job
+	// id is not a way to read another session's output without a session.
+	mux.Handle(jobs.EventsPattern, s.requireAuth(http.HandlerFunc(s.deps.Jobs.ServeEvents)))
+
+	// The SPA is deliberately not behind requireAuth: its files are what renders
+	// the login page, and the API is what decides who may do anything. A route
+	// guard in the browser is a convenience, not the boundary — every protected
+	// route above still answers 401 on its own.
+	if s.deps.UI != nil {
+		// An unknown /api path is a missing endpoint, not a client-side route.
+		// Without this, the SPA fallback would answer it with HTML and a client
+		// parsing JSON would report a syntax error instead of a 404.
+		//
+		// Both patterns here are method-less. The mux refuses a GET-only "/"
+		// beside a method-less "/api/", because the narrower path would be the
+		// more general method; the GET check therefore happens in the handler.
+		mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeError(w, http.StatusNotFound, errNotFound, "no such endpoint")
+		}))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !isSafeMethod(r.Method) {
+				w.Header().Set("Allow", "GET, HEAD, OPTIONS")
+				writeError(w, http.StatusMethodNotAllowed, errBadRequest,
+					"the interface is served over GET")
+				return
+			}
+			s.deps.UI.ServeHTTP(w, r)
+		}))
+	}
 
 	return s.middleware(mux)
 }
