@@ -22,15 +22,19 @@ func commandSet(stdout io.Writer) []*command {
 		},
 		{
 			name:    "install",
-			summary: "install the panel on this host (step 0.11)",
+			summary: "install the panel on this host",
 			usage:   "panel install",
-			run:     notImplemented("install", "0.11"),
+			run: func(ctx context.Context, _ []string) error {
+				return installPanel(ctx, stdout)
+			},
 		},
 		{
 			name:    "upgrade",
-			summary: "replace the binary and migrate (step 0.11)",
+			summary: "replace the binary and migrate",
 			usage:   "panel upgrade",
-			run:     notImplemented("upgrade", "0.11"),
+			run: func(ctx context.Context, _ []string) error {
+				return upgradePanel(ctx, stdout)
+			},
 		},
 		{
 			name:    "info",

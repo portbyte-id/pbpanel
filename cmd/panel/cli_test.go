@@ -242,10 +242,12 @@ func TestVersionPrintsVersion(t *testing.T) {
 }
 
 // TestStubsReportNotImplemented keeps the stubs honest: each must say what it is
-// waiting for, so a caller never mistakes a stub for a working command.
+// waiting for, so a caller never mistakes a stub for a working command. install
+// and upgrade left this list when step 0.11 landed; the firewall pair waits for
+// M4.
 func TestStubsReportNotImplemented(t *testing.T) {
 	cmds := commandSet(io.Discard)
-	for _, name := range []string{"install", "upgrade", "firewall restore", "firewall disable"} {
+	for _, name := range []string{"firewall restore", "firewall disable"} {
 		c, _ := lookup(strings.Fields(name), cmds)
 		if c == nil {
 			t.Fatalf("command %q not found", name)
