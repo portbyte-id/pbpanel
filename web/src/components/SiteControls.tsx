@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import type { SiteDetail, SiteFeature, UpdateSiteInput } from "@/lib/api"
 
 const featureLabel: Record<SiteFeature["feature"], string> = {
+  php: "PHP version and pool",
   listen: "Ports",
   names: "Domains",
   acme: "Certificate challenges",

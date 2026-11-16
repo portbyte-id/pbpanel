@@ -12,8 +12,9 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select } from "@/components/ui/select"
 import { ApiError, type CreateSiteInput, type SiteKind } from "@/lib/api"
-import { useCreateSite } from "@/lib/queries"
+import { useCreateSite, usePHP } from "@/lib/queries"
 
 /** Aliases are typed as one line or several; commas, spaces and newlines all separate. */
 export function parseAliases(text: string): string[] {
@@ -36,11 +37,14 @@ export function CreateSiteForm({
   onCancel,
   pending,
   error,
+  phpVersions = [],
 }: {
   onSubmit: (input: CreateSiteInput) => void
   onCancel: () => void
   pending: boolean
   error: unknown
+  /** The installed PHP versions. With none, a PHP site cannot be created yet. */
+  phpVersions?: string[]
 }) {
   const id = useId()
   const [kind, setKind] = useState<SiteKind>("static")
@@ -48,6 +52,10 @@ export function CreateSiteForm({
   const [aliases, setAliases] = useState("")
   const [root, setRoot] = useState("")
   const [target, setTarget] = useState("")
+  // The newest installed version is the default.
+  const [phpVersion, setPHPVersion] = useState(phpVersions[phpVersions.length - 1] ?? "")
+  const [phpinfo, setPHPInfo] = useState(false)
+  const noPHP = kind === "php" && phpVersions.length === 0
 
   const field = error instanceof ApiError && error.code === "invalid_input" ? error.field : null
   const fieldError = (name: string) =>
@@ -64,8 +72,12 @@ export function CreateSiteForm({
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     const input: CreateSiteInput = { domain: domain.trim(), aliases: parseAliases(aliases), kind }
-    if (kind === "static" && root.trim() !== "") input.root = root.trim()
+    if (kind !== "proxy" && root.trim() !== "") input.root = root.trim()
     if (kind === "proxy") input.proxy_target = target.trim()
+    if (kind === "php") {
+      input.php_version = phpVersion
+      if (phpinfo) input.phpinfo = true
+    }
     onSubmit(input)
   }
 
@@ -76,6 +88,7 @@ export function CreateSiteForm({
         {(
           [
             ["static", "Files from a folder", "HTML, images and other static files."],
+            ["php", "A PHP application", "Scripts in a folder, run by PHP-FPM."],
             ["proxy", "Another server", "Requests are passed to an app listening on a port."],
           ] as const
         ).map(([value, title, hint]) => (
@@ -134,7 +147,48 @@ export function CreateSiteForm({
         {fieldError("aliases")}
       </div>
 
-      {kind === "static" ? (
+      {kind === "php" && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-php_version`}>PHP version</Label>
+          {noPHP ? (
+            <p id={`${id}-php_version`} role="status" className="text-sm">
+              No PHP version is installed yet. Pull one on the PHP page, then come back.
+            </p>
+          ) : (
+            <Select
+              id={`${id}-php_version`}
+              value={phpVersion}
+              onChange={(e) => setPHPVersion(e.target.value)}
+              aria-invalid={field === "php_version"}
+              aria-describedby={describedBy("php_version")}
+            >
+              {phpVersions.map((v) => (
+                <option key={v} value={v}>
+                  PHP {v}
+                </option>
+              ))}
+            </Select>
+          )}
+          {fieldError("php_version")}
+          <label className="mt-1 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={phpinfo}
+              onChange={(e) => setPHPInfo(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="flex flex-col gap-0.5">
+              Start with a phpinfo() page
+              <span className="text-muted-foreground text-xs">
+                It shows visitors the server's whole PHP setup. Use it to check the site works,
+                then delete index.php.
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+
+      {kind !== "proxy" ? (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-root`}>Folder</Label>
           <Input
@@ -180,7 +234,7 @@ export function CreateSiteForm({
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending || domain.trim() === ""}>
+        <Button type="submit" disabled={pending || domain.trim() === "" || noPHP}>
           {pending ? "Creating…" : "Create site"}
         </Button>
       </DialogFooter>
@@ -198,6 +252,8 @@ export function CreateSiteDialog({
   onCreated: (domain: string) => void
 }) {
   const create = useCreateSite()
+  const php = usePHP()
+  const ready = (php.data?.versions ?? []).filter((v) => v.state === "ready").map((v) => v.version)
 
   const close = (next: boolean) => {
     if (!next) create.reset()
@@ -217,6 +273,9 @@ export function CreateSiteDialog({
         {/* Remounted on open, so a closed dialog does not reopen with old text. */}
         {open && (
           <CreateSiteForm
+            // Remounted when the versions arrive, so the picker starts on one.
+            key={ready.join(",")}
+            phpVersions={ready}
             pending={create.isPending}
             error={create.error}
             onCancel={() => close(false)}
