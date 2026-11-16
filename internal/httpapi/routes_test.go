@@ -255,3 +255,35 @@ func TestNoRouteLeaksInternals(t *testing.T) {
 		}
 	}
 }
+
+// TestHealthNeedsNoSession covers GET /api/health, the one route besides login
+// that answers without a cookie. `panel upgrade` polls it to decide whether a new
+// binary came up, so a 401 here would roll back every upgrade.
+func TestHealthNeedsNoSession(t *testing.T) {
+	h := newHarness(t)
+
+	rec := h.do(http.MethodGet, "/api/health", "", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body healthResponse
+	h.decode(rec, &body)
+	if body.Status != "ok" {
+		t.Errorf("status field = %q, want ok", body.Status)
+	}
+	if body.Version == "" {
+		t.Error("the health body carries no version")
+	}
+}
+
+// TestHealthIsGetOnly proves the probe cannot be used to reach a handler that
+// changes something.
+func TestHealthIsGetOnly(t *testing.T) {
+	h := newHarness(t)
+
+	rec := h.do(http.MethodPost, "/api/health", "", "", nil)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/health = %d, want 405", rec.Code)
+	}
+}
