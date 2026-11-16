@@ -14,6 +14,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -33,6 +34,7 @@ type Kind = nginx.Kind
 const (
 	KindStatic = nginx.KindStatic
 	KindProxy  = nginx.KindProxy
+	KindPHP    = nginx.KindPHP
 )
 
 const placeholderIndex = `<!doctype html>
@@ -44,13 +46,15 @@ const placeholderIndex = `<!doctype html>
 
 // Site is one website.
 type Site struct {
-	Domain      string    `json:"domain"`
-	Aliases     []string  `json:"aliases"`
-	Kind        Kind      `json:"kind"`
-	Root        string    `json:"root,omitempty"`
-	ProxyTarget string    `json:"proxy_target,omitempty"`
-	PHPVersion  *string   `json:"php_version"`
-	CreatedAt   time.Time `json:"created_at"`
+	Domain      string   `json:"domain"`
+	Aliases     []string `json:"aliases"`
+	Kind        Kind     `json:"kind"`
+	Root        string   `json:"root,omitempty"`
+	ProxyTarget string   `json:"proxy_target,omitempty"`
+	PHPVersion  *string  `json:"php_version"`
+	// PHPPool is the FPM pool name of a PHP site.
+	PHPPool   string    `json:"php_pool,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (s Site) nginx() nginx.Site {
@@ -98,6 +102,8 @@ type Options struct {
 	// through it.
 	Service confedit.Service
 	Paths   nginx.Paths
+	// PHP is the PHP runtime. Nil leaves the `php` site kind refused.
+	PHP PHPRuntime
 	// FS defaults to the real filesystem.
 	FS  FS
 	Now func() time.Time
@@ -110,6 +116,7 @@ type Manager struct {
 	ap  nginx.Applier
 	svc confedit.Service
 	p   nginx.Paths
+	php PHPRuntime
 	fs  FS
 	now func() time.Time
 
@@ -121,7 +128,7 @@ func New(o Options) (*Manager, error) {
 	if o.Store == nil || o.Applier == nil || o.Service == nil {
 		return nil, errors.New("sites: store, applier and service are required")
 	}
-	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, fs: o.FS, now: o.Now}
+	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, fs: o.FS, now: o.Now}
 	if m.fs == nil {
 		m.fs = OSFS{}
 	}
@@ -139,6 +146,11 @@ type CreateInput struct {
 	// Root is the web root of a static site; empty means /www/services/sites/<domain>.
 	Root        string
 	ProxyTarget string
+	// PHPVersion is the version a PHP site runs on.
+	PHPVersion string
+	// PHPInfo puts an index.php that prints phpinfo() in a new web root. It is
+	// off by default: that page tells a visitor everything about the server.
+	PHPInfo bool
 }
 
 // CreateResult is what Create did.
@@ -159,23 +171,46 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if site.Kind == KindPHP {
+		if err := m.php.Usable(ctx, *site.PHPVersion); err != nil {
+			return CreateResult{}, phpInputError("php_version", err)
+		}
+	}
+
 	site.CreatedAt = m.now().UTC()
 	if err := m.insert(ctx, site); err != nil {
 		return CreateResult{}, err
 	}
 
 	var created bool
-	if site.Kind == KindStatic {
-		if created, err = m.prepareRoot(site); err != nil {
+	index := "index.html"
+	if site.Kind == KindPHP && in.PHPInfo {
+		index = "index.php"
+	}
+	if site.Kind != KindProxy {
+		created, err = m.prepareRoot(site, index)
+		if err == nil && site.Kind == KindPHP {
+			err = m.prepareLog(site.Domain)
+		}
+		if err != nil {
 			_ = m.deleteRow(context.WithoutCancel(ctx), site.Domain)
 			return CreateResult{}, err
 		}
 	}
 
 	files, err := m.allFiles(site)
+	services := []confedit.Service{m.svc}
+	if err == nil && site.Kind == KindPHP {
+		// FPM first: nginx must not be pointed at a socket nothing listens on.
+		var more []confedit.File
+		if more, err = m.phpFiles(ctx, site, php.DefaultPoolSettings()); err == nil {
+			files = append(files, more...)
+			services = []confedit.Service{m.php.Service(*site.PHPVersion, true), m.svc}
+		}
+	}
 	if err == nil {
 		var res confedit.Result
-		res, err = m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "create site " + site.Domain})
+		res, err = m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "create site " + site.Domain})
 		if err == nil {
 			return CreateResult{Site: site, Apply: res}, nil
 		}
@@ -188,7 +223,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	}
 	if created {
 		// Not RemoveAll: whatever the operator may have put there since is theirs.
-		_ = m.fs.Remove(path.Join(site.Root, "index.html"))
+		_ = m.fs.Remove(path.Join(site.Root, index))
 		_ = m.fs.Remove(site.Root)
 	}
 	return CreateResult{}, err
@@ -225,8 +260,30 @@ func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 			return Site{}, invalid("proxy_target", "%s", strings.TrimPrefix(err.Error(), "nginx: "))
 		}
 		site.ProxyTarget = t
+	case KindPHP:
+		if in.ProxyTarget != "" {
+			return Site{}, invalid("proxy_target", "is only for a reverse-proxy site")
+		}
+		if m.php == nil {
+			return Site{}, invalid("kind", "PHP is not available on this host")
+		}
+		if php.CheckVersion(in.PHPVersion) != nil {
+			return Site{}, invalid("php_version", "choose an installed PHP version")
+		}
+		site.Root = in.Root
+		if site.Root == "" {
+			site.Root = m.p.SiteRoot(domain)
+		}
+		if err := m.checkRoot(site.Root); err != nil {
+			return Site{}, err
+		}
+		v := in.PHPVersion
+		site.PHPVersion, site.PHPPool = &v, php.PoolName(domain)
 	default:
-		return Site{}, invalid("kind", "must be static or proxy")
+		return Site{}, invalid("kind", "must be static, proxy or php")
+	}
+	if in.Kind != KindPHP && (in.PHPVersion != "" || in.PHPInfo) {
+		return Site{}, invalid("php_version", "is only for a PHP site")
 	}
 	return site, nil
 }
@@ -246,7 +303,7 @@ func (m *Manager) checkRoot(root string) error {
 // prepareRoot creates the web root and its placeholder page, owned by www. It
 // reports whether it created the directory, which decides whether a failed
 // create removes it again. An existing directory is left exactly as it is.
-func (m *Manager) prepareRoot(s Site) (created bool, err error) {
+func (m *Manager) prepareRoot(s Site, indexName string) (created bool, err error) {
 	if _, err := m.fs.Stat(s.Root); err == nil {
 		return false, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -255,8 +312,11 @@ func (m *Manager) prepareRoot(s Site) (created bool, err error) {
 	if err := m.fs.MkdirAll(s.Root, 0o755); err != nil {
 		return false, fmt.Errorf("sites: create web root %s: %w", s.Root, err)
 	}
-	index := path.Join(s.Root, "index.html")
+	index := path.Join(s.Root, indexName)
 	body := fmt.Appendf(nil, placeholderIndex, s.Domain, s.Domain)
+	if indexName == "index.php" {
+		body = []byte("<?php phpinfo();\n")
+	}
 	if err := m.fs.WriteFile(index, body, 0o644); err != nil {
 		_ = m.fs.Remove(s.Root)
 		return false, fmt.Errorf("sites: write %s: %w", index, err)
@@ -296,6 +356,13 @@ func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
 			return nil, err
 		}
 		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludeProxy), Content: proxy})
+	}
+	if s.Kind == KindPHP {
+		b, err := m.renderPHPInclude(s)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludePHP), Content: b})
 	}
 	return files, nil
 }
@@ -340,10 +407,17 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 		return DeleteResult{}, err
 	}
 	files := []confedit.File{{Path: m.p.SiteFile(s.Domain), Delete: true}}
-	for _, name := range []string{nginx.IncludeListen, nginx.IncludeNames, nginx.IncludeACME, nginx.IncludeProxy} {
+	for _, name := range []string{nginx.IncludeListen, nginx.IncludeNames, nginx.IncludeACME, nginx.IncludeProxy, nginx.IncludePHP} {
 		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, name), Delete: true})
 	}
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "delete site " + s.Domain})
+	services := []confedit.Service{m.svc}
+	if s.Kind == KindPHP && m.php != nil && s.PHPVersion != nil && s.PHPPool != "" {
+		// nginx lets go of the socket first, then FPM drops the pool. The
+		// container stays up even when this was its last site (step 2.7).
+		files = append(files, confedit.File{Path: m.php.Paths().PoolFile(*s.PHPVersion, s.PHPPool), Delete: true})
+		services = append(services, m.php.Service(*s.PHPVersion, false))
+	}
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "delete site " + s.Domain})
 	if err != nil {
 		return DeleteResult{}, err
 	}
@@ -354,7 +428,7 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 		return DeleteResult{Apply: res}, fmt.Errorf("sites: the configuration of %s was removed but its database row was not: %w", s.Domain, err)
 	}
 	out := DeleteResult{Apply: res}
-	if s.Kind == KindStatic {
+	if s.Kind != KindProxy {
 		out.WebRoot = s.Root
 	}
 	return out, nil
@@ -376,7 +450,7 @@ type queryer interface {
 }
 
 func (m *Manager) list(ctx context.Context, q queryer) ([]Site, error) {
-	rows, err := q.QueryContext(ctx, `SELECT domain, kind, root, proxy_target, php_version, created_at FROM sites ORDER BY domain`)
+	rows, err := q.QueryContext(ctx, siteColumns+` ORDER BY s.domain`)
 	if err != nil {
 		return nil, fmt.Errorf("sites: list: %w", err)
 	}
@@ -408,8 +482,7 @@ func (m *Manager) get(ctx context.Context, q queryer, domain string) (Site, erro
 	if err != nil {
 		return Site{}, fmt.Errorf("%w: %s", ErrNotFound, domain)
 	}
-	s, err := scanSite(q.QueryRowContext(ctx,
-		`SELECT domain, kind, root, proxy_target, php_version, created_at FROM sites WHERE domain = ?`, d))
+	s, err := scanSite(q.QueryRowContext(ctx, siteColumns+` WHERE s.domain = ?`, d))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Site{}, fmt.Errorf("%w: %s", ErrNotFound, d)
 	}
@@ -420,20 +493,23 @@ func (m *Manager) get(ctx context.Context, q queryer, domain string) (Site, erro
 	return s, err
 }
 
+const siteColumns = `SELECT s.domain, s.kind, s.root, s.proxy_target, s.php_version, s.created_at, COALESCE(p.name, '')
+	FROM sites s LEFT JOIN php_pools p ON p.domain = s.domain`
+
 type scanner interface{ Scan(dest ...any) error }
 
 func scanSite(r scanner) (Site, error) {
 	var s Site
-	var php sql.NullString
+	var phpVer sql.NullString
 	var created string
-	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &s.ProxyTarget, &php, &created); err != nil {
+	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &s.ProxyTarget, &phpVer, &created, &s.PHPPool); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Site{}, err
 		}
 		return Site{}, fmt.Errorf("sites: read row: %w", err)
 	}
-	if php.Valid {
-		s.PHPVersion = &php.String
+	if phpVer.Valid {
+		s.PHPVersion = &phpVer.String
 	}
 	t, err := time.Parse(time.RFC3339Nano, created)
 	if err != nil {
@@ -488,9 +564,14 @@ func (m *Manager) insert(ctx context.Context, s Site) error {
 			return fmt.Errorf("%w: %s", ErrConflict, name)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO sites (domain, kind, root, proxy_target, php_version, created_at) VALUES (?, ?, ?, ?, NULL, ?)`,
-			s.Domain, string(s.Kind), s.Root, s.ProxyTarget, s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			`INSERT INTO sites (domain, kind, root, proxy_target, php_version, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			s.Domain, string(s.Kind), s.Root, s.ProxyTarget, s.PHPVersion, s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("sites: insert %s: %w", s.Domain, err)
+		}
+		if s.Kind == KindPHP {
+			if err := insertPool(ctx, tx, s.Domain, s.PHPPool, php.DefaultPoolSettings()); err != nil {
+				return err
+			}
 		}
 		return setAliases(ctx, tx, s.Domain, s.Aliases)
 	})
@@ -513,6 +594,9 @@ func setAliases(ctx context.Context, tx *sql.Tx, domain string, aliases []string
 func (m *Manager) deleteRow(ctx context.Context, domain string) error {
 	return m.st.WithTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM site_aliases WHERE domain = ?`, domain); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM php_pools WHERE domain = ?`, domain); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM sites WHERE domain = ?`, domain)

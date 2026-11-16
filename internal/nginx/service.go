@@ -36,7 +36,7 @@ type Engine interface {
 }
 
 // Spec is the nginx container: host network, the config tree read-only, the
-// site logs writable, web roots read-only, every path identical on the host and
+// site logs writable, web roots read-only, the PHP socket directory, every path identical on the host and
 // in the container. Nothing is mounted over a directory the image owns.
 func Spec(p Paths) docker.Spec {
 	return docker.Spec{
@@ -50,6 +50,8 @@ func Spec(p Paths) docker.Spec {
 			{Path: p.Dir(), ReadOnly: true},
 			{Path: p.SiteLogDir()},
 			{Path: p.SitesRoot(), ReadOnly: true},
+			// Read-write: connecting to a Unix socket needs write access to it.
+			{Path: p.RunDir()},
 		},
 	}
 }

@@ -88,7 +88,7 @@ func serve(ctx context.Context, _ []string) error {
 	// Building the stack touches neither Docker nor the disk; a failure here is
 	// a wiring problem, and the nginx routes then answer 503.
 	var nginxDeps *httpapi.NginxDeps
-	nginxStack, err := newNginxStack(st, layout, jobsMgr, logger)
+	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, logger)
 	if err != nil {
 		logger.Error("nginx is not available", "error", err)
 		nginxStack = nil
