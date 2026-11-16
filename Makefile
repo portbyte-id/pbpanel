@@ -12,9 +12,9 @@ all: lint test web build
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/panel
 
-## web: reproducible frontend build (npm ci, not npm install)
+## web: reproducible frontend build (npm ci, not npm install), then its unit tests
 web:
-	cd web && $(NPM) ci && $(NPM) run build
+	cd web && $(NPM) ci && $(NPM) run build && $(NPM) test
 
 test:
 	$(GO) test ./...

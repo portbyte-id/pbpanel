@@ -9,9 +9,14 @@ coverage.*
 
 # Web
 web/node_modules/
-web/dist/
+web/dist/*
+# The placeholder keeps `go build ./...` working on a fresh checkout: the embed
+# directive needs at least one file, and CI compiles Go before it builds the SPA.
+!web/dist/index.html
 web/.vite/
 web/*.tsbuildinfo
+web/playwright-report/
+web/test-results/
 
 # Editors
 .vscode/
