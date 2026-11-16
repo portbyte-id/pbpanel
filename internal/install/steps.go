@@ -63,6 +63,11 @@ type Installer struct {
 	// Hostname is a name the panel certificate is issued for. Empty means
 	// os.Hostname.
 	Hostname string
+
+	// Executable returns the path of the running binary, which the "binary" step
+	// copies to Layout.BinaryPath(). Nil means os.Executable; tests supply a
+	// temp file.
+	Executable func() (string, error)
 }
 
 // step is one entry of the install list.
@@ -145,6 +150,7 @@ func (s *runState) steps() []step {
 		{name: "database", done: s.databaseDone, run: s.initDatabase},
 		{name: "admin-password", done: s.adminDone, run: s.createAdmin},
 		{name: "panel-cert", done: s.certDone, run: s.generateCert},
+		{name: "binary", done: s.binaryDone, run: s.installBinary},
 		{name: "unit-file", done: s.unitDone, run: s.writeUnit},
 		{name: "enable-service", done: s.enabledDone, run: s.enableService},
 		{name: "start-service", done: s.activeDone, run: s.startService},
@@ -391,6 +397,49 @@ func (s *runState) certHosts(ctx context.Context) ([]string, error) {
 		hosts = append(hosts, bind)
 	}
 	return hosts, nil
+}
+
+// --- binary ----------------------------------------------------------------
+
+// binaryDone is true once a binary is installed. An existing one is never
+// replaced here: swapping a binary under a running service, with health check
+// and rollback, is what `panel upgrade` is for.
+func (s *runState) binaryDone(context.Context) (bool, error) {
+	info, err := os.Stat(s.Layout.BinaryPath())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
+}
+
+// installBinary copies the running executable to the path panel.service runs.
+// Without it the unit points at nothing and the service crash-loops on 203/EXEC.
+func (s *runState) installBinary(context.Context) error {
+	exe := s.Executable
+	if exe == nil {
+		exe = os.Executable
+	}
+	src, err := exe()
+	if err != nil {
+		return fmt.Errorf("locate the running binary: %w", err)
+	}
+	live := s.Layout.BinaryPath()
+	if err := os.MkdirAll(filepath.Dir(live), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(live), err)
+	}
+	staged := live + upgradeSuffix
+	if err := copyFile(src, staged, binaryMode); err != nil {
+		_ = os.Remove(staged)
+		return fmt.Errorf("copy %s to %s: %w", src, live, err)
+	}
+	if err := os.Rename(staged, live); err != nil {
+		_ = os.Remove(staged)
+		return fmt.Errorf("install %s: %w", live, err)
+	}
+	return nil
 }
 
 // --- unit file -------------------------------------------------------------

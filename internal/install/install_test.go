@@ -183,6 +183,7 @@ type host struct {
 	runner *fakeRunner
 	os     *fakeOS
 	out    strings.Builder
+	exe    string
 }
 
 // newHost builds a temp root laid out like the production one, with the unit
@@ -205,12 +206,13 @@ func (h *host) installer() *Installer {
 		h.os = &fakeOS{runner: h.runner}
 	}
 	return &Installer{
-		Layout:   h.layout,
-		OS:       h.os,
-		Runner:   h.runner,
-		Euid:     func() int { return 0 },
-		Out:      &h.out,
-		Hostname: "panel.example.test",
+		Layout:     h.layout,
+		OS:         h.os,
+		Runner:     h.runner,
+		Euid:       func() int { return 0 },
+		Out:        &h.out,
+		Hostname:   "panel.example.test",
+		Executable: func() (string, error) { return h.executable(), nil },
 	}
 }
 
@@ -239,6 +241,7 @@ func TestInstallStepOrder(t *testing.T) {
 		"database",
 		"admin-password",
 		"panel-cert",
+		"binary",
 		"unit-file",
 		"enable-service",
 		"start-service",
@@ -702,4 +705,51 @@ func adminHash(t *testing.T, dbPath string) string {
 		t.Fatalf("read password_hash: %v", err)
 	}
 	return hash
+}
+
+// executable returns a stand-in for the running binary, created once per host.
+func (h *host) executable() string {
+	h.t.Helper()
+	if h.exe == "" {
+		h.exe = filepath.Join(h.t.TempDir(), "panel-src")
+		if err := os.WriteFile(h.exe, []byte("#!panel-binary-v1"), 0o755); err != nil {
+			h.t.Fatalf("write stand-in binary: %v", err)
+		}
+	}
+	return h.exe
+}
+
+// TestInstallPutsTheBinaryWherePanelServiceRuns is the regression for the host
+// finding on the first real VM: install wrote a unit that exec'd
+// /www/panel/bin/panel but never created it, so the service crash-looped with
+// 203/EXEC. A re-install must not replace a binary that is already there.
+func TestInstallPutsTheBinaryWherePanelServiceRuns(t *testing.T) {
+	h := newHost(t)
+	if _, err := h.install(); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	live := h.layout.BinaryPath()
+	got, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatalf("installed binary missing at %s: %v", live, err)
+	}
+	if string(got) != "#!panel-binary-v1" {
+		t.Errorf("installed binary content = %q", got)
+	}
+	if _, err := os.Stat(live + upgradeSuffix); err == nil {
+		t.Errorf("staged copy %s left behind", live+upgradeSuffix)
+	}
+
+	// An installed binary, even a different one, is upgrade's to replace.
+	if err := os.WriteFile(live, []byte("newer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.install(); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	got, _ = os.ReadFile(live)
+	if string(got) != "newer" {
+		t.Errorf("re-install replaced the installed binary: %q", got)
+	}
 }
