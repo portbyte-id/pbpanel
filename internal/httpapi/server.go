@@ -42,6 +42,13 @@ func (s *server) routes() http.Handler {
 	// Public: login is the only endpoint reachable without a session. Every
 	// other route is wrapped in requireAuth.
 	mux.Handle("POST /api/login", http.HandlerFunc(s.handleLogin))
+
+	// The health probe answers without a session. `panel upgrade` uses it to
+	// decide whether a new binary came up, and the smoke script uses it to wait
+	// for a restart. It reads nothing, so it cannot leak state and cannot fail
+	// because the database is busy.
+	mux.Handle("GET /api/health", http.HandlerFunc(s.handleHealth))
+
 	mux.Handle("POST /api/logout", s.requireAuth(http.HandlerFunc(s.handleLogout)))
 
 	mux.Handle("GET /api/me", s.requireAuth(http.HandlerFunc(s.handleMe)))
