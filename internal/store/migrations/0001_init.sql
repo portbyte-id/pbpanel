@@ -1,0 +1,3 @@
+-- Baseline migration. The schema_migrations ledger is created by the migrator
+-- before any file runs, so this file only needs to exist to give the ledger a
+-- first version; the settings registry adds the first real table in 0002.
