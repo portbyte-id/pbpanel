@@ -14,6 +14,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
+	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
@@ -82,11 +83,17 @@ func newHarness(t *testing.T) *harness {
 		audit.WithMirrorPath(filepath.Join(t.TempDir(), "audit.log")),
 		audit.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	)}
+	jobsMgr, err := jobs.New(st)
+	if err != nil {
+		t.Fatalf("jobs.New: %v", err)
+	}
+
 	deps := Deps{
 		Store:    st,
 		Settings: reg,
 		Auth:     authSvc,
 		Audit:    rec,
+		Jobs:     jobsMgr,
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 

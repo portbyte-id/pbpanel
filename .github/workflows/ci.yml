@@ -38,6 +38,9 @@ jobs:
         working-directory: web
       - run: npx tsc --noEmit
         working-directory: web
+      - name: Unit tests
+        run: npm test
+        working-directory: web
 
   static:
     name: Static linux binary
