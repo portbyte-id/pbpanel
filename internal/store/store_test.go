@@ -32,6 +32,18 @@ func schemaVersion(t *testing.T, s *Store) int {
 	return v
 }
 
+// embeddedCount is how many migration files this binary carries. Tests compare
+// against it rather than a literal so adding a migration does not need an edit
+// here; a stale expectation would hide a migration that failed to apply.
+func embeddedCount(t *testing.T) int {
+	t.Helper()
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+	return len(known)
+}
+
 func tableExists(t *testing.T, s *Store, name string) bool {
 	t.Helper()
 	var n int
@@ -48,8 +60,8 @@ func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	if !tableExists(t, s, "schema_migrations") {
 		t.Fatal("schema_migrations was not created")
 	}
-	if got := schemaVersion(t, s); got != 1 {
-		t.Fatalf("schema version = %d, want 1", got)
+	if got := schemaVersion(t, s); got != embeddedCount(t) {
+		t.Fatalf("schema version = %d, want %d", got, embeddedCount(t))
 	}
 }
 
@@ -90,16 +102,16 @@ func TestMigrateRerunIsNoOp(t *testing.T) {
 	}
 	defer func() { _ = second.Close() }()
 
-	if got := schemaVersion(t, second); got != 1 {
-		t.Fatalf("schema version after re-open = %d, want 1", got)
+	if got := schemaVersion(t, second); got != embeddedCount(t) {
+		t.Fatalf("schema version after re-open = %d, want %d", got, embeddedCount(t))
 	}
 
 	var rows int
 	if err := second.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if rows != embeddedCount(t) {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, embeddedCount(t))
 	}
 }
 
@@ -324,8 +336,8 @@ func TestConcurrentMigrateAppliesOnce(t *testing.T) {
 	if err := s.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if rows != embeddedCount(t) {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, embeddedCount(t))
 	}
 }
 
