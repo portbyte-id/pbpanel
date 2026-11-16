@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -83,9 +84,9 @@ func (f *fakeRunner) apply() {
 	for _, c := range f.calls {
 		joined := strings.Join(append([]string{c.name}, c.args...), " ")
 		switch {
-		case strings.HasPrefix(joined, "useradd "):
+		case strings.HasPrefix(joined, "osdep EnsureUser"):
 			f.state.userExists = true
-		case joined == "systemctl enable --now docker":
+		case joined == "osdep EnsureDocker":
 			f.state.dockerUp = true
 		case joined == "systemctl enable panel.service":
 			f.state.enabled = true
@@ -128,12 +129,13 @@ func (f *fakeRunner) reset() { f.calls = nil }
 
 // fakeOS is osdep.OS over the fake runner.
 //
-// It emits the argv osdep's Ubuntu implementation emits — the same argument
-// vectors its own tests pin in internal/osdep — because the real implementation
-// reads /etc/os-release and /etc/passwd, and an install test must not depend on
-// the machine it runs on. What this test proves is install's sequence and its
-// skip-if-done decisions; the exact argv of EnsureUser and EnsureDocker is
-// proven in osdep.
+// It records a neutral marker per call instead of the argv the real Ubuntu
+// implementation would emit. Two reasons: the distro vocabulary belongs to
+// internal/osdep and the convention lint rejects it anywhere else
+// (development plan §1.4), and the real argv of EnsureUser and EnsureDocker is
+// already pinned by osdep's own tests. What these tests prove is install's
+// sequence and its skip-if-done decisions, so the marker is the whole contract
+// here.
 type fakeOS struct {
 	runner      *fakeRunner
 	detectCalls int
@@ -158,49 +160,20 @@ func (o *fakeOS) EnsureUser(ctx context.Context, name string, uid, gid int) erro
 	if o.userErr != nil {
 		return o.userErr
 	}
-	if err := o.runner.Run(ctx, "groupadd", "--gid", itoa(gid), name); err != nil {
-		return err
-	}
-	return o.runner.Run(ctx, "useradd",
-		"--uid", itoa(uid), "--gid", itoa(gid),
-		"--no-create-home", "--home-dir", "/www", "--shell", "/usr/sbin/nologin", name)
+	return o.runner.Run(ctx, "osdep", "EnsureUser", name, itoa(uid), itoa(gid))
 }
 
 func (o *fakeOS) EnsureDocker(ctx context.Context) error {
 	if o.dockerErr != nil {
 		return o.dockerErr
 	}
-	for _, c := range [][]string{
-		{"apt-get", "update"},
-		{"apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "curl", "gnupg"},
-		{"install", "-m", "0755", "-d", "/etc/apt/keyrings"},
-		{"curl", "--fail", "--silent", "--show-error", "--location", "--output", "/etc/apt/keyrings/docker.asc", "https://download.docker.com/linux/ubuntu/gpg"},
-		{"chmod", "a+r", "/etc/apt/keyrings/docker.asc"},
-		{"apt-get", "update"},
-		{"apt-get", "install", "-y", "--no-install-recommends", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"},
-		{"systemctl", "enable", "--now", "docker"},
-	} {
-		if err := o.runner.Run(ctx, c[0], c[1:]...); err != nil {
-			return err
-		}
-	}
-	return nil
+	return o.runner.Run(ctx, "osdep", "EnsureDocker")
 }
 
 func (o *fakeOS) MaskFirewallServices(context.Context) error { return nil }
 func (o *fakeOS) SELinux() osdep.SELinuxStatus               { return osdep.SELinuxStatus{} }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
-}
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // host is one install run's world: a temporary root, a fake host, and the
 // installer wired to both.
@@ -296,20 +269,14 @@ func TestFirstInstallEmitsExpectedArgv(t *testing.T) {
 	}
 
 	want := []string{
-		// www-user: probe, then create.
+		// www-user: probe, then create. The account creation itself goes through
+		// osdep, so the marker is what install's own sequence shows here; the
+		// argv osdep emits is pinned in internal/osdep.
 		"getent passwd www",
-		"groupadd --gid 1500 www",
-		"useradd --uid 1500 --gid 1500 --no-create-home --home-dir /www --shell /usr/sbin/nologin www",
-		// docker: probe, then install from Docker's own repository.
+		"osdep EnsureUser www 1500 1500",
+		// docker: probe, then install.
 		"systemctl is-active --quiet docker",
-		"apt-get update",
-		"apt-get install -y --no-install-recommends ca-certificates curl gnupg",
-		"install -m 0755 -d /etc/apt/keyrings",
-		"curl --fail --silent --show-error --location --output /etc/apt/keyrings/docker.asc https://download.docker.com/linux/ubuntu/gpg",
-		"chmod a+r /etc/apt/keyrings/docker.asc",
-		"apt-get update",
-		"apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-		"systemctl enable --now docker",
+		"osdep EnsureDocker",
 		// unit-file, enable-service, start-service. The is-active probe is
 		// deliberately absent: this run rewrote the unit, so it restarts rather
 		// than asking whether the old process is up.
@@ -469,7 +436,7 @@ func TestDockerIsSkippedWhenRunning(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	for _, c := range h.runner.names() {
-		if strings.Contains(c, "docker-ce") || strings.HasPrefix(c, "curl ") {
+		if c == "osdep EnsureDocker" {
 			t.Fatalf("installed Docker on a host already running it:\n  %s",
 				strings.Join(h.runner.names(), "\n  "))
 		}
@@ -485,7 +452,7 @@ func TestExistingUserIsNotRecreated(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	for _, c := range h.runner.names() {
-		if strings.HasPrefix(c, "useradd ") || strings.HasPrefix(c, "groupadd ") {
+		if strings.HasPrefix(c, "osdep EnsureUser") {
 			t.Fatalf("recreated an existing user:\n  %s", strings.Join(h.runner.names(), "\n  "))
 		}
 	}
