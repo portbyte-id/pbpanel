@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -508,6 +509,61 @@ func TestGroupsReturnsACopy(t *testing.T) {
 
 	if got := r.Groups()[0].Keys[0].Allowed[0]; got != "a" {
 		t.Fatalf("Allowed[0] = %q after mutating a returned copy, want a", got)
+	}
+}
+
+// Catalog is the store-free path `panel set -h` uses, so it must describe the
+// same keys the registry does rather than a second, drifting list.
+func TestCatalogMatchesRegistryGroups(t *testing.T) {
+	r, _ := newTestRegistry(t)
+
+	catalog, err := Catalog()
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+	groups := r.Groups()
+
+	if len(catalog) != len(groups) {
+		t.Fatalf("Catalog has %d groups, want %d", len(catalog), len(groups))
+	}
+	for i := range groups {
+		if catalog[i].Name != groups[i].Name {
+			t.Fatalf("group %d = %q, want %q", i, catalog[i].Name, groups[i].Name)
+		}
+		if len(catalog[i].Keys) != len(groups[i].Keys) {
+			t.Fatalf("group %s has %d keys, want %d", catalog[i].Name, len(catalog[i].Keys), len(groups[i].Keys))
+		}
+		for j := range groups[i].Keys {
+			if !reflect.DeepEqual(catalog[i].Keys[j], groups[i].Keys[j]) {
+				t.Fatalf("key %s = %+v, want %+v", groups[i].Keys[j].Name, catalog[i].Keys[j], groups[i].Keys[j])
+			}
+		}
+	}
+}
+
+// Catalog must carry the restart flag through, since that flag is what decides
+// whether the CLI tells the operator to restart the panel.
+func TestCatalogCarriesRestartRequired(t *testing.T) {
+	catalog, err := Catalog()
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, g := range catalog {
+		for _, k := range g.Keys {
+			got[k.Name] = k.RestartRequired
+		}
+	}
+	for _, name := range []string{"panel.port", "panel.bind"} {
+		if !got[name] {
+			t.Errorf("%s is not marked restart-required", name)
+		}
+	}
+	for _, name := range []string{"login.max_attempts", "login.lockout", "session.idle_timeout"} {
+		if got[name] {
+			t.Errorf("%s is marked restart-required, want live", name)
+		}
 	}
 }
 

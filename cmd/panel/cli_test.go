@@ -245,7 +245,7 @@ func TestVersionPrintsVersion(t *testing.T) {
 // waiting for, so a caller never mistakes a stub for a working command.
 func TestStubsReportNotImplemented(t *testing.T) {
 	cmds := commandSet(io.Discard)
-	for _, name := range []string{"install", "upgrade", "info", "reset-password", "set", "firewall restore", "firewall disable"} {
+	for _, name := range []string{"install", "upgrade", "firewall restore", "firewall disable"} {
 		c, _ := lookup(strings.Fields(name), cmds)
 		if c == nil {
 			t.Fatalf("command %q not found", name)
@@ -257,6 +257,33 @@ func TestStubsReportNotImplemented(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "not implemented yet") {
 			t.Errorf("command %q: error = %q, want it to say %q", name, err, "not implemented yet")
+		}
+	}
+}
+
+// TestRecoveryCommandsAreNotStubs pins that step 0.12 landed: the three recovery
+// commands must reach the database, not the not-implemented path.
+func TestRecoveryCommandsAreNotStubs(t *testing.T) {
+	cmds := commandSet(io.Discard)
+	t.Setenv(dataDirEnv, t.TempDir())
+
+	for _, name := range []string{"info", "reset-password", "set"} {
+		c, _ := lookup(strings.Fields(name), cmds)
+		if c == nil {
+			t.Fatalf("command %q not found", name)
+		}
+		args := []string{"panel.port", "8443"}
+		if name != "set" {
+			args = nil
+		}
+		// The data directory is empty, so the command must fail for the missing
+		// database: that failure is what proves it tried to open one.
+		err := c.run(context.Background(), args)
+		if err == nil {
+			t.Fatalf("command %q succeeded against an empty data directory", name)
+		}
+		if strings.Contains(err.Error(), "not implemented") {
+			t.Fatalf("command %q is still a stub: %v", name, err)
 		}
 	}
 }

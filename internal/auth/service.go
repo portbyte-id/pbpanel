@@ -211,3 +211,14 @@ func (s *Service) HasAdmin(ctx context.Context) (bool, error) {
 	}
 	return username != "", nil
 }
+
+// Username returns the admin account's username, or "" before install has
+// created one. `panel reset-password` keeps the existing username and needs the
+// name to print it.
+func (s *Service) Username(ctx context.Context) (string, error) {
+	username, _, err := s.admin(ctx)
+	if err != nil {
+		return "", err
+	}
+	return username, nil
+}
