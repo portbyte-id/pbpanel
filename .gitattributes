@@ -1,0 +1,14 @@
+# Linux is the target: keep LF in the repository and in the working tree,
+# regardless of the developer's core.autocrlf setting.
+* text=auto eol=lf
+
+# Shell scripts are executed by /bin/sh; CRLF would break the shebang.
+*.sh text eol=lf
+Makefile text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
