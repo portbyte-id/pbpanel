@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -42,14 +44,47 @@ func tableExists(t *testing.T, s *Store, name string) bool {
 	return n == 1
 }
 
+// embedded returns how many migrations ship in the binary and the latest
+// version. The tests derive their expectations from this instead of a literal,
+// so adding a migration does not require editing them.
+func embedded(t *testing.T) (count, latest int) {
+	t.Helper()
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	return len(known), known[len(known)-1].version
+}
+
+// The tests above derive their expectations from loadMigrations, so a parser
+// that silently returned nothing would agree with itself. This pins the count
+// to the files actually embedded, independently of the parser.
+func TestEmbeddedMigrationFilesAreParsed(t *testing.T) {
+	entries, err := fs.ReadDir(embeddedMigrations(), ".")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var sqlFiles int
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			sqlFiles++
+		}
+	}
+	count, _ := embedded(t)
+	if count != sqlFiles {
+		t.Fatalf("parsed %d migrations but %d .sql files are embedded", count, sqlFiles)
+	}
+}
+
 func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	s := openTemp(t)
 
 	if !tableExists(t, s, "schema_migrations") {
 		t.Fatal("schema_migrations was not created")
 	}
-	if got := schemaVersion(t, s); got != 1 {
-		t.Fatalf("schema version = %d, want 1", got)
+	_, latest := embedded(t)
+	if got := schemaVersion(t, s); got != latest {
+		t.Fatalf("schema version = %d, want %d", got, latest)
 	}
 }
 
@@ -90,16 +125,18 @@ func TestMigrateRerunIsNoOp(t *testing.T) {
 	}
 	defer func() { _ = second.Close() }()
 
-	if got := schemaVersion(t, second); got != 1 {
-		t.Fatalf("schema version after re-open = %d, want 1", got)
+	_, latest := embedded(t)
+	if got := schemaVersion(t, second); got != latest {
+		t.Fatalf("schema version after re-open = %d, want %d", got, latest)
 	}
 
+	want, _ := embedded(t)
 	var rows int
 	if err := second.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if rows != want {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, want)
 	}
 }
 
@@ -320,12 +357,13 @@ func TestConcurrentMigrateAppliesOnce(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
+	want, _ := embedded(t)
 	var rows int
 	if err := s.DB().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&rows); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1: a migration was applied twice", rows)
+	if rows != want {
+		t.Fatalf("schema_migrations has %d rows, want %d: a migration was applied twice", rows, want)
 	}
 }
 
