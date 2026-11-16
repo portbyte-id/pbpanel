@@ -29,7 +29,11 @@ type command struct {
 	minArgs int
 	maxArgs int // -1 means unbounded
 	noRoot  bool
-	run     func(ctx context.Context, args []string) error
+	// help returns extra text printed after the usage line for `<command> -h`.
+	// It is called on demand, so a command whose help depends on the settings
+	// registry builds it only when help is asked for.
+	help func() string
+	run  func(ctx context.Context, args []string) error
 }
 
 // usageError is a bad invocation: no command, an unknown command, or the wrong
@@ -126,6 +130,9 @@ func runWith(ctx context.Context, argv []string, cmds []*command, stdout, stderr
 
 	if sel.help {
 		printf(stdout, "%s", sel.usageText(cmds))
+		if sel.cmd != nil && sel.cmd.help != nil {
+			printf(stdout, "\n%s", sel.cmd.help())
+		}
 		return exitOK
 	}
 
