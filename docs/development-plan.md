@@ -345,6 +345,89 @@ one pool per site, with php.ini and pool settings editable through form and raw 
 | 2.8 | API + UI | `GET /api/php`, `POST /api/php/{ver}/pull`, `GET/PUT /api/php/{ver}/settings`, `GET/PUT /api/php/{ver}/ini`, `GET/PUT /api/sites/{domain}/pool`, `PUT /api/sites/{domain}/php-version`. PHP page per version (form, raw ini, history); site detail gains a PHP tab. | Route tests; vitest for forms. |
 | 2.9 | Smoke | `scripts/smoke/2-php.sh`. | — |
 
+### Status (2026-11-17)
+
+All nine steps are built, and the exit gate passed twice: as a Go integration test against a real
+Docker Engine (`TestRealPHPEndToEnd`, WSL Ubuntu 26.04, Docker 29.9, `php:8.3-fpm` and
+`php:8.4-fpm`), and as `scripts/smoke/2-php.sh` against the Ubuntu 26.04 sandbox VM, 68 checks green on 2026-11-17, including the daemon restart with the PHP container removed by hand and the reboot. The first run of the smoke also covered the two pulls and passed 73 of 74 checks; the one failure was an assertion in the script itself (`docker top` without a PID column), fixed before the second run. Smoke 1 was re-run after the M2 build and passed its 64 checks.
+As with M1, the definition of done in §1.3 has open items, listed under "Open after M2".
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 2.1 | done | `php.Manager` catalogue over `php_versions` (migration `0008_php.sql`); the supported list is the `php.versions` setting. Tests: state transitions, a failed pull or build leaves `failed` with the output, a second pull is refused while one runs, `Reconcile` fails an interrupted pull and marks a version whose image is gone `absent`. |
+| 2.2 | done | `php.Spec`, `php.Service`. Spec asserted field by field in `TestSpec`; no rendered file has a TCP listener (`TestNoTCPListener`); on a real Engine nothing listens on 9000 and the pool socket is `www:www 0660`. |
+| 2.3 | done | `php.Manager.SetSettings`/`ReadIni`/`WriteIni`. A php.ini with a syntax error and one loading a missing extension are both rejected and rolled back on a real Engine. |
+| 2.4 | done | `php.PoolName`, `php.RenderPool`, `sites.Manager.SetPool`. Name mapping table test; `a-b.test` and `a.b.test` collide and the second is refused with `409`. |
+| 2.5 | done | `nginx.KindPHP`, `php.conf` include, create form. Golden files `site-php.conf`, `php.conf`, `pool-*.conf`, `php-fpm.conf`, `zz-panel.ini`. |
+| 2.6 | done | `sites.Manager.SwitchPHP`: one apply, services in the order new FPM, nginx, old FPM. A rejected apply leaves the database, the pool file and `php.conf` on the old version (`TestFailedSwitchKeepsTheOldVersion`). |
+| 2.7 | done | A starting `php.Service` brings the container up with the version's first site; nothing stops one. `sites.Manager.ReconcilePHP` runs after the nginx reconcile at boot. A container removed by hand comes back on a daemon restart, on a real Engine and in the smoke. |
+| 2.8 | done | `internal/httpapi/handlers_php.go`, every route in the 401/CSRF matrix; PHP page, site PHP tab, create dialog. Vitest `PHPForms.test.tsx`. |
+| 2.9 | done | `scripts/smoke/2-php.sh`. |
+
+**Decision 2.2 — the panel starts FPM on its own `php-fpm.conf`.** The step's text has the image's
+`php-fpm.d` left in place and the panel's pool directory added with an `include`. The image's
+`php-fpm.conf` cannot be given an extra `include` without mounting a file over it, which the mount
+rule (risk 8) forbids, and its `php-fpm.d` holds `www.conf` and `zz-docker.conf`, which open TCP
+9000. So FPM is started with `-y /www/panel/php/<ver>/php-fpm.conf`: the image's `php-fpm.d` is
+not hidden and not read, no file is mounted over anything the image owns, and no TCP listener can
+exist. php.ini is passed with `-c`, and `PHP_INI_SCAN_DIR=:/www/panel/php/<ver>/conf.d` appends the
+panel's directory to the image's own, so the extensions the image enables still load and
+`zz-panel.ini` is read last.
+
+**Deviations and additions.**
+
+- 2.1: the catalogue lists the versions of the setting plus any version that has a row, so a
+  version removed from the setting keeps working for its sites and only loses its Pull button.
+  The digest recorded is the official image's `RepoDigests` entry; what runs is a derived
+  `panel/php:<ver>-fpm` (official image + `www` at uid 1500), the same approach as decision 1.1.
+- 2.2: `php-fpm.conf` defines one pool itself, `panel_idle`, on a `0600` Unix socket with
+  `pm = ondemand`. FPM refuses to start, and exits on reload, with no pool at all, so without it a
+  version could not survive the removal of its last site, which step 2.7 requires.
+- 2.2: the master runs as root, as the image intends, and every pool sets `user`/`group` to `www`.
+  "User `www`" in the step is the pools' user.
+- 2.2/2.3: the validator is two commands, `php-fpm -t` and a PHP start-up
+  (`php -c … -r ''`). Both exit 0 on a broken ini: `php-fpm -t` prints `PHP:  syntax error` and
+  only the start-up prints `Unable to load dynamic library`. Their output is matched for those
+  messages. An unknown directive name is not an error to PHP and is not caught.
+- 2.3: php.ini is copied from the image by reading `php.ini-production` in a one-shot container
+  and writing it through confedit with the first change that touches the version, so the copy is
+  validated and is version 1 of the file's history. Before that, `GET …/ini` shows the image's file.
+- 2.3: the form's settings live in `php_settings`, not the settings registry, for the reason
+  nginx's do (M1, item 4).
+- 2.4: a pool name longer than 48 characters is cut and given 8 hex digits of the domain's hash,
+  to keep the socket path inside the 108 bytes a Unix address allows. Pool settings are stored in
+  `php_pools`; the site's PHP error log is `/www/panel/logs/sites/<domain>.php.log`, created for
+  `www` with the site.
+- 2.5: `php.conf` holds both `location` blocks, so the version switch rewrites one include and
+  the site file is never touched. `location /` falls back to `/index.php?$query_string`.
+  A PHP site's web root gets the same `index.html` placeholder as a static site unless the
+  phpinfo box is ticked.
+- 2.6: a fourth file can be part of the switch: the new version's `php-fpm.conf`, `zz-panel.ini`
+  and `php.ini` when the version has never had a site.
+- 2.7: the nginx container gained a mount, `/www/panel/run`, so its spec hash changed: the first
+  boot of this build recreates the nginx container.
+- 2.8: three routes beyond the list answer through existing ones: the php.ini history is
+  `/api/config-history/php%2F<ver>%2Fphp.ini`, restored through that version's service.
+  `PUT …/settings` and `…/ini` on a version that is not pulled are `409`.
+- 2.8: the Playwright journeys were not extended to PHP: the e2e stand-in has no PHP manager, so
+  the PHP page shows its 503 there. Real PHP is covered by the integration test and the smoke.
+
+**Open after M2.** Against §1.3:
+
+- Item 2 as for M1: the smoke ran on the sandbox VM as it was, with a binary cross-compiled from
+  the working tree and installed with `panel upgrade`, not on a reverted snapshot with the CI
+  release binary.
+- Item 3: smoke 1 was re-run after the M2 build and passed; smoke 0 was not.
+- Item 1: still no `eslint` script.
+
+Also: nothing in M2 has run on EL9. After a reboot Docker did not restart the panel's containers
+by itself on the sandbox VM; the boot reconcile starts nginx and every PHP version that has a
+site, so a version with no site stays stopped until a site uses it again, which is when its
+service starts it. The PHP integration test needs `-tags integration`, Docker and
+port 80, and does not run in CI. A site create or version switch runs up to five one-shot
+containers for validation and can take several seconds. Removing a version's image is M8's;
+until then a pulled version stays.
+
 ### Exit gate (smoke 2)
 
 Create a PHP site on version A → `phpinfo()` served through nginx → change `memory_limit` in the
