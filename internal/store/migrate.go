@@ -44,11 +44,8 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		return err
 	}
 
-	latest := known[len(known)-1].version
-	for version := range applied {
-		if version > latest {
-			return fmt.Errorf("store: database is at schema version %d but this binary knows only up to %d: upgrade the panel", version, latest)
-		}
+	if err := rejectNewerSchema(applied, known); err != nil {
+		return err
 	}
 
 	for _, m := range known {
@@ -62,7 +59,110 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	return nil
 }
 
-func createLedger(ctx context.Context, db *sql.DB) error {
+// querier is the read/write surface both *sql.DB and *sql.Tx provide. The
+// ledger helpers take it so CheckMigrations can run the same code inside one
+// transaction that is rolled back.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Pending reports the migration versions this binary would apply to the
+// database at path. It reads the ledger and changes nothing, so `panel install`
+// can decide whether the database needs opening for migration and `panel
+// upgrade` can report what an upgrade would do.
+func Pending(path string) ([]int, error) {
+	db, err := openDB(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	applied, err := appliedVersions(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectNewerSchema(applied, known); err != nil {
+		return nil, err
+	}
+
+	var out []int
+	for _, m := range known {
+		if !applied[m.version] {
+			out = append(out, m.version)
+		}
+	}
+	return out, nil
+}
+
+// CheckMigrations reports whether this binary can migrate the database at path,
+// without leaving a single change behind: every pending migration runs inside one
+// transaction that is rolled back.
+//
+// This is what `panel upgrade` runs before it swaps the binary. A migration that
+// fails here would fail after the rename, with the old binary already replaced;
+// finding out first is the difference between a refused upgrade and a broken
+// panel.
+func CheckMigrations(path string) error {
+	db, err := openDB(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: migration check: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := createLedger(ctx, tx); err != nil {
+		return fmt.Errorf("store: migration check: %w", err)
+	}
+	applied, err := appliedVersions(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("store: migration check: %w", err)
+	}
+	known, err := loadMigrations(embeddedMigrations())
+	if err != nil {
+		return fmt.Errorf("store: migration check: %w", err)
+	}
+	if err := rejectNewerSchema(applied, known); err != nil {
+		return fmt.Errorf("store: migration check: %w", err)
+	}
+
+	for _, m := range known {
+		if applied[m.version] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, m.body); err != nil {
+			return fmt.Errorf("store: migration check: %s: %w", m.name, err)
+		}
+	}
+	return nil
+}
+
+// rejectNewerSchema refuses a database written by a newer binary. Applying an
+// older set of migrations to it would leave the schema in a state neither binary
+// describes.
+func rejectNewerSchema(applied map[int]bool, known []migration) error {
+	latest := known[len(known)-1].version
+	for version := range applied {
+		if version > latest {
+			return fmt.Errorf("database is at schema version %d but this binary knows only up to %d: upgrade the panel", version, latest)
+		}
+	}
+	return nil
+}
+
+func createLedger(ctx context.Context, db querier) error {
 	const q = `CREATE TABLE IF NOT EXISTS schema_migrations (
 	version    INTEGER PRIMARY KEY,
 	applied_at TEXT NOT NULL
@@ -73,7 +173,7 @@ func createLedger(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func appliedVersions(ctx context.Context, db *sql.DB) (map[int]bool, error) {
+func appliedVersions(ctx context.Context, db querier) (map[int]bool, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
