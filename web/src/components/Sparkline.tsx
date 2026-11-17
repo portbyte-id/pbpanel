@@ -9,8 +9,11 @@ export function Sparkline({
   values,
   label,
   ceiling,
+  area = false,
   className,
 }: {
+  /** Fill under the line, for the larger detail chart. */
+  area?: boolean
   values: number[]
   /** What a screen reader hears, e.g. "CPU over the last hour, now 12%". */
   label: string
@@ -31,6 +34,13 @@ export function Sparkline({
       preserveAspectRatio="none"
       className={className}
     >
+      {area && (
+        <polygon
+          points={`0,${height} ${sparkPoints(values, width, height, ceiling)} ${width},${height}`}
+          fill="currentColor"
+          fillOpacity="0.12"
+        />
+      )}
       <polyline
         points={sparkPoints(values, width, height, ceiling)}
         fill="none"

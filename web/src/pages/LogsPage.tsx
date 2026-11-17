@@ -485,8 +485,8 @@ export function SearchPanel({ source }: { source: LogSource }) {
               <caption className="sr-only">Search matches</caption>
               <thead className="bg-muted text-muted-foreground text-left text-xs">
                 <tr>
-                  <th className="px-3 py-2 font-medium">File and line</th>
-                  <th className="px-3 py-2 font-medium">Text</th>
+                  <th className="px-3 py-1.5 font-medium">File and line</th>
+                  <th className="px-3 py-1.5 font-medium">Text</th>
                 </tr>
               </thead>
               <tbody className="divide-border divide-y">

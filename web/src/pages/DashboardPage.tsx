@@ -1,12 +1,20 @@
 import { Link } from "@tanstack/react-router"
-import { CircleAlert, TriangleAlert } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { ArrowRight, CircleAlert, CircleCheck, TriangleAlert } from "lucide-react"
+import { useMemo, useState, type ReactNode } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { Panel } from "@/components/Panel"
 import { Sparkline } from "@/components/Sparkline"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { deriveAlerts, type AlertLink, type DashboardAlert } from "@/lib/alerts"
 import { ApiError } from "@/lib/api"
 import {
@@ -30,18 +38,90 @@ import {
   type Snapshot,
   type SysinfoStreamStatus,
 } from "@/lib/sysinfo"
+import { cn } from "@/lib/utils"
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.detail || fallback : fallback
 }
 
-/** Health at a glance: what needs attention, the machine's numbers, and the services. */
+/** Warning from 75%, a problem from 90%: the point where an operator should look. */
+function levelText(percent: number): string {
+  if (percent >= 90) return "text-destructive"
+  if (percent >= 75) return "text-warning"
+  return ""
+}
+
+type LiveSysinfo = ReturnType<typeof useSysinfoLive>
+
+/** Health at a glance: one status line, the machine's numbers, the services, what needs attention. */
 export function DashboardPage() {
+  // One stream for the whole page: the status line and the tiles read the same samples.
+  const live = useSysinfoLive()
+  const health = useDashboardAlerts()
+
   return (
-    <div className="flex max-w-6xl flex-col gap-8">
-      <AlertsSection />
-      <MetricsSection />
-      <ServicesSection />
+    <div className="flex flex-col gap-3">
+      <HealthBar alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} live={live} />
+      <MetricsSection live={live} />
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <ServicesSection limit={8} />
+        <div className="flex flex-col gap-3">
+          <AlertsPanel alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} />
+          {live.latest && <DisksPanel disks={live.latest.disks} />}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* --- Health bar --------------------------------------------------------- */
+
+function streamNote(status: SysinfoStreamStatus, seconds: number): string {
+  if (status === "live") return "Live."
+  if (status === "polling") return `Live stream unavailable. Refreshing every ${seconds} seconds.`
+  return "Connecting…"
+}
+
+function HealthBar({
+  alerts,
+  unchecked,
+  checking,
+  live,
+}: {
+  alerts: DashboardAlert[]
+  /** Sources that could not be read: "normal" must not be claimed over them. */
+  unchecked: string[]
+  checking: boolean
+  live: LiveSysinfo
+}) {
+  const errors = alerts.filter((a) => a.severity === "error").length
+  const warnings = alerts.length - errors
+
+  let dot = "bg-success"
+  let text = "All systems normal"
+  if (errors > 0) {
+    dot = "bg-destructive"
+    text = `${errors} ${errors === 1 ? "problem" : "problems"}${warnings > 0 ? `, ${warnings} ${warnings === 1 ? "warning" : "warnings"}` : ""}`
+  } else if (warnings > 0) {
+    dot = "bg-warning"
+    text = `${warnings} ${warnings === 1 ? "warning" : "warnings"}`
+  } else if (unchecked.length > 0) {
+    dot = "bg-warning"
+    text = `${unchecked.length} ${unchecked.length === 1 ? "check" : "checks"} could not run`
+  } else if (checking) {
+    dot = "bg-muted-foreground/50"
+    text = "Checking…"
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+      <p role="status" className="flex items-center gap-2 text-[0.8125rem] font-medium">
+        <span className={cn("size-2 rounded-full", dot)} aria-hidden="true" />
+        {text}
+      </p>
+      <p className="text-muted-foreground text-xs" aria-live="polite">
+        {streamNote(live.status, live.intervalSeconds)}
+      </p>
     </div>
   )
 }
@@ -49,7 +129,7 @@ export function DashboardPage() {
 /* --- Alerts ------------------------------------------------------------- */
 
 function AlertLinkView({ link }: { link: AlertLink }) {
-  const cls = "text-sm font-medium underline underline-offset-2"
+  const cls = "text-primary shrink-0 text-xs font-medium underline-offset-2 hover:underline"
   switch (link.kind) {
     case "tls":
       return (
@@ -95,13 +175,15 @@ export function AlertsPanel({
   checking: boolean
 }) {
   return (
-    <section aria-labelledby="dash-alerts" className="flex flex-col gap-3">
-      <h2 id="dash-alerts" className="text-base font-semibold">
-        Needs attention
-      </h2>
-
+    <Panel
+      title="Needs attention"
+      note={alerts.length > 0 ? `${alerts.length}` : undefined}
+    >
       {alerts.length === 0 ? (
-        <p className="text-muted-foreground text-sm" role="status">
+        <p className="text-muted-foreground flex items-center gap-2 px-3 py-3 text-[0.8125rem]" role="status">
+          {!checking && unchecked.length === 0 && (
+            <CircleCheck className="text-success size-4 shrink-0" aria-hidden="true" />
+          )}
           {checking
             ? "Checking certificates, sites, firewall and cron…"
             : unchecked.length > 0
@@ -109,25 +191,24 @@ export function AlertsPanel({
               : "Nothing needs attention."}
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="divide-border divide-y">
           {alerts.map((a) => (
             <li
               key={a.id}
               data-severity={a.severity}
-              className={
-                a.severity === "error"
-                  ? "border-destructive/40 bg-destructive/5 flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3"
-                  : "flex flex-wrap items-start justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/5 p-3"
-              }
+              className={cn(
+                "flex items-start justify-between gap-3 px-3 py-2",
+                a.severity === "error" && "bg-destructive/5",
+              )}
             >
-              <div className="flex min-w-0 gap-3">
+              <div className="flex min-w-0 gap-2">
                 {a.severity === "error" ? (
                   <CircleAlert className="text-destructive mt-0.5 size-4 shrink-0" aria-hidden="true" />
                 ) : (
-                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400" aria-hidden="true" />
+                  <TriangleAlert className="text-warning mt-0.5 size-4 shrink-0" aria-hidden="true" />
                 )}
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <p className="text-sm font-medium">
+                <div className="flex min-w-0 flex-col">
+                  <p className="text-[0.8125rem] font-medium">
                     <span className="sr-only">{a.severity === "error" ? "Problem: " : "Warning: "}</span>
                     {a.title}
                   </p>
@@ -142,19 +223,20 @@ export function AlertsPanel({
       )}
 
       {unchecked.length > 0 && (
-        <p role="alert" className="text-destructive text-xs">
+        <p role="alert" className="text-destructive border-border border-t px-3 py-2 text-xs">
           Could not read: {unchecked.join(", ")}. Alerts from these are missing.
         </p>
       )}
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground border-border border-t px-3 py-2 text-[0.6875rem] leading-4">
         Failed background jobs are not listed here: the panel has no job list to read. Failed cron
         runs and failed actions in the audit log are.
       </p>
-    </section>
+    </Panel>
   )
 }
 
-function AlertsSection() {
+/** The alert sources, read once so the status line and the list agree. */
+function useDashboardAlerts() {
   const certs = useTLSCerts()
   const firewall = useFirewall()
   const sites = useSiteDetails()
@@ -181,35 +263,113 @@ function AlertsSection() {
   const checking =
     certs.isPending || firewall.isPending || sites.sites.isPending || cron.isPending || audit.isPending
 
-  return <AlertsPanel alerts={alerts} unchecked={unchecked} checking={checking} />
+  return { alerts, unchecked, checking }
 }
 
 /* --- Metrics ------------------------------------------------------------ */
 
+interface Series {
+  values: number[]
+  format: (n: number) => string
+  /** Fixed top of the scale (100 for a percentage). */
+  ceiling?: number
+}
+
 function Tile({
   label,
   value,
+  valueClass,
   note,
-  children,
+  noteTitle,
+  series,
+  sparkLabel,
 }: {
   label: string
   value: ReactNode
+  valueClass?: string
   note?: ReactNode
-  children?: ReactNode
+  noteTitle?: string
+  /** When present the tile opens a detail dialog with a larger chart. */
+  series?: Series
+  sparkLabel?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const detail = series && series.values.length >= 2 ? series : undefined
+
   return (
-    <section aria-label={label} className="border-border flex flex-col gap-1 rounded-lg border p-4">
+    <section aria-label={label} className="bg-card relative flex min-w-0 flex-col gap-0.5 p-3">
       <h3 className="text-muted-foreground text-xs font-medium">{label}</h3>
-      <p className="text-2xl font-semibold tabular-nums" data-testid={`tile-${label}`}>
+      <p
+        className={cn("text-xl leading-6 font-semibold tabular-nums", valueClass)}
+        data-testid={`tile-${label}`}
+      >
         {value}
       </p>
-      {note && <p className="text-muted-foreground text-xs">{note}</p>}
-      {children}
+      {note && (
+        <p className="text-muted-foreground truncate text-xs" title={noteTitle}>
+          {note}
+        </p>
+      )}
+      {series && sparkLabel && (
+        <Sparkline
+          className="text-primary mt-1.5 h-6 w-full"
+          values={series.values}
+          ceiling={series.ceiling}
+          label={sparkLabel}
+        />
+      )}
+
+      {detail && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label={`${label} details`}
+            className="hover:bg-accent/40 focus-visible:ring-ring/50 absolute inset-0 rounded-[inherit] outline-none focus-visible:ring-2"
+          />
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogContent className="sm:max-w-xl">
+              <DialogHeader>
+                <DialogTitle>{label}</DialogTitle>
+                <DialogDescription>The last {detail.values.length} samples, oldest on the left.</DialogDescription>
+              </DialogHeader>
+              <Sparkline
+                area
+                className="text-primary bg-muted/40 h-44 w-full rounded-md"
+                values={detail.values}
+                ceiling={detail.ceiling}
+                label={`${label} detail chart`}
+              />
+              <SeriesStats series={detail} />
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
     </section>
   )
 }
 
-const sparkClass = "text-primary mt-1 h-8 w-full"
+function SeriesStats({ series }: { series: Series }) {
+  const { values, format } = series
+  const now = values[values.length - 1]
+  const avg = values.reduce((a, b) => a + b, 0) / values.length
+  const stats: [string, number][] = [
+    ["Now", now],
+    ["Average", avg],
+    ["Peak", Math.max(...values)],
+    ["Low", Math.min(...values)],
+  ]
+  return (
+    <dl className="grid grid-cols-4 gap-2">
+      {stats.map(([name, v]) => (
+        <div key={name} className="bg-muted/50 rounded-md px-2 py-1.5 text-center">
+          <dt className="text-muted-foreground text-xs">{name}</dt>
+          <dd className="text-[0.8125rem] font-semibold tabular-nums">{format(v)}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
 
 /** Interfaces that carry traffic. Loopback is left out of the sum and the list. */
 function externalNics(s: Snapshot) {
@@ -217,13 +377,59 @@ function externalNics(s: Snapshot) {
   return real.length > 0 ? real : s.net
 }
 
-/** The tiles and disks for a series of snapshots. `latest` null means no sample yet. */
+/** The disk rows. Free space is what runs out, so the bar is use and the text is what is left. */
+export function DisksPanel({ disks }: { disks: Snapshot["disks"] }) {
+  return (
+    <Panel title="Disks" note={disks.length > 0 ? `${disks.length}` : undefined}>
+      {disks.length === 0 ? (
+        <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">No mounted disks were reported.</p>
+      ) : (
+        <ul className="divide-border divide-y">
+          {disks.map((d) => (
+            <li key={d.mount} className="flex flex-col gap-1.5 px-3 py-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-xs break-all">{d.mount}</span>
+                <span className={cn("text-[0.8125rem] font-medium tabular-nums", levelText(d.used_percent))}>
+                  {formatPercent(d.used_percent)}
+                </span>
+              </div>
+              <div
+                role="meter"
+                aria-label={`Disk use of ${d.mount}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(d.used_percent)}
+                aria-valuetext={`${formatPercent(d.used_percent)} used`}
+                className="bg-muted h-1.5 overflow-hidden rounded-full"
+              >
+                <div
+                  className={cn(
+                    "h-full",
+                    d.used_percent >= 90 ? "bg-destructive" : d.used_percent >= 75 ? "bg-warning" : "bg-primary",
+                  )}
+                  style={{ width: `${Math.min(Math.max(d.used_percent, 0), 100)}%` }}
+                />
+              </div>
+              <p className="text-muted-foreground text-xs">
+                {formatBytes(d.free_bytes)} free of {formatBytes(d.total_bytes)} · {d.fstype} on {d.device}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  )
+}
+
+/** The metric strip for a series of snapshots. `latest` null means no sample yet. */
 export function MetricTiles({
   latest,
   history,
+  showDisks = true,
 }: {
   latest: Snapshot | null
   history: Snapshot[]
+  showDisks?: boolean
 }) {
   if (latest === null) {
     return (
@@ -241,58 +447,51 @@ export function MetricTiles({
   const nics = externalNics(latest)
   const rx = nics.reduce((sum, n) => sum + n.rx_bytes_per_sec, 0)
   const tx = nics.reduce((sum, n) => sum + n.tx_bytes_per_sec, 0)
-  const netSeries = history.map((s) =>
-    externalNics(s).reduce((sum, n) => sum + n.rx_bytes_per_sec + n.tx_bytes_per_sec, 0),
-  )
+  const n = history.length
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="flex flex-col gap-3">
+      <div className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border sm:grid-cols-3 xl:grid-cols-6">
         <Tile
           label="CPU"
           value={measuring ? "Measuring…" : formatPercent(latest.cpu_percent)}
+          valueClass={measuring ? undefined : levelText(latest.cpu_percent)}
           note={`${cores} ${cores === 1 ? "core" : "cores"}`}
-        >
-          <Sparkline
-            className={sparkClass}
-            values={history.map((s) => s.cpu_percent)}
-            ceiling={100}
-            label={`CPU use over the last ${history.length} samples`}
-          />
-        </Tile>
+          series={{ values: history.map((s) => s.cpu_percent), format: formatPercent, ceiling: 100 }}
+          sparkLabel={`CPU use over the last ${n} samples`}
+        />
 
         <Tile
           label="Load"
           value={latest.load.one.toFixed(2)}
-          note={`5 min ${latest.load.five.toFixed(2)} · 15 min ${latest.load.fifteen.toFixed(2)} · ${latest.load.running} of ${latest.load.total} running`}
-        >
-          <Sparkline
-            className={sparkClass}
-            values={history.map((s) => s.load.one)}
-            label={`One-minute load over the last ${history.length} samples`}
-          />
-        </Tile>
+          note={`5m ${latest.load.five.toFixed(2)} · 15m ${latest.load.fifteen.toFixed(2)}`}
+          noteTitle={`${latest.load.running} of ${latest.load.total} running`}
+          series={{ values: history.map((s) => s.load.one), format: (v) => v.toFixed(2) }}
+          sparkLabel={`One-minute load over the last ${n} samples`}
+        />
 
         <Tile
           label="Memory"
           value={formatPercent(memPct)}
-          note={`${formatBytes(mem.used_bytes)} of ${formatBytes(mem.total_bytes)} used, ${formatBytes(mem.available_bytes)} available`}
-        >
-          <Sparkline
-            className={sparkClass}
-            values={history.map((s) => ratioPercent(s.memory.used_bytes, s.memory.total_bytes))}
-            ceiling={100}
-            label={`Memory use over the last ${history.length} samples`}
-          />
-        </Tile>
+          valueClass={levelText(memPct)}
+          note={`${formatBytes(mem.used_bytes)} of ${formatBytes(mem.total_bytes)}`}
+          noteTitle={`${formatBytes(mem.available_bytes)} available`}
+          series={{
+            values: history.map((s) => ratioPercent(s.memory.used_bytes, s.memory.total_bytes)),
+            format: formatPercent,
+            ceiling: 100,
+          }}
+          sparkLabel={`Memory use over the last ${n} samples`}
+        />
 
         <Tile
           label="Swap"
           value={mem.swap_total_bytes === 0 ? "No swap" : formatPercent(swapPct)}
+          valueClass={mem.swap_total_bytes === 0 ? "text-muted-foreground" : levelText(swapPct)}
           note={
             mem.swap_total_bytes === 0
-              ? "This server has no swap configured."
-              : `${formatBytes(mem.swap_used_bytes)} of ${formatBytes(mem.swap_total_bytes)} used`
+              ? "None configured"
+              : `${formatBytes(mem.swap_used_bytes)} of ${formatBytes(mem.swap_total_bytes)}`
           }
         />
 
@@ -303,90 +502,41 @@ export function MetricTiles({
             measuring ? undefined : (
               <>
                 ↑ {formatRate(tx)}
-                {nics.length > 0 && <> · {nics.map((n) => n.iface).join(", ")}</>}
+                {nics.length > 0 && <> · {nics.map((nic) => nic.iface).join(", ")}</>}
               </>
             )
           }
-        >
-          <Sparkline
-            className={sparkClass}
-            values={netSeries}
-            label={`Network traffic over the last ${history.length} samples`}
-          />
-        </Tile>
+          series={{
+            values: history.map((s) =>
+              externalNics(s).reduce((sum, nic) => sum + nic.rx_bytes_per_sec + nic.tx_bytes_per_sec, 0),
+            ),
+            format: formatRate,
+          }}
+          sparkLabel={`Network traffic over the last ${n} samples`}
+        />
 
         <Tile label="Uptime" value={formatUptime(latest.uptime_seconds)} note="Since the last boot" />
       </div>
 
-      <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-semibold">Disks</h3>
-        {latest.disks.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No mounted disks were reported.</p>
-        ) : (
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {latest.disks.map((d) => (
-              <li key={d.mount} className="border-border flex flex-col gap-1.5 rounded-lg border p-3">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-sm break-all">{d.mount}</span>
-                  <span className="text-sm font-medium tabular-nums">{formatPercent(d.used_percent)}</span>
-                </div>
-                <div
-                  role="meter"
-                  aria-label={`Disk use of ${d.mount}`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(d.used_percent)}
-                  aria-valuetext={`${formatPercent(d.used_percent)} used`}
-                  className="bg-muted h-2 overflow-hidden rounded-full"
-                >
-                  <div
-                    className={d.used_percent >= 90 ? "bg-destructive h-full" : "bg-primary h-full"}
-                    style={{ width: `${Math.min(Math.max(d.used_percent, 0), 100)}%` }}
-                  />
-                </div>
-                <p className="text-muted-foreground text-xs">
-                  {formatBytes(d.used_bytes)} of {formatBytes(d.total_bytes)} · {formatBytes(d.free_bytes)} free ·{" "}
-                  {d.fstype} on {d.device}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {showDisks && <DisksPanel disks={latest.disks} />}
     </div>
   )
 }
 
-function streamNote(status: SysinfoStreamStatus, seconds: number): string {
-  if (status === "live") return "Live."
-  if (status === "polling") return `Live stream unavailable. Refreshing every ${seconds} seconds.`
-  return "Connecting…"
-}
+function MetricsSection({ live }: { live: LiveSysinfo }) {
+  const { latest, history, isPending, error } = live
 
-function MetricsSection() {
-  const { latest, history, status, intervalSeconds, isPending, error } = useSysinfoLive()
-
-  return (
-    <section aria-labelledby="dash-metrics" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="dash-metrics" className="text-base font-semibold">
-          This server
-        </h2>
-        <p className="text-muted-foreground text-xs" aria-live="polite">
-          {streamNote(status, intervalSeconds)}
-        </p>
-      </div>
-      {isPending ? (
-        <p className="text-muted-foreground text-sm">Loading metrics…</p>
-      ) : error && latest === null ? (
-        <p role="alert" className="text-destructive text-sm">
-          {errorText(error, "The metrics could not be loaded.")}
-        </p>
-      ) : (
-        <MetricTiles latest={latest} history={history} />
-      )}
-    </section>
-  )
+  if (isPending) {
+    return <p className="text-muted-foreground text-sm">Loading metrics…</p>
+  }
+  if (error && latest === null) {
+    return (
+      <p role="alert" className="text-destructive text-sm">
+        {errorText(error, "The metrics could not be loaded.")}
+      </p>
+    )
+  }
+  return <MetricTiles latest={latest} history={history} showDisks={false} />
 }
 
 /* --- Services ----------------------------------------------------------- */
@@ -399,10 +549,16 @@ const KIND_LABEL: Record<ServiceRow["kind"], string> = {
   app: "App",
 }
 
-function stateVariant(state: ServiceRow["state"]) {
-  if (state === "failed") return "destructive" as const
-  if (state === "running") return "secondary" as const
-  return "outline" as const
+function stateDot(state: ServiceRow["state"]): string {
+  if (state === "failed") return "bg-destructive"
+  if (state === "running") return "bg-success"
+  return "bg-muted-foreground/50"
+}
+
+/** Failed first, then anything not running, then running; by name within each. */
+function bySeverity(a: ServiceRow, b: ServiceRow): number {
+  const rank = (s: ServiceRow["state"]) => (s === "failed" ? 0 : s === "running" ? 2 : 1)
+  return rank(a.state) - rank(b.state) || a.name.localeCompare(b.name)
 }
 
 function confirmCopy(row: ServiceRow, action: ServiceAction): ReactNode {
@@ -434,7 +590,7 @@ export function serviceErrorText(error: unknown, fallback: string): string | nul
   return fallback
 }
 
-/** The service cards, without the queries behind them. */
+/** The service rows, without the queries behind them. */
 export function ServiceGrid({
   services,
   busyName,
@@ -446,10 +602,10 @@ export function ServiceGrid({
   onAct: (row: ServiceRow, action: ServiceAction) => void
 }) {
   if (services.length === 0) {
-    return <p className="text-muted-foreground text-sm">No services are reported.</p>
+    return <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">No services are reported.</p>
   }
   return (
-    <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+    <ul className="divide-border divide-y">
       {services.map((row) => {
         const actions = ACTION_ORDER.filter((a) => row.actions.includes(a))
         return (
@@ -457,32 +613,37 @@ export function ServiceGrid({
             key={row.name}
             data-testid="service-card"
             data-service={row.name}
-            className="border-border flex flex-col gap-2 rounded-lg border p-3"
+            className="hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5 md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_5.5rem_11rem]"
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-sm font-medium break-all">{row.name}</p>
-                <p className="text-muted-foreground text-xs">{KIND_LABEL[row.kind] ?? row.kind}</p>
-              </div>
-              <Badge variant={stateVariant(row.state)}>{row.state}</Badge>
+            <div className="min-w-0">
+              <p className="text-[0.8125rem] leading-5 font-medium break-all">{row.name}</p>
+              <p className="text-muted-foreground text-xs leading-4">{KIND_LABEL[row.kind] ?? row.kind}</p>
             </div>
-            {row.detail && <p className="text-muted-foreground text-xs break-words">{row.detail}</p>}
-            {actions.length > 0 && (
-              <div className="mt-auto flex flex-wrap gap-1.5">
-                {actions.map((a) => (
-                  <Button
-                    key={a}
-                    size="sm"
-                    variant="outline"
-                    disabled={busyName === row.name}
-                    aria-label={`${ACTION_LABEL[a]} ${row.name}`}
-                    onClick={() => onAct(row, a)}
-                  >
-                    {ACTION_LABEL[a]}
-                  </Button>
-                ))}
-              </div>
-            )}
+            <p
+              className="text-muted-foreground order-last col-span-2 min-w-0 truncate text-xs md:order-none md:col-span-1"
+              title={row.detail || undefined}
+            >
+              {row.detail}
+            </p>
+            <span className="flex items-center gap-1.5 justify-self-end text-xs md:justify-self-start">
+              <span className={cn("size-1.5 rounded-full", stateDot(row.state))} aria-hidden="true" />
+              {row.state}
+            </span>
+            <div className="col-start-2 row-start-1 flex justify-end gap-1 md:col-start-4">
+              {actions.map((a) => (
+                <Button
+                  key={a}
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2"
+                  disabled={busyName === row.name}
+                  aria-label={`${ACTION_LABEL[a]} ${row.name}`}
+                  onClick={() => onAct(row, a)}
+                >
+                  {ACTION_LABEL[a]}
+                </Button>
+              ))}
+            </div>
           </li>
         )
       })}
@@ -490,10 +651,30 @@ export function ServiceGrid({
   )
 }
 
-function ServicesSection() {
+type ServiceFilter = "all" | "problems" | "running"
+
+/**
+ * The services panel and its confirm dialog. On the dashboard `limit` shows the
+ * most urgent few with a link to the full page; the page passes `filters`.
+ */
+export function ServicesSection({ limit, filters = false }: { limit?: number; filters?: boolean }) {
   const services = useServices()
   const control = useControlService()
   const [confirming, setConfirming] = useState<{ row: ServiceRow; action: ServiceAction } | null>(null)
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<ServiceFilter>("all")
+
+  const all = useMemo(() => [...(services.data ?? [])].sort(bySeverity), [services.data])
+  const running = all.filter((s) => s.state === "running").length
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    let rows = all
+    if (filter === "problems") rows = rows.filter((s) => s.state !== "running")
+    if (filter === "running") rows = rows.filter((s) => s.state === "running")
+    if (q !== "") rows = rows.filter((s) => `${s.name} ${s.detail ?? ""}`.toLowerCase().includes(q))
+    return limit ? rows.slice(0, limit) : rows
+  }, [all, query, filter, limit])
 
   const run = (row: ServiceRow, action: ServiceAction, after?: () => void) =>
     control.mutate({ name: row.name, action }, { onSuccess: after })
@@ -505,28 +686,71 @@ function ServicesSection() {
     else setConfirming({ row, action })
   }
 
+  const filterButtons: { id: ServiceFilter; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "problems", label: "Not running" },
+    { id: "running", label: "Running" },
+  ]
+
   return (
-    <section aria-labelledby="dash-services" className="flex flex-col gap-3">
-      <h2 id="dash-services" className="text-base font-semibold">
-        Services
-      </h2>
+    <Panel
+      title="Services"
+      note={services.data ? `${running} of ${all.length} running` : undefined}
+      action={
+        limit && all.length > limit ? (
+          <Link to="/services" className="text-primary flex items-center gap-1 text-xs font-medium hover:underline">
+            View all {all.length}
+            <ArrowRight className="size-3" aria-hidden="true" />
+          </Link>
+        ) : undefined
+      }
+    >
+      {filters && (
+        <div className="border-border flex flex-wrap items-center gap-2 border-b px-3 py-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by name or detail"
+            aria-label="Filter services"
+            className="h-7 max-w-64"
+          />
+          <div role="group" aria-label="State" className="bg-muted flex gap-0.5 rounded-md p-0.5">
+            {filterButtons.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                aria-pressed={filter === f.id}
+                onClick={() => setFilter(f.id)}
+                className={cn(
+                  "h-6 rounded px-2 text-xs font-medium",
+                  filter === f.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {services.isPending ? (
-        <p className="text-muted-foreground text-sm">Loading services…</p>
+        <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">Loading services…</p>
       ) : services.error ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive px-3 py-3 text-[0.8125rem]">
           {errorText(services.error, "The services could not be loaded.")}
         </p>
       ) : (
         <ServiceGrid
-          services={services.data}
+          services={visible}
           busyName={control.isPending ? (control.variables?.name ?? null) : null}
           onAct={act}
         />
       )}
 
       {confirming === null && control.error && (
-        <ApplyError error={control.error} fallback="The action failed." />
+        <div className="px-3 pb-3">
+          <ApplyError error={control.error} fallback="The action failed." />
+        </div>
       )}
 
       <ConfirmDialog
@@ -547,6 +771,6 @@ function ServicesSection() {
       >
         {confirming && confirmCopy(confirming.row, confirming.action)}
       </ConfirmDialog>
-    </section>
+    </Panel>
   )
 }

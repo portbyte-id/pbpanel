@@ -85,13 +85,13 @@ export function AppsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Kind</th>
-                <th className="px-3 py-2 font-medium">State</th>
-                <th className="px-3 py-2 font-medium">PID</th>
-                <th className="px-3 py-2 font-medium">Up for</th>
-                <th className="px-3 py-2 font-medium">Port</th>
-                <th className="px-3 py-2 font-medium">
+                <th className="px-3 py-1.5 font-medium">Name</th>
+                <th className="px-3 py-1.5 font-medium">Kind</th>
+                <th className="px-3 py-1.5 font-medium">State</th>
+                <th className="px-3 py-1.5 font-medium">PID</th>
+                <th className="px-3 py-1.5 font-medium">Up for</th>
+                <th className="px-3 py-1.5 font-medium">Port</th>
+                <th className="px-3 py-1.5 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
@@ -99,20 +99,20 @@ export function AppsPage() {
             <tbody className="divide-border divide-y">
               {data.map((app) => (
                 <tr key={app.name}>
-                  <td className="px-3 py-2 font-medium">{app.name}</td>
-                  <td className="text-muted-foreground px-3 py-2">{typeLabel(app)}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5 font-medium">{app.name}</td>
+                  <td className="text-muted-foreground px-3 py-1.5">{typeLabel(app)}</td>
+                  <td className="px-3 py-1.5">
                     <Badge variant={isRunning(app) ? "secondary" : "destructive"}>{app.state}</Badge>
                     {app.spawn_error !== "" && (
                       <p className="text-destructive mt-1 max-w-xs text-xs">{app.spawn_error}</p>
                     )}
                   </td>
-                  <td className="px-3 py-2 tabular-nums">{app.pid > 0 ? app.pid : "–"}</td>
-                  <td className="px-3 py-2 tabular-nums">
+                  <td className="px-3 py-1.5 tabular-nums">{app.pid > 0 ? app.pid : "–"}</td>
+                  <td className="px-3 py-1.5 tabular-nums">
                     {isRunning(app) && app.uptime_seconds > 0 ? formatUptime(app.uptime_seconds) : "–"}
                   </td>
-                  <td className="px-3 py-2 tabular-nums">{app.port ?? "–"}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5 tabular-nums">{app.port ?? "–"}</td>
+                  <td className="px-3 py-1.5">
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {isRunning(app) ? (
                         <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "stop")}>

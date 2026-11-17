@@ -1,5 +1,9 @@
 import { Outlet, useRouterState } from "@tanstack/react-router"
+import { Search } from "lucide-react"
+import { useEffect, useState } from "react"
 
+import { CommandPalette } from "@/components/layout/CommandPalette"
+import { navItemFor } from "@/components/layout/nav"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { UserMenu } from "@/components/layout/UserMenu"
 import { useMe } from "@/lib/queries"
@@ -13,37 +17,49 @@ import { useMe } from "@/lib/queries"
 export function AppLayout() {
   const { data: me } = useMe()
   const path = useRouterState({ select: (state) => state.location.pathname })
-  const current = pageTitle(path)
+  const current = navItemFor(path)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+
+  // Ctrl/Cmd+K opens the page switcher from anywhere, including inside a form.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        setPaletteOpen((open) => !open)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   return (
-    <div className="flex min-h-svh bg-background">
+    <div className="bg-background flex min-h-svh">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-border flex h-14 shrink-0 items-center justify-between border-b px-6">
-          <h1 className="text-base font-semibold">{current}</h1>
-          <UserMenu username={me?.username ?? "admin"} />
+        <header className="border-border bg-background/90 sticky top-0 z-30 flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4 backdrop-blur">
+          <div className="flex min-w-0 items-baseline gap-3">
+            <h1 className="shrink-0 text-[0.9375rem] font-semibold tracking-tight">{current?.label ?? "Server Panel"}</h1>
+            {current && <p className="text-muted-foreground hidden truncate text-xs md:block">{current.description}</p>}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Go to page"
+              className="border-input bg-card text-muted-foreground hover:text-foreground flex h-7 items-center gap-2 rounded-md border pr-1.5 pl-2 text-xs"
+            >
+              <Search className="size-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Go to…</span>
+              <kbd className="bg-muted text-muted-foreground rounded px-1 font-sans text-[0.625rem] leading-4">Ctrl K</kbd>
+            </button>
+            <UserMenu username={me?.username ?? "admin"} />
+          </div>
         </header>
-        <main className="flex-1 px-6 py-6">
+        <main className="flex-1 px-4 py-4">
           <Outlet />
         </main>
       </div>
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   )
-}
-
-function pageTitle(path: string): string {
-  if (path.startsWith("/dashboard")) return "Dashboard"
-  if (path.startsWith("/sites")) return "Sites"
-  if (path.startsWith("/files")) return "Files"
-  if (path.startsWith("/nginx")) return "Nginx"
-  if (path.startsWith("/php")) return "PHP"
-  if (path.startsWith("/tls")) return "TLS"
-  if (path.startsWith("/firewall")) return "Firewall"
-  if (path.startsWith("/apps")) return "Apps"
-  if (path.startsWith("/logs")) return "Logs"
-  if (path.startsWith("/cron")) return "Cron"
-  if (path.startsWith("/runtimes")) return "Runtimes"
-  if (path.startsWith("/settings")) return "Settings"
-  if (path.startsWith("/audit")) return "Audit log"
-  return "Server Panel"
 }

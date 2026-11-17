@@ -75,7 +75,7 @@ export function SettingsPage() {
       : null
 
   return (
-    <div className="flex max-w-3xl flex-col gap-6">
+    <div className="flex max-w-3xl flex-col gap-4">
       {(data?.groups ?? []).map((group) => (
         <Card key={group.name}>
           <CardHeader>

@@ -323,25 +323,25 @@ function RulesSection({ fw }: { fw: FirewallState }) {
           <caption className="sr-only">Firewall allow rules</caption>
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-2 font-medium">Port</th>
-              <th className="px-3 py-2 font-medium">Protocol</th>
-              <th className="px-3 py-2 font-medium">From</th>
-              <th className="px-3 py-2 font-medium">Comment</th>
-              <th className="px-3 py-2 font-medium">State</th>
-              <th className="px-3 py-2 text-right font-medium">Actions</th>
+              <th className="px-3 py-1.5 font-medium">Port</th>
+              <th className="px-3 py-1.5 font-medium">Protocol</th>
+              <th className="px-3 py-1.5 font-medium">From</th>
+              <th className="px-3 py-1.5 font-medium">Comment</th>
+              <th className="px-3 py-1.5 font-medium">State</th>
+              <th className="px-3 py-1.5 text-right font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
             {fw.builtins.map((b) => (
               <tr key={b.label} data-testid="builtin-row" className="bg-muted/20">
-                <td className="px-3 py-2 font-medium">{b.label}</td>
-                <td className="text-muted-foreground px-3 py-2" colSpan={3}>
+                <td className="px-3 py-1.5 font-medium">{b.label}</td>
+                <td className="text-muted-foreground px-3 py-1.5" colSpan={3}>
                   {b.detail}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-1.5">
                   <Badge variant="secondary">Built in</Badge>
                 </td>
-                <td className="px-3 py-2" />
+                <td className="px-3 py-1.5" />
               </tr>
             ))}
             {rules.isPending && (
@@ -360,16 +360,16 @@ function RulesSection({ fw }: { fw: FirewallState }) {
             )}
             {list.map((rule) => (
               <tr key={rule.id}>
-                <td className="px-3 py-2 font-mono text-xs">{portLabel(rule)}</td>
-                <td className="px-3 py-2">{protocolLabel(rule.protocol)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{rule.source || "Anywhere"}</td>
-                <td className="text-muted-foreground px-3 py-2">{rule.comment || "—"}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-1.5 font-mono text-xs">{portLabel(rule)}</td>
+                <td className="px-3 py-1.5">{protocolLabel(rule.protocol)}</td>
+                <td className="px-3 py-1.5 font-mono text-xs">{rule.source || "Anywhere"}</td>
+                <td className="text-muted-foreground px-3 py-1.5">{rule.comment || "—"}</td>
+                <td className="px-3 py-1.5">
                   <Badge variant={rule.enabled ? "default" : "secondary"}>
                     {rule.enabled ? "Enabled" : "Off"}
                   </Badge>
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-1.5">
                   <div className="flex justify-end gap-1">
                     <Button
                       variant="ghost"
@@ -509,17 +509,17 @@ function BlocklistSection() {
             <caption className="sr-only">Blocked addresses</caption>
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-2 font-medium">Address</th>
-                <th className="px-3 py-2 font-medium">Comment</th>
-                <th className="px-3 py-2 text-right font-medium">Actions</th>
+                <th className="px-3 py-1.5 font-medium">Address</th>
+                <th className="px-3 py-1.5 font-medium">Comment</th>
+                <th className="px-3 py-1.5 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
               {entries.map((entry) => (
                 <tr key={entry.id}>
-                  <td className="px-3 py-2 font-mono text-xs">{entry.addr}</td>
-                  <td className="text-muted-foreground px-3 py-2">{entry.comment || "—"}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
+                  <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
+                  <td className="px-3 py-1.5">
                     <div className="flex justify-end">
                       <Button
                         variant="ghost"
