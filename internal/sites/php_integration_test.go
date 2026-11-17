@@ -15,6 +15,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -95,16 +96,21 @@ func TestRealPHPEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := nginx.NewService(eng, paths)
+	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := nginx.NewService(eng, paths, imgs.ImageFunc())
 	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}, PHP: phpMgr})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := &Reconciler{
 		Sites: mgr, Global: nginx.NewGlobal(st, ed, live, paths), Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths), Live: live, Runtime: nginx.NewRuntime(eng, paths),
+		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
 		BuildImage: func(ctx context.Context) error {
-			return nginx.BuildImage(ctx, eng, func(l string) { t.Log(l) })
+			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
+			return err
 		},
 	}
 	if st := rec.Run(bg); !st.OK {
@@ -121,7 +127,7 @@ func TestRealPHPEndToEnd(t *testing.T) {
 		if err := phpMgr.StartPull(bg, ver); err != nil {
 			t.Fatal(err)
 		}
-		if err := phpMgr.Pull(bg, ver, nil); err != nil {
+		if err := phpMgr.Pull(bg, ver, nil, nil); err != nil {
 			t.Fatalf("pull %s: %v", ver, err)
 		}
 		v, _ := phpMgr.Get(bg, ver)

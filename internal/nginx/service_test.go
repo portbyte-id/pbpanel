@@ -76,7 +76,7 @@ func running() *docker.Container {
 
 func TestValidateExecsInTheRunningContainer(t *testing.T) {
 	eng := &fakeEngine{container: running(), exec: docker.ExecResult{Stderr: []byte("nginx: test is successful\n")}}
-	out, err := NewService(eng, testPaths).Validate(context.Background())
+	out, err := NewService(eng, testPaths, fixedNginxImage).Validate(context.Background())
 	if err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
@@ -95,7 +95,7 @@ func TestValidateRunsAOneShotWhenNginxIsDown(t *testing.T) {
 		"stopped":      {State: docker.ContainerState{Status: "exited"}},
 	} {
 		eng := &fakeEngine{container: c}
-		if _, err := NewService(eng, testPaths).Validate(context.Background()); err != nil {
+		if _, err := NewService(eng, testPaths, fixedNginxImage).Validate(context.Background()); err != nil {
 			t.Fatalf("%s: Validate = %v", name, err)
 		}
 		var ran string
@@ -117,7 +117,7 @@ func TestValidateRunsAOneShotWhenNginxIsDown(t *testing.T) {
 func TestValidateReturnsNginxOutputVerbatim(t *testing.T) {
 	msg := "nginx: [emerg] unknown directive \"bogus\" in /www/panel/nginx/sites/a.test.conf:3\n"
 	eng := &fakeEngine{container: running(), exec: docker.ExecResult{ExitCode: 1, Stderr: []byte(msg)}}
-	out, err := NewService(eng, testPaths).Validate(context.Background())
+	out, err := NewService(eng, testPaths, fixedNginxImage).Validate(context.Background())
 	if err == nil {
 		t.Fatal("a rejected config validated")
 	}
@@ -128,7 +128,7 @@ func TestValidateReturnsNginxOutputVerbatim(t *testing.T) {
 
 func TestValidateEngineFailureIsNotARejection(t *testing.T) {
 	eng := &fakeEngine{container: running(), execErr: errors.New("socket closed")}
-	out, err := NewService(eng, testPaths).Validate(context.Background())
+	out, err := NewService(eng, testPaths, fixedNginxImage).Validate(context.Background())
 	if err == nil || out != "" || !strings.Contains(err.Error(), "could not be run") {
 		t.Errorf("Validate = %q, %v; want an error saying nginx -t could not be run", out, err)
 	}
@@ -136,7 +136,7 @@ func TestValidateEngineFailureIsNotARejection(t *testing.T) {
 
 func TestReloadSignalsTheMasterAndRefusesWhenDown(t *testing.T) {
 	eng := &fakeEngine{container: running()}
-	if err := NewService(eng, testPaths).Reload(context.Background()); err != nil {
+	if err := NewService(eng, testPaths, fixedNginxImage).Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !contains(eng.calls, "kill panel-nginx HUP") {
@@ -144,7 +144,7 @@ func TestReloadSignalsTheMasterAndRefusesWhenDown(t *testing.T) {
 	}
 
 	down := &fakeEngine{container: &docker.Container{State: docker.ContainerState{Status: "exited"}}}
-	if err := NewService(down, testPaths).Reload(context.Background()); err == nil {
+	if err := NewService(down, testPaths, fixedNginxImage).Reload(context.Background()); err == nil {
 		t.Error("a reload of a stopped container reported success")
 	}
 	if len(down.calls) > 1 {
@@ -157,7 +157,7 @@ func TestHealthyDetectsARestartedMaster(t *testing.T) {
 	restarted := running()
 	restarted.State.StartedAt = time.Unix(200, 0)
 
-	svc := func(e *fakeEngine) *Service { s := NewService(e, testPaths); s.wait = 0; return s }
+	svc := func(e *fakeEngine) *Service { s := NewService(e, testPaths, fixedNginxImage); s.wait = 0; return s }
 
 	if err := svc(&fakeEngine{inspects: []docker.Container{*same, *same}}).Healthy(context.Background()); err != nil {
 		t.Errorf("a steady master was reported unhealthy: %v", err)
@@ -174,7 +174,7 @@ func TestHealthyDetectsARestartedMaster(t *testing.T) {
 
 func TestValidateOnlyNeverReloads(t *testing.T) {
 	eng := &fakeEngine{}
-	v := NewValidateOnly(eng, testPaths)
+	v := NewValidateOnly(eng, testPaths, fixedNginxImage)
 	if v.Name() != ServiceName {
 		t.Errorf("name = %q: it must share the live service's apply lock", v.Name())
 	}
@@ -224,7 +224,7 @@ func openStore(t *testing.T) *store.Store {
 
 func TestSetSettingsStoresAndApplies(t *testing.T) {
 	ap := &fakeApplier{}
-	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths), testPaths)
+	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths, fixedNginxImage), testPaths)
 
 	got, err := g.Settings(context.Background())
 	if err != nil || got != DefaultHTTPSettings() {
@@ -254,7 +254,7 @@ func TestSetSettingsStoresAndApplies(t *testing.T) {
 
 func TestRejectedSettingsLeaveNoTrace(t *testing.T) {
 	ap := &fakeApplier{err: &confedit.ApplyError{Stage: confedit.StageValidate, Service: "nginx", Output: "[emerg] boom", Err: errors.New("rejected")}}
-	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths), testPaths)
+	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths, fixedNginxImage), testPaths)
 
 	s := DefaultHTTPSettings()
 	s.SendTimeout = 5
@@ -271,7 +271,7 @@ func TestRejectedSettingsLeaveNoTrace(t *testing.T) {
 
 func TestInvalidSettingsNeverReachTheApplier(t *testing.T) {
 	ap := &fakeApplier{}
-	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths), testPaths)
+	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths, fixedNginxImage), testPaths)
 	s := DefaultHTTPSettings()
 	s.WorkerProcesses = "lots"
 	_, err := g.SetSettings(context.Background(), s)
@@ -286,7 +286,7 @@ func TestInvalidSettingsNeverReachTheApplier(t *testing.T) {
 
 func TestWriteConfAppliesTheRawFile(t *testing.T) {
 	ap := &fakeApplier{}
-	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths), testPaths)
+	g := NewGlobal(openStore(t), ap, NewValidateOnly(&fakeEngine{}, testPaths, fixedNginxImage), testPaths)
 	if _, err := g.WriteConf(context.Background(), []byte("events {}\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestWriteConfAppliesTheRawFile(t *testing.T) {
 }
 
 func TestConfLinksNamesWhatStoppedWorking(t *testing.T) {
-	g := NewGlobal(openStore(t), &fakeApplier{}, NewValidateOnly(&fakeEngine{}, testPaths), testPaths)
+	g := NewGlobal(openStore(t), &fakeApplier{}, NewValidateOnly(&fakeEngine{}, testPaths, fixedNginxImage), testPaths)
 	full, _ := testPaths.RenderMainConf()
 	if m := g.ConfLinks(full); len(m) != 0 {
 		t.Errorf("the generated nginx.conf reports %v missing", m)
@@ -313,7 +313,7 @@ func TestConfLinksNamesWhatStoppedWorking(t *testing.T) {
 // container may see the site certificates and the challenge webroot and
 // nothing above them.
 func TestSpecMountsCertificatesAndWebrootButNotTheSSLDir(t *testing.T) {
-	spec := Spec(testPaths)
+	spec := Spec(testPaths, "panel/nginx:1.29-test")
 	mounts := map[string]bool{}
 	for _, m := range spec.Mounts {
 		mounts[m.Path] = m.ReadOnly
@@ -334,7 +334,7 @@ func TestSpecMountsCertificatesAndWebrootButNotTheSSLDir(t *testing.T) {
 // A container created before the TLS mounts existed must be recreated, not
 // taken for current, or nginx would read certificates it cannot see.
 func TestSpecHashChangesWithTheTLSMounts(t *testing.T) {
-	spec := Spec(testPaths)
+	spec := Spec(testPaths, "panel/nginx:1.29-test")
 	old := spec
 	old.Mounts = nil
 	for _, m := range spec.Mounts {
@@ -354,3 +354,12 @@ func TestSpecHashChangesWithTheTLSMounts(t *testing.T) {
 		t.Errorf("Decide = %v, %v; want recreate", act, err)
 	}
 }
+
+// fixedNginxImage is the build a test service runs.
+var fixedNginxImage ImageFunc = func(context.Context) (string, error) { return "panel/nginx:1.29-test", nil }
+
+// ImageTag and ImageRemove complete the fake as an nginx Engine. They record
+// nothing: the build tests use the catalogue, not the fake, for state.
+func (f *fakeEngine) ImageTag(context.Context, string, string) error { return nil }
+
+func (f *fakeEngine) ImageRemove(context.Context, string) error { return nil }

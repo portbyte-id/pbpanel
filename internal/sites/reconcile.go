@@ -136,13 +136,13 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 	}
 	if !present {
 		if r.BuildImage == nil {
-			return step("image", "", fmt.Errorf("the nginx image %s is missing and nothing can build it", nginx.Image))
+			return step("image", "", fmt.Errorf("no nginx build serves and nothing can build one"))
 		}
-		if err := step("image", "building "+nginx.Image, r.BuildImage(ctx)); err != nil {
+		if err := step("image", "building the nginx image", r.BuildImage(ctx)); err != nil {
 			return err
 		}
 	} else {
-		_ = step("image", nginx.Image+" is present", nil)
+		_ = step("image", "the nginx image is present", nil)
 	}
 
 	// 3. Panel-owned files, from the database. Only files that are missing or

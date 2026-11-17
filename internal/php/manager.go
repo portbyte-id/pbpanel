@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -28,6 +31,8 @@ var (
 	ErrNotReady = errors.New("php: the version is not installed; pull it first")
 	// ErrBusy is a pull requested while one is running.
 	ErrBusy = errors.New("php: the version is already being pulled")
+	// ErrInUse is a removal refused because a site runs on the version.
+	ErrInUse = errors.New("php: a site uses this version; move the site to another version first")
 )
 
 // State is where a version's image is.
@@ -82,7 +87,8 @@ func sortVersions(vs []string) {
 // Version is one row of the catalogue.
 type Version struct {
 	Version string `json:"version"`
-	// Image is the official reference and Digest what it resolved to when pulled.
+	// Image is the official reference and Digest the image ID of the build
+	// served when the version was last pulled.
 	Image  string `json:"image"`
 	Digest string `json:"digest"`
 	State  State  `json:"state"`
@@ -92,6 +98,8 @@ type Version struct {
 	// Supported is false for a version that was pulled once and has since left
 	// the `php.versions` setting. It keeps working; it cannot be pulled again.
 	Supported bool `json:"supported"`
+	// Current is the build the version serves, nil when none does.
+	Current *images.Build `json:"current"`
 }
 
 // Applier is the part of confedit.Editor the manager uses.
@@ -110,10 +118,16 @@ type Options struct {
 	// Read defaults to os.ReadFile.
 	Read func(string) ([]byte, error)
 	Now  func() time.Time
+	// Scratch, when set, holds build contexts in place of Paths.BuildDir. Tests
+	// use it so no build writes under /www.
+	Scratch string
+	// Log defaults to slog.Default.
+	Log *slog.Logger
 }
 
-// Manager owns the version catalogue and each version's configuration: the
-// php.ini form, php.ini as raw text, and the files FPM starts on.
+// Manager owns the version catalogue, each version's configuration (the
+// php.ini form, php.ini as raw text, and the files FPM starts on), and the
+// builds of each version's image.
 type Manager struct {
 	st        *store.Store
 	eng       Engine
@@ -122,8 +136,15 @@ type Manager struct {
 	supported func(ctx context.Context) ([]string, error)
 	read      func(string) ([]byte, error)
 	now       func() time.Time
+	scratch   string
+	log       *slog.Logger
+	catalog   *images.Catalog
 
 	mu sync.Mutex
+
+	famMu   sync.Mutex
+	fams    map[string]*images.Family
+	digests map[string]string
 }
 
 // New returns a Manager.
@@ -131,7 +152,11 @@ func New(o Options) (*Manager, error) {
 	if o.Store == nil || o.Engine == nil || o.Applier == nil {
 		return nil, errors.New("php: store, engine and applier are required")
 	}
-	m := &Manager{st: o.Store, eng: o.Engine, ap: o.Applier, p: o.Paths, supported: o.Supported, read: o.Read, now: o.Now}
+	m := &Manager{
+		st: o.Store, eng: o.Engine, ap: o.Applier, p: o.Paths, supported: o.Supported,
+		read: o.Read, now: o.Now, scratch: o.Scratch, log: o.Log,
+		catalog: images.NewCatalog(o.Store), fams: map[string]*images.Family{}, digests: map[string]string{},
+	}
 	if m.supported == nil {
 		m.supported = func(context.Context) ([]string, error) { return ParseVersions(DefaultVersions) }
 	}
@@ -141,6 +166,9 @@ func New(o Options) (*Manager, error) {
 	if m.now == nil {
 		m.now = time.Now
 	}
+	if m.log == nil {
+		m.log = slog.Default()
+	}
 	return m, nil
 }
 
@@ -148,14 +176,192 @@ func New(o Options) (*Manager, error) {
 func (m *Manager) Paths() Paths { return m.p }
 
 // Service returns the confedit service of a version. See NewService for start.
+// The service runs whichever build is current when a container has to be made.
 func (m *Manager) Service(ver string, start bool) confedit.Service {
-	return NewService(m.eng, m.p, ver, start)
+	return NewService(m.eng, m.p, ver, start, m.imageFunc(ver))
+}
+
+func (m *Manager) imageFunc(ver string) ImageFunc {
+	return func(ctx context.Context) (string, error) { return m.CurrentTag(ctx, ver) }
+}
+
+// CurrentTag is the image reference a version runs. It is ErrNotReady when no
+// build serves.
+func (m *Manager) CurrentTag(ctx context.Context, ver string) (string, error) {
+	if err := CheckVersion(ver); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrUnknownVersion, ver)
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return "", err
+	}
+	tag, err := fam.CurrentTag(ctx)
+	if err != nil {
+		return "", err
+	}
+	if tag == "" {
+		return "", fmt.Errorf("%w: PHP %s has no build serving", ErrNotReady, ver)
+	}
+	return tag, nil
 }
 
 // ContainerState is a version's container as Docker reports it. The bool is
 // false when there is no such container.
 func (m *Manager) ContainerState(ctx context.Context, ver string) (docker.Container, bool, error) {
-	return NewService(m.eng, m.p, ver, false).State(ctx)
+	return NewService(m.eng, m.p, ver, false, m.imageFunc(ver)).State(ctx)
+}
+
+// family returns the build family of a version, made on first use. Its hooks
+// are the PHP ones; the build lifecycle itself is package images.
+func (m *Manager) family(ver string) (*images.Family, error) {
+	m.famMu.Lock()
+	defer m.famMu.Unlock()
+	if f, ok := m.fams[ver]; ok {
+		return f, nil
+	}
+	f, err := images.NewFamily(images.FamilyOptions{
+		Kind: images.KindPHP, Version: ver, Repo: Repo, Catalog: m.catalog, Engine: m.eng,
+		Log: m.log, Now: m.now,
+		Hooks: images.Hooks{
+			Build: func(ctx context.Context, b images.Build, progress docker.Progress) error {
+				return m.buildImage(ctx, ver, b, progress)
+			},
+			Check: func(ctx context.Context, b images.Build, serving bool) (string, error) {
+				return m.check(ctx, ver, b, serving)
+			},
+			Swap: func(ctx context.Context, from, to string) error { return m.swap(ctx, ver, from, to) },
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	m.fams[ver] = f
+	return f, nil
+}
+
+// buildDir is the build context of one build on the host.
+func (m *Manager) buildDir(ver, id string) string {
+	if m.scratch != "" {
+		return filepath.Join(m.scratch, ver, id)
+	}
+	return filepath.FromSlash(m.p.BuildDir(ver, id))
+}
+
+// buildImage is the build hook: the official image is pulled fresh, the
+// Dockerfile for the requested extensions is written to the build's context, and
+// the context is built under the build's tag.
+func (m *Manager) buildImage(ctx context.Context, ver string, b images.Build, progress docker.Progress) error {
+	base, err := m.eng.ImagePull(ctx, BaseImage(ver), progress)
+	if err != nil {
+		return err
+	}
+	m.setBaseDigest(ver, base)
+	exts, err := ParseExtensions(b.Extensions)
+	if err != nil {
+		return err
+	}
+	dir := m.buildDir(ver, b.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("php: build context: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), Dockerfile(ver, exts), 0o644); err != nil {
+		return fmt.Errorf("php: write Dockerfile: %w", err)
+	}
+	_, err = m.eng.ImageBuild(ctx, docker.BuildOptions{
+		Tag: b.Tag, ContextDir: dir, Labels: map[string]string{docker.LabelManaged: "true"},
+	}, progress)
+	return err
+}
+
+// setBaseDigest keeps what the official image resolved to on the last pull of
+// a version. It is the digest the catalogue shows; a pull records it.
+func (m *Manager) setBaseDigest(ver string, base docker.Image) {
+	d := base.ID
+	if len(base.RepoDigests) > 0 {
+		d = base.RepoDigests[0]
+	}
+	m.famMu.Lock()
+	defer m.famMu.Unlock()
+	m.digests[ver] = d
+}
+
+func (m *Manager) baseDigest(ver string) string {
+	m.famMu.Lock()
+	defer m.famMu.Unlock()
+	return m.digests[ver]
+}
+
+// check is the candidate test of a build, run in a one-shot container of the
+// new image: `php-fpm -t` with the version's own config, then `php -m`, which
+// must list every extension the build was asked for. Its output is returned with
+// the error so a failed build shows why.
+//
+// A first build has no config yet (the FPM file and php.ini are written by the
+// first apply, which then validates them with the image that serves), so only
+// the modules are tested then.
+func (m *Manager) check(ctx context.Context, ver string, b images.Build, serving bool) (string, error) {
+	exts, err := ParseExtensions(b.Extensions)
+	if err != nil {
+		return "", err
+	}
+	ini := m.p.IniPath(ver)
+	name := ContainerName(ver) + "-candidate"
+	tests := [][]string{
+		{"php-fpm", "-t", "-y", m.p.FPMConf(ver), "-c", ini},
+		{"php", "-c", ini, "-d", "display_startup_errors=1", "-d", "log_errors=0", "-m"},
+	}
+	if !serving {
+		tests = [][]string{{"php", "-d", "display_startup_errors=1", "-d", "log_errors=0", "-m"}}
+	}
+	var out strings.Builder
+	for _, test := range tests {
+		cfg := Spec(m.p, ver, b.Tag).Config()
+		if !serving {
+			// A module list needs no mounts, and the directories a mount names may not
+			// exist yet: Docker would create them root-owned.
+			cfg.Binds = nil
+		}
+		cfg.Entrypoint, cfg.Cmd = test[:1], test[1:]
+		// A leftover from a daemon that died mid-check would hold the name.
+		_ = m.eng.ContainerRemove(ctx, name, true)
+		res, err := m.eng.RunOnce(ctx, name, cfg)
+		if err != nil {
+			return out.String(), fmt.Errorf("%s could not be run: %w", test[0], err)
+		}
+		out.WriteString(res.Output())
+		if res.ExitCode != 0 {
+			return out.String(), fmt.Errorf("%s rejected the build (exit %d)", test[0], res.ExitCode)
+		}
+		if iniTrouble.MatchString(res.Output()) {
+			return out.String(), fmt.Errorf("%s reported a problem with the build", test[0])
+		}
+		if test[len(test)-1] == "-m" {
+			if missing := missingModules(res.Output(), exts); len(missing) > 0 {
+				return out.String(), fmt.Errorf("the build does not load: %s", strings.Join(missing, ", "))
+			}
+		}
+	}
+	return out.String(), nil
+}
+
+// swap is the promotion hook: the running container moves from one build to
+// another. A version whose container is not running has nothing to move; its
+// next start uses the new build.
+func (m *Manager) swap(ctx context.Context, ver, from, to string) error {
+	svc := NewService(m.eng, m.p, ver, true, func(context.Context) (string, error) { return to, nil })
+	c, found, err := svc.State(ctx)
+	if err != nil {
+		return err
+	}
+	if !found || !c.State.Running {
+		return nil
+	}
+	return images.Swap(ctx, m.eng, images.SwapPlan{
+		Name:    ContainerName(ver),
+		Mount:   m.p.Root,
+		Spec:    func(image string) docker.Spec { return Spec(m.p, ver, image) },
+		Healthy: svc.Healthy,
+	}, from, to)
 }
 
 // --- catalogue ---------------------------------------------------------------
@@ -210,6 +416,17 @@ func (m *Manager) List(ctx context.Context) ([]Version, error) {
 			v = Version{Version: name, Image: BaseImage(name), State: StateAbsent}
 		}
 		v.Supported = isSup[name]
+		fam, err := m.family(name)
+		if err != nil {
+			return nil, err
+		}
+		cur, has, err := fam.Current(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if has {
+			v.Current = &cur
+		}
 		out = append(out, v)
 	}
 	return out, nil
@@ -272,104 +489,241 @@ func (m *Manager) StartPull(ctx context.Context, ver string) error {
 	if v.State == StatePulling {
 		return ErrBusy
 	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return err
+	}
+	if err := fam.Idle(); err != nil {
+		return ErrBusy
+	}
 	v.State, v.Output, v.Image = StatePulling, "", BaseImage(ver)
 	return m.setState(ctx, v)
 }
 
-// pullTail is how many lines of a failed pull are kept with the version. The
-// whole output is in the job; this is what the PHP page shows without it.
-const pullTail = 30
+// CurrentExtensions returns the extensions of the build a version serves, or
+// none for a version that has never been built. A pull without a list of
+// extensions keeps them.
+func (m *Manager) CurrentExtensions(ctx context.Context, ver string) ([]Extension, error) {
+	fam, err := m.family(ver)
+	if err != nil {
+		return nil, err
+	}
+	cur, has, err := fam.Current(ctx)
+	if err != nil || !has {
+		return nil, err
+	}
+	return ParseExtensions(cur.Extensions)
+}
 
-// Pull is the body of the pull job: it pulls the official image, builds the
-// derived one, and records the version as ready, or as failed with the end of
-// the output. Call StartPull first.
-func (m *Manager) Pull(ctx context.Context, ver string, progress docker.Progress) error {
+// Pull installs a version: the official image is pulled, a build with the
+// given extensions is made, checked and served. Call StartPull first. A build
+// that fails leaves the version failed with its output, unless a build was
+// already serving, which keeps serving.
+func (m *Manager) Pull(ctx context.Context, ver string, exts []Extension, progress docker.Progress) error {
 	if err := CheckVersion(ver); err != nil {
 		return err
 	}
-	var tail []string
-	emit := func(line string) {
-		if tail = append(tail, line); len(tail) > pullTail {
-			tail = tail[1:]
-		}
-		if progress != nil {
-			progress(line)
-		}
-	}
-
-	v := Version{Version: ver, Image: BaseImage(ver)}
-	err := func() error {
-		base, err := m.eng.ImagePull(ctx, BaseImage(ver), emit)
-		if err != nil {
-			return err
-		}
-		if len(base.RepoDigests) > 0 {
-			v.Digest = base.RepoDigests[0]
-		} else {
-			v.Digest = base.ID
-		}
-		_, err = m.eng.ImageBuild(ctx, docker.BuildOptions{
-			Tag: Image(ver), Dockerfile: Dockerfile(ver),
-			Labels: map[string]string{docker.LabelManaged: "true"},
-		}, emit)
+	fam, err := m.family(ver)
+	if err != nil {
 		return err
-	}()
+	}
+	b, buildErr := fam.Build(ctx, ExtensionNames(exts), progress)
 
 	// The outcome is recorded even when the job was canceled: a version left
 	// `pulling` could never be pulled again.
 	bg := context.WithoutCancel(ctx)
+	_, has, err := fam.Current(bg)
 	if err != nil {
-		v.State = StateFailed
-		v.Output = strings.Join(append(tail, err.Error()), "\n")
-		return errors.Join(err, m.setState(bg, v))
+		return errors.Join(buildErr, err)
 	}
-	v.State = StateReady
-	return m.setState(bg, v)
+	v := Version{Version: ver, Image: BaseImage(ver)}
+	if has {
+		v.State, v.Digest = StateReady, m.baseDigest(ver)
+	} else {
+		v.State, v.Output = StateFailed, b.Output
+	}
+	if err := m.setState(bg, v); err != nil {
+		return errors.Join(buildErr, err)
+	}
+	return buildErr
 }
 
-// Reconcile corrects the catalogue at daemon start: a pull that was running
-// when the daemon stopped is failed, and a version whose image is no longer on
-// the host is absent again.
+// StartRebuild checks what a rebuild needs before its job starts: the version
+// must be serving, no build may be running, and the extensions must be valid.
+// It returns the parsed extensions for the job.
+func (m *Manager) StartRebuild(ctx context.Context, ver string, names []string) ([]Extension, error) {
+	v, err := m.Get(ctx, ver)
+	if err != nil {
+		return nil, err
+	}
+	if v.State != StateReady {
+		return nil, fmt.Errorf("%w: PHP %s is %s", ErrNotReady, ver, v.State)
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return nil, err
+	}
+	if err := fam.Idle(); err != nil {
+		return nil, ErrBusy
+	}
+	return ParseExtensions(names)
+}
+
+// Rebuild builds the version again with other extensions and serves the result
+// when it passes. A failure does not change the version's state: the build that
+// served keeps serving.
+func (m *Manager) Rebuild(ctx context.Context, ver string, exts []Extension, progress docker.Progress) (images.Build, error) {
+	if err := CheckVersion(ver); err != nil {
+		return images.Build{}, err
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return images.Build{}, err
+	}
+	return fam.Build(ctx, ExtensionNames(exts), progress)
+}
+
+// Builds returns a version's builds, newest first.
+func (m *Manager) Builds(ctx context.Context, ver string) ([]images.Build, error) {
+	if err := CheckVersion(ver); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownVersion, ver)
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return nil, err
+	}
+	return fam.Builds(ctx)
+}
+
+// StartActivate checks an activation before its job starts: the version must
+// be serving something, and no build may be running.
+func (m *Manager) StartActivate(ctx context.Context, ver string) error {
+	if err := m.Usable(ctx, ver); err != nil {
+		return err
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return err
+	}
+	if err := fam.Idle(); err != nil {
+		return ErrBusy
+	}
+	return nil
+}
+
+// Activate makes an earlier ready build the one a version serves: the way back
+// from a build that misbehaves.
+func (m *Manager) Activate(ctx context.Context, ver, id string) (images.Build, error) {
+	if err := CheckVersion(ver); err != nil {
+		return images.Build{}, fmt.Errorf("%w: %s", ErrUnknownVersion, ver)
+	}
+	if err := images.CheckID(id); err != nil {
+		return images.Build{}, fmt.Errorf("%w: %s", images.ErrNotFound, id)
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return images.Build{}, err
+	}
+	return fam.Activate(ctx, id)
+}
+
+// Remove uninstalls a version: its container is stopped and removed and its
+// images deleted. Configuration, php.ini and settings are kept, so installing
+// the version again brings them back. inUse reports whether a site runs on the
+// version; a removal is refused while one does.
+func (m *Manager) Remove(ctx context.Context, ver string, inUse func(context.Context) (bool, error)) error {
+	v, err := m.Get(ctx, ver)
+	if err != nil {
+		return err
+	}
+	if v.State == StatePulling {
+		return ErrBusy
+	}
+	if inUse != nil {
+		used, err := inUse(ctx)
+		if err != nil {
+			return err
+		}
+		if used {
+			return ErrInUse
+		}
+	}
+	fam, err := m.family(ver)
+	if err != nil {
+		return err
+	}
+	if err := fam.Remove(ctx, func(ctx context.Context) error { return m.retire(ctx, ver) }); err != nil {
+		return err
+	}
+	return m.setState(context.WithoutCancel(ctx), Version{Version: ver, Image: BaseImage(ver), State: StateAbsent})
+}
+
+// retire stops and removes a version's container; one that is not there is fine.
+func (m *Manager) retire(ctx context.Context, ver string) error {
+	name := ContainerName(ver)
+	if err := m.eng.ContainerStop(ctx, name, 20*time.Second); err != nil && !errors.Is(err, docker.ErrNotFound) {
+		return err
+	}
+	if err := m.eng.ContainerRemove(ctx, name, true); err != nil && !errors.Is(err, docker.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+// Reconcile corrects the catalogue at daemon start. A pull that was running is
+// failed, and so is a build its family left running. A version that was ready
+// and has an image from before builds had IDs keeps that image as its current
+// build; a ready version with no image is absent again.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	rows, err := m.rows(ctx)
 	if err != nil {
 		return err
 	}
-	for _, v := range rows {
-		switch v.State {
-		case StatePulling:
+	for _, row := range rows {
+		v := row
+		if v.State == StatePulling {
 			v.State, v.Output = StateFailed, "the pull was interrupted by a daemon restart"
-		case StateReady:
-			if _, err := m.eng.ImageInspect(ctx, Image(v.Version)); !errors.Is(err, docker.ErrNotFound) {
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			v.State, v.Output = StateAbsent, ""
-		default:
-			continue
 		}
-		if err := m.setState(ctx, v); err != nil {
+		legacy := ""
+		if row.State == StateReady {
+			legacy = LegacyImage(v.Version)
+		}
+		fam, err := m.family(v.Version)
+		if err != nil {
 			return err
+		}
+		serving, err := fam.Reconcile(ctx, legacy)
+		if err != nil {
+			return err
+		}
+		switch {
+		case serving:
+			v.State, v.Output = StateReady, ""
+		case v.State == StateReady:
+			v.State, v.Output = StateAbsent, ""
+		}
+		if v.State != row.State || v.Output != row.Output {
+			if err := m.setState(ctx, v); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-// EnsureContainer creates, recreates or starts a version's container.
-func (m *Manager) EnsureContainer(ctx context.Context, ver string) (docker.EnsureResult, error) {
-	return docker.Ensure(ctx, m.eng, Spec(m.p, ver), m.p.Root)
-}
-
 // --- files -------------------------------------------------------------------
 
-// productionIni reads the image's php.ini-production.
+// productionIni reads the image's php.ini-production from the version's
+// current build.
 func (m *Manager) productionIni(ctx context.Context, ver string) ([]byte, error) {
+	img, err := m.CurrentTag(ctx, ver)
+	if err != nil {
+		return nil, err
+	}
 	name := ContainerName(ver) + "-ini"
 	_ = m.eng.ContainerRemove(ctx, name, true)
 	res, err := m.eng.RunOnce(ctx, name, docker.ContainerConfig{
-		Image:      Image(ver),
+		Image:      img,
 		Entrypoint: []string{"cat"},
 		Cmd:        []string{"/usr/local/etc/php/php.ini-production"},
 		Labels:     map[string]string{docker.LabelManaged: "true"},
@@ -381,6 +735,16 @@ func (m *Manager) productionIni(ctx context.Context, ver string) ([]byte, error)
 		return nil, fmt.Errorf("php: read php.ini-production of %s: exit %d: %s", ver, res.ExitCode, strings.TrimSpace(string(res.Stderr)))
 	}
 	return res.Stdout, nil
+}
+
+// EnsureContainer creates, recreates or starts a version's container on its
+// current build.
+func (m *Manager) EnsureContainer(ctx context.Context, ver string) (docker.EnsureResult, error) {
+	img, err := m.CurrentTag(ctx, ver)
+	if err != nil {
+		return docker.EnsureResult{}, err
+	}
+	return docker.Ensure(ctx, m.eng, Spec(m.p, ver, img), m.p.Root)
 }
 
 // BaseFiles returns the files a version's FPM starts on that are missing or

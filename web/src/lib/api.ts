@@ -145,6 +145,36 @@ export interface PHPVersion {
   container: ContainerStatus
   /** Domains that run on this version. */
   sites: string[]
+  /** The build the version serves, or null when there is none. */
+  current: ImageBuild | null
+}
+
+/** One image build of a PHP version or of the nginx image. */
+export type ImageBuildState = "building" | "ready" | "failed" | "pruned"
+
+export interface ImageBuild {
+  id: string
+  kind: "php" | "nginx"
+  version: string
+  tag: string
+  image_id: string
+  extensions: string[]
+  state: ImageBuildState
+  /** The end of the build's output; empty when there is none. */
+  output: string
+  created_at: string
+  finished_at: string | null
+  current: boolean
+  previous: boolean
+}
+
+/** One entry of the curated PHP extension catalogue. */
+export interface PHPExtension {
+  name: string
+  module: string
+  description: string
+  kind: "bundled" | "pecl"
+  packages: string[]
 }
 
 export interface PHPReconcileStep {
@@ -502,6 +532,18 @@ export interface NginxServiceStatus {
   }
 }
 
+/** The nginx image: the base it is built from, the build in use, and its history. */
+export interface NginxImage {
+  base: string
+  repo: string
+  present: boolean
+  /** True while an image build is running. */
+  busy: boolean
+  current: ImageBuild | null
+  previous: ImageBuild | null
+  builds: ImageBuild[]
+}
+
 export type FirewallProtocol = "tcp" | "udp" | "both"
 
 export interface FirewallPending {
@@ -840,14 +882,76 @@ export class ApiClient {
     return this.request<NginxServiceStatus>("/api/services/nginx")
   }
 
+  async nginxImage(): Promise<NginxImage> {
+    return this.request<NginxImage>("/api/nginx/image")
+  }
+
+  /** Builds a new image from the newest nginx base and swaps it in once `nginx -t` passes. */
+  async updateNginxImage(): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/nginx/image/update", { method: "POST" })
+    return res.job
+  }
+
+  async activateNginxImageBuild(buildId: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(
+      `/api/nginx/image/builds/${encodeURIComponent(buildId)}/activate`,
+      { method: "POST" },
+    )
+    return res.job
+  }
+
   async php(): Promise<PHPList> {
     return this.request<PHPList>("/api/php")
   }
 
-  /** Starts the pull job. The version reads `pulling` until the job ends. */
-  async pullPHP(version: string): Promise<JobRef> {
+  /**
+   * Starts the pull job. The version reads `pulling` until the job ends. Without
+   * `extensions` the current build's extensions are kept, as before.
+   */
+  async pullPHP(version: string, extensions?: string[]): Promise<JobRef> {
     const res = await this.request<{ job: JobRef }>(
       `/api/php/${encodeURIComponent(version)}/pull`,
+      extensions === undefined
+        ? { method: "POST" }
+        : { method: "POST", body: JSON.stringify({ extensions }) },
+    )
+    return res.job
+  }
+
+  /** The curated extension catalogue, sorted by name. */
+  async phpExtensions(): Promise<PHPExtension[]> {
+    return (await this.request<{ extensions: PHPExtension[] }>("/api/php/extensions")).extensions
+  }
+
+  /** Rebuilds a ready version with exactly these extensions. It serves until the build passes. */
+  async buildPHP(version: string, extensions: string[]): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(
+      `/api/php/${encodeURIComponent(version)}/build`,
+      { method: "POST", body: JSON.stringify({ extensions }) },
+    )
+    return res.job
+  }
+
+  /** Removes the container and the version's images; config and settings are kept. */
+  async removePHP(version: string): Promise<{ version: string; state: string }> {
+    return this.request<{ version: string; state: string }>(
+      `/api/php/${encodeURIComponent(version)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  /** Newest first. */
+  async phpBuilds(version: string): Promise<ImageBuild[]> {
+    const res = await this.request<{ builds: ImageBuild[] }>(
+      `/api/php/${encodeURIComponent(version)}/builds`,
+    )
+    return res.builds
+  }
+
+  /** Makes a ready build the one the version serves. This is the rollback. */
+  async activatePHPBuild(version: string, buildId: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(
+      `/api/php/${encodeURIComponent(version)}/builds/${encodeURIComponent(buildId)}/activate`,
       { method: "POST" },
     )
     return res.job

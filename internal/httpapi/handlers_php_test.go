@@ -40,6 +40,11 @@ func (phpEngine) RunOnce(_ context.Context, _ string, cfg docker.ContainerConfig
 	if len(cfg.Entrypoint) > 0 && cfg.Entrypoint[0] == "cat" {
 		return docker.ExecResult{Stdout: []byte("; php.ini-production\n")}, nil
 	}
+	// `php -m` of a build: the candidate check requires the built extensions to
+	// be listed, so the fake lists intl, the one the build tests ask for.
+	if len(cfg.Entrypoint) == 1 && cfg.Entrypoint[0] == "php" {
+		return docker.ExecResult{Stdout: []byte("[PHP Modules]\nCore\nintl\n")}, nil
+	}
 	return docker.ExecResult{}, nil
 }
 func (e phpEngine) ImagePull(_ context.Context, _ string, p docker.Progress) (docker.Image, error) {
@@ -52,6 +57,8 @@ func (e phpEngine) ImagePull(_ context.Context, _ string, p docker.Progress) (do
 func (phpEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
 	return docker.Image{ID: "sha256:derived"}, nil
 }
+func (phpEngine) ImageTag(context.Context, string, string) error { return nil }
+func (phpEngine) ImageRemove(context.Context, string) error      { return nil }
 
 func newPHPHarness(t *testing.T, eng phpEngine) *nginxHarness {
 	t.Helper()
@@ -64,6 +71,7 @@ func newPHPHarness(t *testing.T, eng phpEngine) *nginxHarness {
 
 	phpMgr, err := php.New(php.Options{
 		Store: h.store, Engine: eng, Applier: ap, Paths: php.Paths{Root: "/www"}, Read: mfs.ReadFile,
+		Scratch:   t.TempDir(),
 		Supported: func(context.Context) ([]string, error) { return []string{"8.3", "8.4"}, nil },
 	})
 	if err != nil {

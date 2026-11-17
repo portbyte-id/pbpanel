@@ -251,3 +251,39 @@ describe("TLS routes", () => {
     expect(del.calls[0].init.method).toBe("DELETE")
   })
 })
+
+describe("PHP image calls", () => {
+  const job = { id: "job-1", kind: "php.build", state: "queued" }
+
+  it("sends a pull without a body unless extensions are given, as before", async () => {
+    const plain = stubFetch(jsonResponse({ job }, 202))
+    await new ApiClient({ fetch: plain.fetch }).pullPHP("8.3")
+    expect(plain.calls[0].url).toBe("/api/php/8.3/pull")
+    expect(plain.calls[0].init.body).toBeUndefined()
+
+    const chosen = stubFetch(jsonResponse({ job }, 202))
+    await new ApiClient({ fetch: chosen.fetch }).pullPHP("8.3", ["intl"])
+    expect(JSON.parse(String(chosen.calls[0].init.body))).toEqual({ extensions: ["intl"] })
+  })
+
+  it("posts the full extension list to build, even when it is empty", async () => {
+    const { fetch, calls } = stubFetch(jsonResponse({ job }, 202))
+    const returned = await new ApiClient({ fetch }).buildPHP("8.3", [])
+
+    expect(calls[0].url).toBe("/api/php/8.3/build")
+    expect(calls[0].init.method).toBe("POST")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ extensions: [] })
+    expect(returned).toEqual(job)
+  })
+
+  it("surfaces a 409 from remove with the server's detail", async () => {
+    const { fetch } = stubFetch(
+      jsonResponse({ error: "conflict", detail: "site a.test uses PHP 8.3" }, 409),
+    )
+    const err = await new ApiClient({ fetch }).removePHP("8.3").catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(409)
+    expect((err as ApiError).detail).toBe("site a.test uses PHP 8.3")
+  })
+})

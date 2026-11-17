@@ -47,10 +47,13 @@ export const queryKeys = {
   nginxSettings: ["nginx", "settings"] as const,
   nginxConf: ["nginx", "conf"] as const,
   nginxService: ["nginx", "service"] as const,
+  nginxImage: ["nginx", "image"] as const,
   configHistory: (file: string) => ["config-history", file] as const,
   php: ["php"] as const,
   phpSettings: (version: string) => ["php", version, "settings"] as const,
   phpIni: (version: string) => ["php", version, "ini"] as const,
+  phpBuilds: (version: string) => ["php", version, "builds"] as const,
+  phpExtensions: ["php", "extensions"] as const,
   firewall: ["firewall"] as const,
   firewallState: ["firewall", "state"] as const,
   firewallRules: ["firewall", "rules"] as const,
@@ -322,12 +325,87 @@ export function usePHP() {
   })
 }
 
+/** The pull input. `extensions` omitted keeps the current build's extensions. */
+export interface PullPHPInput {
+  version: string
+  extensions?: string[]
+}
+
 export function usePullPHP() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (version: string) => api.pullPHP(version),
+    mutationFn: (input: PullPHPInput) => api.pullPHP(input.version, input.extensions),
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.php, exact: true }),
   })
+}
+
+/** The curated catalogue never changes while the panel runs, so it is read once. */
+export function usePHPExtensions() {
+  return useQuery({
+    queryKey: queryKeys.phpExtensions,
+    queryFn: () => api.phpExtensions(),
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+/**
+ * A version's builds, newest first. Read only while the history is open; it is
+ * re-read every few seconds while a build is running.
+ */
+export function usePHPBuilds(version: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.phpBuilds(version),
+    queryFn: () => api.phpBuilds(version),
+    enabled,
+    refetchInterval: (query) =>
+      query.state.data?.some((b) => b.state === "building") ? 3_000 : false,
+  })
+}
+
+/** Rebuilds the version with these extensions. The job is watched by the page. */
+export function useBuildPHP(version: string) {
+  return useMutation({
+    mutationFn: (extensions: string[]) => api.buildPHP(version, extensions),
+  })
+}
+
+export function useActivatePHPBuild(version: string) {
+  return useMutation({
+    mutationFn: (buildId: string) => api.activatePHPBuild(version, buildId),
+  })
+}
+
+/** Removing a version leaves its build history with nothing behind it. */
+export function useRemovePHP(version: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.removePHP(version),
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: queryKeys.php, exact: true }),
+        client.invalidateQueries({ queryKey: queryKeys.phpBuilds(version), exact: true }),
+      ]),
+  })
+}
+
+/**
+ * The nginx image. Like the PHP list it is re-read while a build runs, and every
+ * 10 seconds otherwise, so a build started elsewhere shows up here too.
+ */
+export function useNginxImage() {
+  return useQuery({
+    queryKey: queryKeys.nginxImage,
+    queryFn: () => api.nginxImage(),
+    refetchInterval: (query) => (query.state.data?.busy ? 3_000 : 10_000),
+  })
+}
+
+export function useUpdateNginxImage() {
+  return useMutation({ mutationFn: () => api.updateNginxImage() })
+}
+
+export function useActivateNginxImageBuild() {
+  return useMutation({ mutationFn: (buildId: string) => api.activateNginxImageBuild(buildId) })
 }
 
 export function usePHPSettings(version: string) {

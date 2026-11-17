@@ -1,15 +1,30 @@
+import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
+import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { BuildHistory, ExtensionChips, ExtensionDialog } from "@/components/ImageBuilds"
+import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError, type PHPSettings, type PHPVersion } from "@/lib/api"
-import { usePHP, usePHPSettings, usePullPHP, useSavePHPSettings } from "@/lib/queries"
+import { ApiError, type JobRef, type PHPSettings, type PHPVersion } from "@/lib/api"
+import {
+  type PullPHPInput,
+  queryKeys,
+  useActivatePHPBuild,
+  useBuildPHP,
+  usePHP,
+  usePHPBuilds,
+  usePHPSettings,
+  usePullPHP,
+  useRemovePHP,
+  useSavePHPSettings,
+} from "@/lib/queries"
 
 /** A badge and a sentence for one version, from its image state and its container. */
 export function describeVersion(v: PHPVersion): { badge: string; ok: boolean; text: string } {
@@ -34,11 +49,27 @@ export function describeVersion(v: PHPVersion): { badge: string; ok: boolean; te
   return { badge: "stopped", ok: false, text: `Not running, but ${sites} need it.` }
 }
 
+/** Re-reads what a build changed. It runs when the job drawer closes, after the output is seen. */
+function refreshBuilds(client: ReturnType<typeof useQueryClient>) {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.php, exact: true }),
+    client.invalidateQueries({
+      predicate: (q) => q.queryKey.length === 3 && q.queryKey[0] === "php" && q.queryKey[2] === "builds",
+    }),
+  ])
+}
+
+function messageOf(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.detail : fallback
+}
+
 /** The PHP versions: which are installed, and each one's settings and php.ini. */
 export function PHPPage() {
+  const client = useQueryClient()
   const { data, isPending, error } = usePHP()
   const pull = usePullPHP()
   const [selected, setSelected] = useState<string | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
 
   if (isPending) {
     return <p className="text-muted-foreground text-sm">Loading PHP versions…</p>
@@ -78,49 +109,23 @@ export function PHPPage() {
         </CardHeader>
         <CardContent>
           <ul className="divide-border flex flex-col divide-y">
-            {data.versions.map((v) => {
-              const d = describeVersion(v)
-              const canPull = v.supported && (v.state === "absent" || v.state === "failed")
-              return (
-                <li key={v.version} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <span className="w-16 font-medium">PHP {v.version}</span>
-                    <Badge variant={d.ok ? "secondary" : "destructive"}>{d.badge}</Badge>
-                    <span className="text-muted-foreground flex-1">{d.text}</span>
-                    {canPull && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={pull.isPending}
-                        onClick={() => pull.mutate(v.version)}
-                      >
-                        {v.state === "failed" ? "Try again" : "Pull"}
-                      </Button>
-                    )}
-                    {v.state === "ready" && (
-                      <Button
-                        size="sm"
-                        variant={current?.version === v.version ? "default" : "outline"}
-                        aria-pressed={current?.version === v.version}
-                        onClick={() => setSelected(v.version)}
-                      >
-                        Configure
-                      </Button>
-                    )}
-                  </div>
-                  {v.state === "failed" && v.output && (
-                    <pre className="bg-muted overflow-x-auto rounded-md p-2 font-mono text-xs whitespace-pre-wrap">
-                      {v.output.trimEnd()}
-                    </pre>
-                  )}
-                </li>
-              )
-            })}
+            {data.versions.map((v) => (
+              <VersionRow
+                key={v.version}
+                version={v}
+                configuring={current?.version === v.version}
+                onConfigure={() => setSelected(v.version)}
+                pulling={pull.isPending}
+                pullError={pull.error}
+                onPull={(input, done) => pull.mutate(input, { onSuccess: done })}
+                onJob={setJobId}
+              />
+            ))}
           </ul>
           <ApplyError error={pull.error} fallback="The pull could not be started." />
           <p className="text-muted-foreground mt-4 text-xs">
-            Versions run on the official php:&lt;version&gt;-fpm images. The list is the "PHP
-            versions" setting. A pull's full output is in Jobs.
+            Versions run on the official php:&lt;version&gt;-fpm images, with the extensions chosen
+            for each build. The list is the "PHP versions" setting. A pull's full output is in Jobs.
           </p>
         </CardContent>
       </Card>
@@ -129,7 +134,198 @@ export function PHPPage() {
         // Keyed on the version: each has its own form state and editor.
         <VersionConfig key={current.version} version={current.version} />
       )}
+
+      <JobsDrawer
+        jobId={jobId}
+        onClose={() => {
+          setJobId(null)
+          void refreshBuilds(client)
+        }}
+      />
     </div>
+  )
+}
+
+/** One version: its state, the extensions it serves with, and what can be done to it. */
+function VersionRow({
+  version: v,
+  configuring,
+  onConfigure,
+  pulling,
+  pullError,
+  onPull,
+  onJob,
+}: {
+  version: PHPVersion
+  configuring: boolean
+  onConfigure: () => void
+  pulling: boolean
+  pullError: unknown
+  onPull: (input: PullPHPInput, done: () => void) => void
+  onJob: (jobId: string) => void
+}) {
+  const d = describeVersion(v)
+  const canPull = v.supported && (v.state === "absent" || v.state === "failed")
+  const ready = v.state === "ready"
+  const [pickingPull, setPickingPull] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const rebuild = useBuildPHP(v.version)
+  const remove = useRemovePHP(v.version)
+  const builds = usePHPBuilds(v.version, historyOpen && ready)
+  const activate = useActivatePHPBuild(v.version)
+
+  return (
+    <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="w-16 font-medium">PHP {v.version}</span>
+        <Badge variant={d.ok ? "secondary" : "destructive"}>{d.badge}</Badge>
+        <span className="text-muted-foreground flex-1">{d.text}</span>
+        {canPull && (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pulling}
+              onClick={() => onPull({ version: v.version }, () => {})}
+            >
+              {v.state === "failed" ? "Try again" : "Pull"}
+            </Button>
+            <Button size="sm" variant="outline" disabled={pulling} onClick={() => setPickingPull(true)}>
+              Pull with extensions…
+            </Button>
+          </>
+        )}
+        {ready && (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={rebuild.isPending}
+              onClick={() => setRebuilding(true)}
+            >
+              Rebuild
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen((o) => !o)}
+            >
+              {historyOpen ? "Hide builds" : "Builds"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setRemoving(true)}>
+              Remove
+            </Button>
+            <Button
+              size="sm"
+              variant={configuring ? "default" : "outline"}
+              aria-pressed={configuring}
+              onClick={onConfigure}
+            >
+              Configure
+            </Button>
+          </>
+        )}
+      </div>
+
+      {ready && v.current && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Extensions</span>
+          <ExtensionChips names={v.current.extensions} empty="no extra extensions" />
+        </div>
+      )}
+
+      {v.state === "failed" && v.output && (
+        <pre className="bg-muted overflow-x-auto rounded-md p-2 font-mono text-xs whitespace-pre-wrap">
+          {v.output.trimEnd()}
+        </pre>
+      )}
+
+      {ready && historyOpen && (
+        <div className="flex flex-col gap-2">
+          {builds.isPending ? (
+            <p className="text-muted-foreground text-sm">Loading builds…</p>
+          ) : builds.error ? (
+            <p role="alert" className="text-destructive text-sm">
+              {messageOf(builds.error, "The builds could not be loaded.")}
+            </p>
+          ) : (
+            <BuildHistory
+              builds={builds.data}
+              emptyText="No builds yet."
+              activating={activate.isPending}
+              error={activate.error}
+              fallback="The build could not be activated."
+              onActivate={(build) =>
+                activate.mutate(build.id, { onSuccess: (job: JobRef) => onJob(job.id) })
+              }
+            />
+          )}
+        </div>
+      )}
+
+      <ExtensionDialog
+        open={pickingPull}
+        onOpenChange={setPickingPull}
+        title={`Pull PHP ${v.version} with extensions`}
+        description="The image is pulled and the extensions ticked here are built in. With nothing ticked this is the plain image."
+        initial={[]}
+        submitLabel={`Pull PHP ${v.version}`}
+        pendingLabel="Pulling…"
+        pending={pulling}
+        error={pullError}
+        onSubmit={(extensions) =>
+          onPull({ version: v.version, extensions }, () => setPickingPull(false))
+        }
+      />
+
+      <ExtensionDialog
+        open={rebuilding}
+        onOpenChange={(open) => {
+          setRebuilding(open)
+          if (!open) rebuild.reset()
+        }}
+        title={`Rebuild PHP ${v.version}`}
+        description="The version keeps serving its current build until the new one passes its checks. The new build has exactly the extensions ticked here."
+        initial={v.current?.extensions ?? []}
+        submitLabel="Start rebuild"
+        pendingLabel="Starting…"
+        pending={rebuild.isPending}
+        error={rebuild.error}
+        onSubmit={(extensions) =>
+          rebuild.mutate(extensions, {
+            onSuccess: (job: JobRef) => {
+              setRebuilding(false)
+              onJob(job.id)
+            },
+          })
+        }
+      />
+
+      <ConfirmDialog
+        open={removing}
+        onOpenChange={(open) => {
+          setRemoving(open)
+          if (!open) remove.reset()
+        }}
+        title={`Remove PHP ${v.version}?`}
+        confirmLabel={`Remove PHP ${v.version}`}
+        pendingLabel="Removing…"
+        pending={remove.isPending}
+        destructive
+        error={remove.error ? messageOf(remove.error, "PHP could not be removed.") : null}
+        onConfirm={() => remove.mutate(undefined, { onSuccess: () => setRemoving(false) })}
+      >
+        <p>
+          The container stops and its images are deleted. The php.ini file and the settings are
+          kept, so pulling PHP {v.version} again restores them.
+        </p>
+        <p>A version that a site uses cannot be removed. Move those sites to another version first.</p>
+      </ConfirmDialog>
+    </li>
   )
 }
 

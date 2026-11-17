@@ -12,6 +12,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/sites"
@@ -49,6 +50,8 @@ type NginxDeps struct {
 	PHP PHPManager
 	// PHPReconcile reports how each PHP version came out of the boot reconcile.
 	PHPReconcile func() []sites.PHPStep
+	// Images carries the nginx image builds. Nil answers the image routes 503.
+	Images NginxImages
 }
 
 // nginxRoutes registers the routes of development plan step 1.10. They are
@@ -87,6 +90,7 @@ func (s *server) nginxRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/services/nginx", h(s.handleNginxService))
 
 	s.phpRoutes(mux, h)
+	s.nginxImageRoutes(mux, h)
 }
 
 // applyResponse is what a successful change returns besides its own data.
@@ -123,6 +127,14 @@ func (s *server) writeNginxError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, http.StatusConflict, errConflict, "that PHP version is not installed; pull it first")
 	case errors.Is(err, php.ErrBusy):
 		writeError(w, http.StatusConflict, errConflict, "that PHP version is already being pulled")
+	case errors.Is(err, php.ErrInUse):
+		writeError(w, http.StatusConflict, errConflict, err.Error())
+	case errors.Is(err, images.ErrBusy):
+		writeError(w, http.StatusConflict, errConflict, "a build or a swap is already running for this image")
+	case errors.Is(err, images.ErrNotReady):
+		writeError(w, http.StatusConflict, errConflict, "that build is not ready to serve")
+	case errors.Is(err, images.ErrNotFound):
+		writeError(w, http.StatusNotFound, errNotFound, "no such build")
 	case errors.As(err, &invalid):
 		writeJSON(w, http.StatusUnprocessableEntity, errorEnvelope{Error: errInvalidInput, Detail: invalid.Error(), Field: invalid.Field})
 	case errors.As(err, &setting):

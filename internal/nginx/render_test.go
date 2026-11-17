@@ -226,11 +226,11 @@ func TestHasIncludeLine(t *testing.T) {
 }
 
 func TestSpecFollowsTheMountRule(t *testing.T) {
-	spec := Spec(testPaths)
+	spec := Spec(testPaths, "panel/nginx:1.29-test")
 	if err := spec.Validate(testPaths.Root); err != nil {
 		t.Fatalf("the nginx spec breaks the mount rule: %v", err)
 	}
-	if spec.Hash() != Spec(testPaths).Hash() {
+	if spec.Hash() != Spec(testPaths, "panel/nginx:1.29-test").Hash() {
 		t.Error("the spec hash is not stable")
 	}
 	if cfg := spec.Config(); cfg.NetworkMode != "host" {
