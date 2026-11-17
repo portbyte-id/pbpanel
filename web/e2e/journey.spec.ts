@@ -19,7 +19,9 @@ test("login, change a setting, log out", async ({ page }) => {
   await page.getByLabel("Password").fill(PASSWORD)
   await page.getByRole("button", { name: "Sign in" }).click()
 
-  // 3. The guard let us through and the registry rendered the Settings page.
+  // 3. The guard let us through and the landing page is the dashboard; Settings is one click away.
+  await expect(page).toHaveURL(/\/dashboard/)
+  await page.getByRole("link", { name: "Settings" }).click()
   await expect(page).toHaveURL(/\/settings/)
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
 

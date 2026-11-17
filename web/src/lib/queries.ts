@@ -2,9 +2,11 @@ import {
   type QueryClient,
   queryOptions,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
+import { useEffect, useMemo, useState } from "react"
 
 import {
   api,
@@ -24,6 +26,15 @@ import {
   type SettingWrite,
   type UpdateSiteInput,
 } from "@/lib/api"
+import type { CronJobInput } from "@/lib/cron"
+import {
+  HISTORY_CAP,
+  mergeSnapshots,
+  openSysinfoStream,
+  type ServiceAction,
+  type Snapshot,
+  type SysinfoStreamStatus,
+} from "@/lib/sysinfo"
 
 /** Cache keys in one place, so a mutation invalidates exactly what it changed. */
 export const queryKeys = {
@@ -51,6 +62,12 @@ export const queryKeys = {
   panelCert: ["tls", "panel"] as const,
   apps: ["apps"] as const,
   runtimes: ["runtimes"] as const,
+  sysinfo: ["sysinfo"] as const,
+  services: ["services"] as const,
+  logSources: ["logs", "sources"] as const,
+  cron: ["cron"] as const,
+  cronRuns: (id: number) => ["cron", id, "runs"] as const,
+  cronRun: (id: number, runId: number) => ["cron", id, "runs", runId] as const,
 }
 
 /**
@@ -613,4 +630,153 @@ export function useUploadPanelCert() {
 
 export function useIssuePanelCert() {
   return useMutation({ mutationFn: (input: IssuePanelCertInput) => api.issuePanelCert(input) })
+}
+
+/* --- Dashboard, logs and cron (M7) -------------------------------------- */
+
+/**
+ * The metrics: the history from `/api/sysinfo` plus each snapshot the stream
+ * delivers. While the stream is not live the query polls at the sampling
+ * interval, so a proxy that buffers server-sent events degrades to a slower
+ * page, not a frozen one.
+ */
+export function useSysinfoLive() {
+  const [streamed, setStreamed] = useState<Snapshot[]>([])
+  const [status, setStatus] = useState<SysinfoStreamStatus>("connecting")
+
+  const query = useQuery({
+    queryKey: queryKeys.sysinfo,
+    queryFn: () => api.sysinfo(),
+    refetchInterval: (q) => (status === "live" ? false : (q.state.data?.interval_seconds ?? 5) * 1000),
+  })
+
+  useEffect(() => {
+    const stream = openSysinfoStream({
+      onSnapshot: (snapshot) => setStreamed((prev) => [...prev.slice(-(HISTORY_CAP - 1)), snapshot]),
+      onStatus: setStatus,
+    })
+    return () => stream.close()
+  }, [])
+
+  const history = useMemo(
+    () => mergeSnapshots(query.data?.history ?? [], streamed),
+    [query.data, streamed],
+  )
+  const latest = history.at(-1) ?? query.data?.latest ?? null
+
+  return {
+    latest,
+    history,
+    status,
+    intervalSeconds: query.data?.interval_seconds ?? 5,
+    isPending: query.isPending,
+    error: query.error,
+  }
+}
+
+/** The service grid polls: a container or unit changes state with no request from the page. */
+export function useServices() {
+  return useQuery({
+    queryKey: queryKeys.services,
+    queryFn: () => api.services(),
+    refetchInterval: 5_000,
+  })
+}
+
+export function useControlService() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { name: string; action: ServiceAction }) =>
+      api.controlService(input.name, input.action),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.services }),
+  })
+}
+
+/**
+ * Every site's file features, for the "detached" alert. The site list does not
+ * carry them, so this is one request per site; they are read once a minute.
+ */
+export function useSiteDetails() {
+  const sites = useSites()
+  const details = useQueries({
+    queries: (sites.data ?? []).map((s) => ({
+      queryKey: queryKeys.site(s.domain),
+      queryFn: () => api.site(s.domain),
+      refetchInterval: 60_000,
+    })),
+  })
+  return {
+    sites,
+    details: details.flatMap((d) => (d.data ? [d.data] : [])),
+    failed: details.some((d) => d.isError),
+  }
+}
+
+export function useLogSources() {
+  return useQuery({ queryKey: queryKeys.logSources, queryFn: () => api.logSources() })
+}
+
+/** The job list polls: `next_run` and `last_run` move without a request from the page. */
+export function useCronJobs() {
+  return useQuery({
+    queryKey: queryKeys.cron,
+    queryFn: () => api.cronJobs(),
+    refetchInterval: 10_000,
+  })
+}
+
+export function useSaveCronJob() {
+  const client = useQueryClient()
+  return useMutation({
+    // `id` set means an edit: the name cannot change.
+    mutationFn: (input: { id?: number; job: CronJobInput }) =>
+      input.id === undefined ? api.createCronJob(input.job) : api.updateCronJob(input.id, input.job),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.cron }),
+  })
+}
+
+export function useDeleteCronJob() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.deleteCronJob(id),
+    onSuccess: (_res, id) => {
+      client.removeQueries({ queryKey: queryKeys.cronRuns(id) })
+      return client.invalidateQueries({ queryKey: queryKeys.cron, exact: true })
+    },
+  })
+}
+
+export function useSetCronEnabled() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: number; enabled: boolean }) => api.setCronEnabled(input.id, input.enabled),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.cron }),
+  })
+}
+
+export function useRunCronJob() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.runCronJob(id),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.cron }),
+  })
+}
+
+/** A run that has not ended is re-read every few seconds so its output and status arrive. */
+export function useCronRuns(id: number | null) {
+  return useQuery({
+    queryKey: queryKeys.cronRuns(id ?? 0),
+    queryFn: () => api.cronRuns(id ?? 0, 30),
+    enabled: id !== null,
+    refetchInterval: (q) => (q.state.data?.some((r) => r.status === "running") ? 3_000 : 15_000),
+  })
+}
+
+export function useCronRun(id: number, runId: number | null) {
+  return useQuery({
+    queryKey: queryKeys.cronRun(id, runId ?? 0),
+    queryFn: () => api.cronRun(id, runId ?? 0),
+    enabled: runId !== null,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 3_000 : false),
+  })
 }

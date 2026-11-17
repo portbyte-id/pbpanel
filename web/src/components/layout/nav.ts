@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react"
 import {
   AppWindow,
   Archive,
+  CalendarClock,
   Cpu,
   FileText,
   FolderTree,
@@ -9,6 +10,7 @@ import {
   Globe,
   LockKeyhole,
   Network,
+  ScrollText,
   Settings,
   ShieldCheck,
   Terminal,
@@ -30,12 +32,12 @@ export interface NavSection {
 
 /** Sections for future milestones. Every one of these is disabled today. */
 export const futureSections: NavSection[] = [
-  { label: "Dashboard", icon: Gauge, milestone: "M7" },
   { label: "Docker", icon: Archive, milestone: "M8" },
 ]
 
 /** Sections this build implements. */
 export const builtSections: NavSection[] = [
+  { label: "Dashboard", icon: Gauge, path: "/dashboard" },
   { label: "Sites", icon: Globe, path: "/sites" },
   { label: "Files", icon: FolderTree, path: "/files" },
   { label: "Nginx", icon: Network, path: "/nginx" },
@@ -43,6 +45,8 @@ export const builtSections: NavSection[] = [
   { label: "TLS", icon: LockKeyhole, path: "/tls" },
   { label: "Firewall", icon: ShieldCheck, path: "/firewall" },
   { label: "Apps", icon: AppWindow, path: "/apps" },
+  { label: "Logs", icon: ScrollText, path: "/logs" },
+  { label: "Cron", icon: CalendarClock, path: "/cron" },
   { label: "Runtimes", icon: Cpu, path: "/runtimes" },
   { label: "Settings", icon: Settings, path: "/settings" },
   { label: "Audit", icon: FileText, path: "/audit" },

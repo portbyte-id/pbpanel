@@ -11,6 +11,10 @@
  *    `ApiError`, so a page branches on a code and shows the operator's sentence.
  */
 
+import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
+import type { LogSource } from "@/lib/logs"
+import type { ServiceAction, ServiceRow, SysinfoResponse } from "@/lib/sysinfo"
+
 /** The server's only error shape: a stable class plus a sentence for the operator. */
 export interface ErrorEnvelope {
   error: string
@@ -1263,6 +1267,94 @@ export class ApiClient {
 
   async disableFirewall(): Promise<void> {
     return this.request<void>("/api/firewall/disable", { method: "POST", body: "{}" })
+  }
+
+  /* --- Dashboard, logs and cron (M7) ------------------------------------- */
+
+  /** `latest` is null and `history` empty before the first sample. */
+  async sysinfo(limit?: number): Promise<SysinfoResponse> {
+    const q = limit === undefined ? "" : `?limit=${limit}`
+    return this.request<SysinfoResponse>(`/api/sysinfo${q}`)
+  }
+
+  async services(): Promise<ServiceRow[]> {
+    return (await this.request<{ services: ServiceRow[] }>("/api/services")).services
+  }
+
+  /** 204. The name is the row's `name` verbatim (`app:mysite` for an app). */
+  async controlService(name: string, action: ServiceAction): Promise<void> {
+    await this.request<void>(`/api/services/${encodeURIComponent(name)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+
+  async logSources(): Promise<LogSource[]> {
+    return (await this.request<{ sources: LogSource[] }>("/api/logs")).sources
+  }
+
+  async cronJobs(): Promise<CronJob[]> {
+    return (await this.request<{ jobs: CronJob[] }>("/api/cron")).jobs
+  }
+
+  async createCronJob(input: CronJobInput): Promise<CronJob> {
+    return this.request<CronJob>("/api/cron", { method: "POST", body: JSON.stringify(input) })
+  }
+
+  /** PUT replaces the definition. The name cannot change. */
+  async updateCronJob(id: number, input: CronJobInput): Promise<CronJob> {
+    return this.request<CronJob>(`/api/cron/${id}`, { method: "PUT", body: JSON.stringify(input) })
+  }
+
+  async deleteCronJob(id: number): Promise<void> {
+    await this.request<void>(`/api/cron/${id}`, { method: "DELETE" })
+  }
+
+  async setCronEnabled(id: number, enabled: boolean): Promise<CronJob> {
+    return this.request<CronJob>(`/api/cron/${id}/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+
+  /** 202 for started and queued, 200 for skipped; both resolve to the outcome. */
+  async runCronJob(id: number): Promise<RunResponse> {
+    return this.request<RunResponse>(`/api/cron/${id}/run`, { method: "POST", body: "{}" })
+  }
+
+  async cronRuns(id: number, limit?: number): Promise<CronRun[]> {
+    const q = limit === undefined ? "" : `?limit=${limit}`
+    return (await this.request<{ runs: CronRun[] }>(`/api/cron/${id}/runs${q}`)).runs
+  }
+
+  async cronRun(id: number, runId: number): Promise<CronRun> {
+    return this.request<CronRun>(`/api/cron/${id}/runs/${runId}`)
+  }
+
+  /**
+   * A GET whose body is read as a stream (a log tail, a search). The envelope,
+   * the 401 handling and `ApiError` are the same as `request`; on success the
+   * caller gets the live `Response`. `signal` is how the caller stops it.
+   */
+  async openStream(path: string, accept: string, signal?: AbortSignal): Promise<Response> {
+    const res = await this.#fetch(this.#baseUrl + path, {
+      method: "GET",
+      headers: { Accept: accept },
+      credentials: "same-origin",
+      signal,
+    })
+    if (res.ok) return res
+    const body = await readBody(res)
+    const envelope: ErrorEnvelope = isErrorEnvelope(body)
+      ? body
+      : { error: `http_${res.status}`, detail: res.statusText || "the request failed" }
+    const error = new ApiError(res.status, envelope.error, envelope.detail, {
+      field: typeof envelope.field === "string" ? envelope.field : undefined,
+      output: typeof envelope.output === "string" ? envelope.output : undefined,
+      payload: envelope,
+    })
+    if (error.isUnauthorized) this.#onUnauthorized?.()
+    throw error
   }
 
   /**
