@@ -549,7 +549,7 @@ PID → both restart → `systemctl restart panel` → apps keep their PIDs → 
 
 ### Status (2026-11-17)
 
-M5 is built and its exit gate passes: `scripts/smoke/5-apps.sh` ran 52/52 on Ubuntu 26.04.1
+M5 is built and its exit gate passes: `scripts/smoke/5-apps.sh` ran 62/62 on Ubuntu 26.04.1
 (`sandbox-u2604`) against the real supervisord v0.7.6, with the `panel install` re-run check
 (`SMOKE_REINSTALL=1`). EL9 has not been run.
 
@@ -566,31 +566,34 @@ and it writes `out.log.<timestamp>` and never a plain `out.log` (so the log was 
 | 5.5 | done | Manager tests run the real `confedit` editor against a fake supervisord that follows the upstream reload semantics. |
 | 5.6 | done | `?proxy=<url>` on `/sites`; asserted in the Playwright journey. |
 | 5.7 | done | `/api/apps`, `/api/runtimes`; Runtimes and Apps pages; 17 new vitest cases; `web/e2e/apps.spec.ts` against an in-memory supervisord. |
-| 5.8 | done | 52/52 on the VM. It cross-compiles `scripts/smoke/testdata/apps-hello` for the Go app. The socket check asserts that `www` is refused, because upstream ignores `chmod=0700` and leaves the socket mode 755. |
+| 5.8 | done | 62/62 on the VM. It cross-compiles `scripts/smoke/testdata/apps-hello` for the Go app. The socket check asserts that `www` is refused, because upstream ignores `chmod=0700` and leaves the socket mode 755. |
 
 Deviations from the step text:
 
 - **Log tail** reads the log file the program file names, not `readProcessStdoutLog`. It needs no RPC, and the SSE follower resumes from a byte offset.
-- **One config editor** now serves nginx, PHP and the supervisor program files (`cmd/panel/apps.go`), so one journal under `history/` covers all three and a replay can write any of them. The journal is replayed by the nginx reconciler, so on a host without Docker an unfinished apps apply is not replayed at boot.
+- **One config editor** now serves nginx, PHP and the supervisor program files (`cmd/panel/apps.go`), so one journal under `history/` covers all three and a replay can write any of them. `serve` replays the journal once at boot, before anything else and independent of Docker, so an unfinished apps apply is undone on a host without Docker too.
 - **Command and environment values are validated, not escaped.** `%` (supervisord interpolates it), newlines and NUL are refused everywhere, and `"` in an environment value, because no escape for them has been verified against the Go daemon.
 - **A program that will not stay up is a warning, not a failed apply.** The configuration is correct and the operator needs it saved to fix the program.
 - **Removing a Node version** removes its directory; it does not call `nvm uninstall`, so removal needs no shell. It refuses while an app uses the version.
-- **nvm is pinned by tag**, not by checksum: git checks the objects it fetches, but a moved tag is not detected.
+- **nvm is pinned by commit.** The tag `v0.40.3` is cloned, then `HEAD` must equal `977563e…`; a moved tag is refused and the checkout removed. Checked live from a fresh clone.
 
 Confirmed live: create, start, stop, delete and restart-after-`kill -9` through the RPC; `user=`
 drops privileges (the Node app runs as `www`); the socket refuses `www`; apps keep their PIDs
 across `systemctl restart panel` and a `panel install` re-run. `chmod=0700` is **not** honoured
 (socket mode 755), which is why the smoke asserts the refusal instead of the mode.
 
-Not proven: that `reloadConfig` reports an *edited* program as changed and `addProcessGroup` then
-replaces it (the smoke never edits an app; only the fake covers it); `startProcess` with `wait`
-against a program that crashes inside `startsecs`; and everything on EL9.
+Also confirmed live: an edit to a running app is reported as a change and the app restarts on a new
+PID (step 6b), and a program that dies inside `startsecs` is saved with a "did not start" warning
+instead of failing the save.
 
-Found while running the suite, not caused by M5: `TestRepairFixesALoosenedMode` fails at `71c35bc`
-(`modeOK` accepts a directory that is looser than required, so a loosened `data/` is never
-tightened), and `scripts/lint-conventions.sh` flags two M4 lines (`cmd/panel/firewall.go:81` and
-`internal/firewall/service_test.go:99`) for the word `ufw`. The login journey asserted that Files is
-a disabled placeholder, which stopped being true in M3; it now checks TLS.
+Not covered: EL8–EL10. `osdep` has only the Ubuntu implementation by decision (D29), and the EL pass
+is M9.
+
+Fixed on the way, not caused by M5: `modeOK` accepted a directory looser than required, so a
+loosened `data/` was never tightened (`TestRepairFixesALoosenedMode` failed at `71c35bc`);
+`scripts/lint-conventions.sh` failed on comment-only matches and lost its status in subshells, and
+flagged two M4 strings for the word `ufw`; the login journey asserted that Files is a disabled
+placeholder, which stopped being true in M3 (it now checks TLS).
 
 ---
 

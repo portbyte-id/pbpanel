@@ -98,6 +98,7 @@ cleanup_vm() {
 	api_call DELETE "$host" "$port" "/api/sites/$SITE?confirm=$SITE" >/dev/null 2>&1 || true
 	api_call DELETE "$host" "$port" "/api/apps/$NODE_APP" >/dev/null 2>&1 || true
 	api_call DELETE "$host" "$port" "/api/apps/$GO_APP" >/dev/null 2>&1 || true
+	api_call DELETE "$host" "$port" /api/apps/smoke-crash >/dev/null 2>&1 || true
 }
 
 # --- 1. the panel and supervisord ---------------------------------------------
@@ -229,6 +230,25 @@ wait_until 20 "the Go app to answer" serves "$GP" go-ok
 assert_http "GET the Go app's log" 200 "$(api_call GET "$host" "$port" "/api/apps/$GO_APP/logs")"
 assert_contains "the log holds the program's output" "apps-hello listening on $GP" "$(last_body)"
 assert_contains "the log file is on disk (cat)" "apps-hello listening" "$(vm "cat /www/panel/logs/apps/$GO_APP/out.log*" 2>/dev/null)"
+
+# --- 6b. edit a running app, and an app that dies at start ---------------------
+step 6b "edit a running app; save one that cannot stay up"
+before_edit=$(listen_pid "$GP")
+edit_body="{\"type\":\"go\",\"command\":\"/www/services/apps/$GO_APP/$GO_APP\",\"port\":$GP,\"env\":{\"SMOKE_EDIT\":\"1\"}}"
+assert_http "edit the running Go app (PUT)" 200 "$(api_call PUT "$host" "$port" "/api/apps/$GO_APP" "$edit_body")"
+assert_contains "the program file carries the edit (cat)" 'SMOKE_EDIT="1"' "$(vm "cat /www/panel/supervisor/conf.d/$GO_APP.conf" 2>/dev/null)"
+wait_until 30 "the edited Go app to answer" serves "$GP" go-ok
+after_edit=$(listen_pid "$GP")
+assert_not_equal "supervisord saw the edit as a change and restarted the app (new PID)" "$before_edit" "$after_edit"
+assert_equal "the edited app answers" go-ok "$(answer "$GP")"
+assert_equal "the edited app is RUNNING again (panel)" RUNNING "$(app_state "$GO_APP")"
+
+crash_body='{"name":"smoke-crash","type":"command","command":"/bin/false","restart":"never"}'
+assert_http "an app that exits at once is still saved" 201 "$(api_call POST "$host" "$port" /api/apps "$crash_body")"
+assert_contains "and the response says it did not start" "did not start" "$(last_body)"
+assert_not_equal "the panel does not report it RUNNING" RUNNING "$(app_state smoke-crash)"
+assert_ok "the panel is still healthy" panel_healthy
+assert_http "delete the crashing app" 204 "$(api_call DELETE "$host" "$port" /api/apps/smoke-crash)"
 
 # --- 7. a proxy site ----------------------------------------------------------
 step 7 "a reverse-proxy site in front of the Node app"
