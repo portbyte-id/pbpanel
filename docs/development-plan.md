@@ -467,6 +467,28 @@ that stop the obvious disasters and a recycle bin.
 → restore → contents, modes and owners identical. A hostile archive is rejected and writes nothing
 outside the target.
 
+### Status (2026-11-17)
+
+Steps 3.1–3.12 are built. The exit gate is `scripts/smoke/3-file-manager.sh` (step 3.12), which
+runs against a fresh Ubuntu VM and covers browse/create/rename/chmod/copy/move, trash with typed
+confirmation, editor conflict, chunked upload with offset and checksum, archive round-trip,
+hostile-path refusals and the Files settings. It has not been run on a host yet; the run is the
+M3 exit gate and is recorded here when it happens.
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 3.1–3.10 | done | Unit and API tests: `fm_linux_test.go` (policy table, symlink-swap races, chmod/copy/trash), `handlers_fm_linux_test.go` (route matrix, hostile archive, upload offsets and checksums, editor conflict), `policy_test.go`, `settings_test.go` (Files group). |
+| 3.11 | done | The review findings are the guardrails themselves: hard-deny list, `O_NOFOLLOW` everywhere, two-pass extract, typed confirmations. Regressions are pinned by the tests above. |
+| 3.12 | built, not host-proven | `scripts/smoke/3-file-manager.sh`. `bash -n` and a dry run pass. Needs a real Ubuntu VM; see "Open after M3". |
+
+**Open after M3.** Against §1.3:
+
+- Item 3: smoke 0 was not re-run after the M3 build (M3 does not touch its surface).
+- Item 5: every state-changing `/api/fm/*` route writes an audit entry, asserted in
+  `TestFMAuditRecordsPaths`; the audit mirror on the VM is not checked by the smoke script.
+- The smoke script itself has never run against a live VM: this repo has no Linux host wired up
+  in this environment. The script is committed so the next gate run on `.106` picks it up.
+
 ---
 
 ## 6. M4 — Firewall
