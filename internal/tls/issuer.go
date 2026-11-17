@@ -157,7 +157,7 @@ func (i *Issuer) IssueHTTP01(ctx context.Context, domain string, names []string,
 	if err != nil {
 		return Result{}, fmt.Errorf("tls: http-01 provider: %w", err)
 	}
-	return i.issue(ctx, domain, names, email, SourceHTTP01, func(c *lego.Client) error {
+	return i.issue(ctx, domain, names, email, SourceHTTP01, "", func(c *lego.Client) error {
 		return c.Challenge.SetHTTP01Provider(provider)
 	})
 }
@@ -177,7 +177,7 @@ func (i *Issuer) IssueDNS01(ctx context.Context, domain string, names []string, 
 	if err != nil {
 		return Result{}, fmt.Errorf("tls: DNS provider %s: %w", providerName, err)
 	}
-	return i.issue(ctx, domain, names, email, SourceDNS01, func(c *lego.Client) error {
+	return i.issue(ctx, domain, names, email, SourceDNS01, providerName, func(c *lego.Client) error {
 		var opts []dns01.ChallengeOption
 		if i.skipDNS {
 			opts = append(opts, dns01.WrapPreCheck(func(string, string, string, dns01.PreCheckFunc) (bool, error) {
@@ -217,7 +217,7 @@ func checkNames(domain string, names []string, wildcards bool) ([]string, error)
 }
 
 // issue is the shared tail of both challenges: account, order, persist.
-func (i *Issuer) issue(ctx context.Context, domain string, names []string, email, source string,
+func (i *Issuer) issue(ctx context.Context, domain string, names []string, email, source, provider string,
 	setSolver func(*lego.Client) error) (Result, error) {
 	dir := strings.TrimSpace(i.directory())
 	if dir == "" {
@@ -289,6 +289,7 @@ func (i *Issuer) issue(ctx context.Context, domain string, names []string, email
 		NotBefore: leaf.NotBefore, NotAfter: leaf.NotAfter,
 		Issuer: leaf.Issuer.String(), Serial: leaf.SerialNumber.Text(16),
 		LastRenewalAt: now, LastRenewalResult: RenewalOK, RedirectHTTP: redirect,
+		Provider: provider,
 	}
 	if err := i.st.PutCert(ctx, row); err != nil {
 		return Result{}, err
