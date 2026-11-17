@@ -624,6 +624,39 @@ Issue a certificate by HTTP-01 and a wildcard by DNS-01 against LE staging → `
 shows the staging issuer for both → force renewal → new serial → upload a certificate → served →
 replace the panel certificate → panel serves it without a restart.
 
+### Status (2026-11-17)
+
+M6 is **built, not gated**. Steps 6.1–6.8 are implemented and unit-tested; the exit gate (smoke 6)
+has not run because it needs a public VM, a Cloudflare zone and Let's Encrypt staging.
+
+| Step | State | Notes |
+|------|-------|-------|
+| 6.1 | done | `internal/secretbox`; sealed value `v1:<keyid>:<b64>`, bound to its row through the AAD. |
+| 6.2 | done | `internal/tls` store + `ValidateUpload`; migrations 0012, 0013 (`certs.provider`). Unix mode tests pass on Linux. |
+| 6.3 | done, real nginx 1.29 | The redirect is a server-level `if` chain in `tls.conf`; the ACME path is exempt. The nginx container mounts only `ssl/sites` and `ssl/acme-webroot`, read-only, never `ssl/` (panel key, ACME account key). |
+| 6.4 | done, Pebble | HTTP-01 through lego's webroot provider, with a pre-flight that never reaches the CA on failure. Passes against a real Pebble in WSL Docker. |
+| 6.5 | done, Pebble | DNS-01 wildcard passes against Pebble. The Cloudflare client is a direct v4 client (no process env) and is tested only against an httptest fake. |
+| 6.6 | done | Daily job, 30-day window, 6 h backoff after a failure. `MarkNotApplied` lets a failed install be retried without ordering again. |
+| 6.7 | done | `CertReloader`: swap on success only, `.prev` kept for one rollback, startup recovery from a half-written pair. The panel hostname issued by ACME is recorded in `ssl/panel-cert-domain`. |
+| 6.8 | done | 13 routes under `/api/sites/{domain}/tls`, `/api/tls/*`, `/api/panel/cert*`; TLS tab and `/tls` page. 202 vitest. |
+| 6.9 | written, not run | See below. |
+
+Deviations: no `tls.acme.email` setting (the registry cannot hold an empty default; the email is
+stored per ACME account). Terms of service are accepted automatically at first registration.
+`web/dist` is not rebuilt here. `web/` has no ESLint config, so the "eslint green" item of §1.3
+cannot be met yet.
+
+**Step 6.9 status: written, not run.** `scripts/smoke/6-tls.sh` follows the exit gate above and
+needs a VM with a public address, a test domain on Cloudflare and Let's Encrypt staging, none of
+which exists on the sandbox. Required environment: `SMOKE_HOST`, `TLS_TEST_DOMAIN` (an A record
+pointing at the VM), `TLS_TEST_WILDCARD_ZONE` (a Cloudflare zone; the wildcard is
+`*.smoke6.<zone>` unless `TLS_TEST_WILDCARD_SUB` is set) and `CF_API_TOKEN` (Zone:DNS:Edit, never
+printed). It refuses to run when `tls.acme.directory` is not the staging URL unless
+`TLS_ALLOW_PRODUCTION=1`. It was checked with `bash -n`, `dash -n`, a dry run and its pure helpers
+against local fixtures only; the API field names it reads (`job_id`, `source`, `redirect_http`,
+`serial`) follow the 6.8 contract and are unproven. It also assumes `DELETE
+/api/tls/providers/{name}` exists for cleanup.
+
 ---
 
 ## 9. M7 — Dashboard, logs, cron
