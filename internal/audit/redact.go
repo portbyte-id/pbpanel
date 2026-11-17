@@ -22,6 +22,8 @@ var secretKeyFragments = []string{
 	"authorization",
 	"cookie",
 	"key",
+	"credential",
+	"private",
 }
 
 func isSecretKey(key string) bool {

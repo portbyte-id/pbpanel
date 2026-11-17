@@ -15,6 +15,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/settings"
+	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
 	"github.com/portbyte-id/server-panel/internal/webui"
 	"github.com/portbyte-id/server-panel/web"
@@ -101,12 +102,32 @@ func serve(ctx context.Context, _ []string) error {
 	} else if len(restored) > 0 {
 		logger.Warn("restored files from an unfinished apply", "paths", restored)
 	}
-	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, ed, logger)
+	auditW := audit.New(st.DB(),
+		audit.WithMirrorPath(filepath.Join(layout.LogsDir(), "audit.log")),
+		audit.WithLogger(logger))
+
+	// Certificates before the sites model: it renders tls.conf from the store.
+	var (
+		tlsSvc   *tlsStack
+		tlsState sites.TLSState
+		tlsDeps  *httpapi.TLSDeps
+	)
+	if tlsSvc, err = newTLS(st, reg, layout, auditW, logger); err != nil {
+		logger.Error("TLS is not available", "error", err)
+		tlsSvc = nil
+	} else {
+		tlsState, tlsDeps = tlsSvc.state(), tlsSvc.Deps
+	}
+
+	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, ed, tlsState, logger)
 	if err != nil {
 		logger.Error("nginx is not available", "error", err)
 		nginxStack = nil
 	} else {
 		nginxDeps = nginxStack.deps()
+		if tlsDeps != nil {
+			tlsDeps.Sites = nginxStack.Sites
+		}
 	}
 
 	files := newFileManager(ctx, st, reg, layout, logger)
@@ -115,13 +136,19 @@ func serve(ctx context.Context, _ []string) error {
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
 	var listener *httpapi.Listener
+	if tlsDeps != nil {
+		tlsDeps.PanelCerts = func() *httpapi.CertReloader {
+			if listener == nil {
+				return nil
+			}
+			return listener.Certs()
+		}
+	}
 	handler, err := httpapi.New(httpapi.Deps{
 		Store:    st,
 		Settings: reg,
 		Auth:     authSvc,
-		Audit: audit.New(st.DB(),
-			audit.WithMirrorPath(filepath.Join(layout.LogsDir(), "audit.log")),
-			audit.WithLogger(logger)),
+		Audit:    auditW,
 		Jobs:     jobsMgr,
 		UI:       ui,
 		Nginx:    nginxDeps,
@@ -129,6 +156,7 @@ func serve(ctx context.Context, _ []string) error {
 		Firewall: newFirewall(ctx, st, reg, logger),
 		Apps:     appsSvc,
 		Runtimes: runtimesSvc,
+		TLS:      tlsDeps,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
@@ -152,6 +180,9 @@ func serve(ctx context.Context, _ []string) error {
 	logger.Info("panel listening", "bind", bind, "port", listener.Port())
 
 	go sweepSessions(ctx, authSvc, logger)
+	if tlsSvc != nil {
+		tlsSvc.start(ctx)
+	}
 
 	// After the listener: a slow image build or an absent Docker must not keep
 	// the operator out of the panel that can show them why.

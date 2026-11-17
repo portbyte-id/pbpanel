@@ -274,12 +274,21 @@ func (s *server) handleDeleteSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 		s.writeNginxError(w, r, err)
 		return
 	}
+	warn := warningsOf(res.Apply)
+	if s.deps.TLS != nil {
+		// The certificate store's rows and files belong to the site: leaving
+		// them would keep the renewer ordering for a domain nothing serves.
+		if msg := s.deps.TLS.removeSiteCert(r.Context(), r.PathValue("domain")); msg != "" {
+			s.logger.WarnContext(r.Context(), msg, "request_id", requestIDFrom(r.Context()))
+			warn = append(warn, msg)
+		}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		// WebRoot is where the site's content still is: it is kept until the
 		// trash arrives with the file manager.
 		WebRoot string `json:"web_root"`
 		applyResponse
-	}{res.WebRoot, applyResponse{warningsOf(res.Apply)}})
+	}{res.WebRoot, applyResponse{warn}})
 }
 
 type siteFileResponse struct {

@@ -210,3 +210,20 @@ func describeLeaf(c *x509.Certificate) CertInfo {
 		SelfSigned: bytes.Equal(c.RawIssuer, c.RawSubject) && c.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) == nil,
 	}
 }
+
+// HasPrevious reports whether a valid rollback pair from the last Replace is on
+// disk, which is what lets the UI offer to restore it.
+func (r *CertReloader) HasPrevious() bool {
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
+	certPEM, err := os.ReadFile(r.paths.CertFile + prevSuffix)
+	if err != nil {
+		return false
+	}
+	keyPEM, err := os.ReadFile(r.paths.KeyFile + prevSuffix)
+	if err != nil {
+		return false
+	}
+	_, err = tls.X509KeyPair(certPEM, keyPEM)
+	return err == nil
+}
