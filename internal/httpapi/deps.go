@@ -48,6 +48,9 @@ type Deps struct {
 	// Files is the file manager. Nil leaves /api/fm answering 503.
 	Files FileManager
 
+	// Firewall is the iptables firewall. Nil leaves /api/firewall answering 503.
+	Firewall FirewallService
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

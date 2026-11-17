@@ -241,24 +241,19 @@ func TestVersionPrintsVersion(t *testing.T) {
 	}
 }
 
-// TestStubsReportNotImplemented keeps the stubs honest: each must say what it is
-// waiting for, so a caller never mistakes a stub for a working command. install
-// and upgrade left this list when step 0.11 landed; the firewall pair waits for
-// M4.
-func TestStubsReportNotImplemented(t *testing.T) {
+// TestFirewallCommandsAreNotStubs pins that M4 landed: both commands must reach
+// the database, which a fresh data directory does not have.
+func TestFirewallCommandsAreNotStubs(t *testing.T) {
 	cmds := commandSet(io.Discard)
+	t.Setenv(dataDirEnv, t.TempDir())
 	for _, name := range []string{"firewall restore", "firewall disable"} {
 		c, _ := lookup(strings.Fields(name), cmds)
 		if c == nil {
 			t.Fatalf("command %q not found", name)
 		}
 		err := c.run(context.Background(), nil)
-		if err == nil {
-			t.Errorf("command %q: stub returned no error", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "not implemented yet") {
-			t.Errorf("command %q: error = %q, want it to say %q", name, err, "not implemented yet")
+		if err == nil || !strings.Contains(err.Error(), "panel install") {
+			t.Errorf("command %q: error = %v, want the missing-database error", name, err)
 		}
 	}
 }

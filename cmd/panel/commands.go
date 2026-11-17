@@ -65,15 +65,19 @@ func commandSet(stdout io.Writer) []*command {
 		},
 		{
 			name:    "firewall restore",
-			summary: "restore the saved ruleset at boot (M4)",
+			summary: "restore the saved ruleset at boot",
 			usage:   "panel firewall restore",
-			run:     notImplemented("firewall restore", "M4"),
+			run: func(ctx context.Context, _ []string) error {
+				return firewallRestore(ctx, stdout, databasePath())
+			},
 		},
 		{
 			name:    "firewall disable",
-			summary: "unhook and flush the panel chains from a console (M4)",
+			summary: "unhook and flush the panel chains from a console",
 			usage:   "panel firewall disable",
-			run:     notImplemented("firewall disable", "M4"),
+			run: func(ctx context.Context, _ []string) error {
+				return firewallDisable(ctx, stdout, databasePath())
+			},
 		},
 		{
 			name:    "version",
@@ -85,11 +89,5 @@ func commandSet(stdout io.Writer) []*command {
 				return err
 			},
 		},
-	}
-}
-
-func notImplemented(name, step string) func(context.Context, []string) error {
-	return func(context.Context, []string) error {
-		return fmt.Errorf("%s: not implemented yet (step %s)", name, step)
 	}
 }
