@@ -85,7 +85,13 @@ func (s *server) writeInternal(w http.ResponseWriter, r *http.Request, err error
 // field, because a client sending a field this build does not know about has a
 // different contract in mind than the one being served.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	return decodeJSONLimit(w, r, v, maxBody)
+}
+
+// decodeJSONLimit is decodeJSON with a caller-chosen size cap, for the one
+// route (saving a file in the editor) whose body is legitimately large.
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 

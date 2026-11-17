@@ -12,6 +12,18 @@ const (
 	groupLogin   = "Login"
 	groupSession = "Session"
 	groupPHP     = "PHP"
+	groupFiles   = "Files"
+)
+
+// File manager settings (development plan M3). Sizes are bytes.
+const (
+	KeyFMEditorMaxBytes     = "fm.editor.max_bytes"
+	KeyFMChunkMaxBytes      = "fm.upload.chunk_max_bytes"
+	KeyFMUploadSweepAge     = "fm.upload.sweep_age"
+	KeyFMTrashMaxBytes      = "fm.trash.max_bytes"
+	KeyFMTrashRetentionDays = "fm.trash.retention_days"
+	KeyFMArchiveMaxBytes    = "fm.archive.max_bytes"
+	KeyFMArchiveMaxEntries  = "fm.archive.max_entries"
 )
 
 // KeyPHPVersions names the versions offered on the PHP page.
@@ -90,6 +102,76 @@ func defaultKeys() []key {
 				Group:       groupPHP,
 			},
 			check: validatePHPVersions,
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMEditorMaxBytes,
+				Type:        TypeInt,
+				Default:     "2097152",
+				Description: "Largest file, in bytes, the text editor opens or saves.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(1024, 256<<20),
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMChunkMaxBytes,
+				Type:        TypeInt,
+				Default:     "8388608",
+				Description: "Largest upload chunk, in bytes, the server accepts. The browser sends smaller ones.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(64<<10, 64<<20),
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMUploadSweepAge,
+				Type:        TypeDuration,
+				Default:     "24h",
+				Description: "An unfinished upload idle for this long is deleted.",
+				Group:       groupFiles,
+			},
+			check: positiveDuration,
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMTrashMaxBytes,
+				Type:        TypeInt,
+				Default:     "10737418240",
+				Description: "Size limit of the recycle bin in bytes. The oldest entries are purged past it, and one item larger than this must be deleted permanently. 0 means no limit.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(0, 1<<50),
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMTrashRetentionDays,
+				Type:        TypeInt,
+				Default:     "30",
+				Description: "Days a deleted item stays in the recycle bin before the daily purge removes it. 0 keeps items until the size limit evicts them.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(0, 3650),
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMArchiveMaxBytes,
+				Type:        TypeInt,
+				Default:     "21474836480",
+				Description: "Most bytes one archive extraction may write. Guards against decompression bombs.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(1<<20, 1<<50),
+		},
+		{
+			meta: Meta{
+				Name:        KeyFMArchiveMaxEntries,
+				Type:        TypeInt,
+				Default:     "200000",
+				Description: "Most entries one archive extraction may contain.",
+				Group:       groupFiles,
+			},
+			check: rangeInt(1, 10_000_000),
 		},
 	}
 }

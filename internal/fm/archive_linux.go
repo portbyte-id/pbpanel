@@ -19,13 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Archive formats.
-const (
-	FormatZip   = "zip"
-	FormatTarGz = "tar.gz"
-	FormatTar   = "tar"
-)
-
 // archiveSink is what the tree walk writes into; tar.gz and zip each have one.
 type archiveSink interface {
 	dir(name string, st unix.Stat_t) error
@@ -327,20 +320,6 @@ type archiveEntry struct {
 	size   int64
 	target string // symlink or hardlink target
 	mtime  time.Time
-}
-
-// ArchiveFormatOf picks a format from a file name, or "".
-func ArchiveFormatOf(name string) string {
-	l := strings.ToLower(name)
-	switch {
-	case strings.HasSuffix(l, ".zip"):
-		return FormatZip
-	case strings.HasSuffix(l, ".tar.gz"), strings.HasSuffix(l, ".tgz"):
-		return FormatTarGz
-	case strings.HasSuffix(l, ".tar"):
-		return FormatTar
-	}
-	return ""
 }
 
 func archiveErr(format string, args ...any) error {
