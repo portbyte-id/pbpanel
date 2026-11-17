@@ -190,3 +190,64 @@ describe("isSafeMethod", () => {
     expect(isSafeMethod("DELETE")).toBe(false)
   })
 })
+
+describe("TLS routes", () => {
+  it("encodes the domain and sends the three upload fields as JSON", async () => {
+    const { fetch, calls } = stubFetch(jsonResponse({ cert: { domain: "a.test" }, warnings: [] }))
+    const client = new ApiClient({ fetch })
+    client.setCsrfToken("t")
+
+    await client.uploadSiteCert("a.test", { certificate: "c", chain: "", private_key: "k" })
+
+    expect(calls[0].url).toBe("/api/sites/a.test/tls/upload")
+    expect(calls[0].init.method).toBe("POST")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      certificate: "c",
+      chain: "",
+      private_key: "k",
+    })
+  })
+
+  it("returns the job id of an issuance", async () => {
+    const { fetch, calls } = stubFetch(jsonResponse({ job_id: "j1" }, 202))
+    const id = await new ApiClient({ fetch }).issueSiteCert("a.test", {
+      method: "dns01",
+      names: ["*.a.test"],
+      provider: "cf",
+    })
+    expect(id).toBe("j1")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      method: "dns01",
+      names: ["*.a.test"],
+      provider: "cf",
+    })
+  })
+
+  it("reads a missing certificate as null", async () => {
+    const { fetch } = stubFetch(jsonResponse({ cert: null }))
+    expect(await new ApiClient({ fetch }).siteTLS("a.test")).toBeNull()
+  })
+
+  it("puts a provider's token under credentials.api_token and reads nothing back", async () => {
+    const { fetch, calls } = stubFetch(new Response(null, { status: 204 }))
+    await new ApiClient({ fetch }).saveTLSProvider("cf", "cloudflare", "tok")
+    expect(calls[0].url).toBe("/api/tls/providers/cf")
+    expect(calls[0].init.method).toBe("PUT")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      kind: "cloudflare",
+      credentials: { api_token: "tok" },
+    })
+  })
+
+  it("sends the redirect flag and removes a certificate with DELETE", async () => {
+    const { fetch, calls } = stubFetch(jsonResponse({ domain: "a.test", redirect_http: true }))
+    const client = new ApiClient({ fetch })
+    await client.setSiteRedirect("a.test", true)
+    expect(calls[0].url).toBe("/api/sites/a.test/tls/redirect")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ redirect_http: true })
+
+    const del = stubFetch(new Response(null, { status: 204 }))
+    await new ApiClient({ fetch: del.fetch }).removeSiteCert("a.test")
+    expect(del.calls[0].init.method).toBe("DELETE")
+  })
+})

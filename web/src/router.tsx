@@ -11,6 +11,7 @@ import { nginxRoute } from "@/routes/_app/nginx"
 import { phpRoute } from "@/routes/_app/php"
 import { runtimesRoute } from "@/routes/_app/runtimes"
 import { settingsRoute } from "@/routes/_app/settings"
+import { tlsRoute } from "@/routes/_app/tls"
 import { siteRoute } from "@/routes/_app/site"
 import { sitesRoute } from "@/routes/_app/sites"
 import { loginRoute } from "@/routes/login"
@@ -34,6 +35,7 @@ const routeTree = rootRoute.addChildren([
     phpRoute,
     appsRoute,
     runtimesRoute,
+    tlsRoute,
     settingsRoute,
     auditRoute,
   ]),
