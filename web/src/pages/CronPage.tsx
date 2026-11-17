@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Plus } from "lucide-react"
 import { useState } from "react"
@@ -61,11 +62,7 @@ export function CronPage() {
     return <SkeletonRows label="Loading cron jobs…" />
   }
   if (jobs.error) {
-    return (
-      <p role="alert" className="text-destructive text-sm">
-        {jobs.error instanceof ApiError ? jobs.error.detail : "The cron jobs could not be loaded."}
-      </p>
-    )
+    return <ErrorState error={jobs.error} fallback="The cron jobs could not be loaded." onRetry={() => void jobs.refetch()} />
   }
 
   const list = jobs.data

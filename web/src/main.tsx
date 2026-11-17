@@ -1,10 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { RouterProvider } from "@tanstack/react-router"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { api } from "@/lib/api"
 import { applyTheme } from "@/lib/theme"
+import { toast } from "@/lib/toast"
 import { createAppRouter } from "@/router"
 import "@/index.css"
 
@@ -16,7 +17,15 @@ if (!rootElement) {
   throw new Error("root element missing from index.html")
 }
 
+// A mutation that names `meta.success` confirms itself with a toast; failures
+// stay inline beside the control that was pressed.
 const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onSuccess: (_data, _vars, _ctx, mutation) => {
+      const message = mutation.meta?.success
+      if (typeof message === "string") toast.success(message)
+    },
+  }),
   defaultOptions: {
     queries: {
       // The panel has one operator on one server; refetching on every window

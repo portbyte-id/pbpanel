@@ -2,6 +2,7 @@ import { Outlet, useRouterState } from "@tanstack/react-router"
 import { Menu, Search } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { Toaster } from "@/components/Toaster"
 import { CommandPalette } from "@/components/layout/CommandPalette"
 import { MobileNav } from "@/components/layout/MobileNav"
 import { navItemFor } from "@/components/layout/nav"
@@ -35,11 +36,17 @@ export function AppLayout() {
   }, [])
 
   return (
-    <div className="bg-background flex min-h-svh">
+    <div className="bg-background flex h-svh overflow-hidden">
+      <a
+        href="#main"
+        className="bg-primary text-primary-foreground sr-only z-[70] rounded-md px-3 py-2 text-sm font-medium focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+      >
+        Skip to content
+      </a>
       <Sidebar />
       <MobileNav open={navOpen} onOpenChange={setNavOpen} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-border bg-background/90 sticky top-0 z-30 flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4 backdrop-blur pointer-coarse:h-12">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="border-border bg-background/90 z-30 flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4 backdrop-blur pointer-coarse:h-12">
           <div className="flex min-w-0 items-center gap-2 md:items-baseline md:gap-3">
             <button
               type="button"
@@ -57,20 +64,22 @@ export function AppLayout() {
               type="button"
               onClick={() => setPaletteOpen(true)}
               aria-label="Go to page"
-              className="border-input bg-card text-muted-foreground hover:text-foreground flex h-7 items-center gap-2 rounded-md border pr-1.5 pl-2 text-xs"
+              className="border-input bg-card text-muted-foreground hover:text-foreground flex h-7 items-center gap-2 rounded-md border pr-1.5 pl-2 text-xs pointer-coarse:h-10 pointer-coarse:pr-2"
             >
               <Search className="size-3.5" aria-hidden="true" />
               <span className="hidden sm:inline">Go to…</span>
-              <kbd className="bg-muted text-muted-foreground rounded px-1 font-sans text-xs leading-4">Ctrl K</kbd>
+              <kbd className="pointer-coarse:hidden bg-muted text-muted-foreground rounded px-1 font-sans text-xs leading-4">Ctrl K</kbd>
             </button>
             <UserMenu username={me?.username ?? "admin"} />
           </div>
         </header>
-        <main className="flex-1 px-4 py-4">
+        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 outline-none">
+          {current && <p className="text-muted-foreground mb-3 text-sm md:hidden">{current.description}</p>}
           <Outlet />
         </main>
       </div>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <Toaster />
     </div>
   )
 }

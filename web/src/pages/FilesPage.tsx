@@ -1,4 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  Archive,
+  ArrowDownAZ,
+  ArrowUp,
+  ArrowUpAZ,
+  File as FileIcon,
+  FilePlus,
+  Folder,
+  FolderPlus,
+  Link2,
+  MoreHorizontal,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 
 import { ConfirmDialog, ExtractDialog, NameDialog, type PromptKind } from "@/components/fm/FMDialogs"
 import {
@@ -14,7 +30,6 @@ import {
 import { EditorDialog } from "@/components/fm/EditorDialog"
 import { TrashPanel } from "@/components/fm/TrashPanel"
 import { JobsDrawer } from "@/components/JobsDrawer"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select } from "@/components/ui/select"
 import { api, ApiError, type FMEntry, type FMListing } from "@/lib/api"
@@ -140,34 +155,66 @@ export function FilesPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Files views">
-        <Button
-          role="tab"
-          aria-selected={tab === "files"}
-          variant={tab === "files" ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setTab("files")}
-        >
-          Files
-        </Button>
-        <Button
-          role="tab"
-          aria-selected={tab === "trash"}
-          variant={tab === "trash" ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setTab("trash")}
-        >
-          Trash
-        </Button>
+    // The page fills the space AppLayout's <main> gives it. Everything but the
+    // listing is shrink-0, so only the listing scrolls.
+    <div className="flex h-full min-h-[28rem] flex-col gap-3">
+      <div
+        className="border-border flex shrink-0 flex-wrap items-center gap-1 border-b"
+        role="tablist"
+        aria-label="Files views"
+      >
+        {(["files", "trash"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm font-medium capitalize",
+              tab === t
+                ? "border-primary text-foreground"
+                : "text-muted-foreground hover:text-foreground border-transparent",
+            )}
+          >
+            {t === "files" ? (
+              <Folder className="size-3.5" aria-hidden="true" />
+            ) : (
+              <Trash2 className="size-3.5" aria-hidden="true" />
+            )}
+            {t === "files" ? "Files" : "Trash"}
+          </button>
+        ))}
       </div>
 
       {tab === "trash" ? (
-        <TrashPanel onChanged={reload} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <TrashPanel onChanged={reload} />
+        </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <FMBreadcrumbs path={path} onNavigate={setPath} />
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="Up one folder"
+              disabled={path === "/"}
+              onClick={() => setPath(path.slice(0, path.lastIndexOf("/")) || "/")}
+            >
+              <ArrowUp aria-hidden="true" />
+            </Button>
+            <div className="border-input bg-card flex h-7 min-w-0 flex-1 items-center overflow-x-auto rounded-md border px-2.5 pointer-coarse:h-10 [&_nav]:flex-nowrap [&_nav]:whitespace-nowrap">
+              <FMBreadcrumbs path={path} onNavigate={setPath} />
+            </div>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="Refresh"
+              disabled={pending}
+              onClick={reload}
+            >
+              <RefreshCw className={cn(pending && "animate-spin")} aria-hidden="true" />
+            </Button>
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
                 <input
@@ -194,16 +241,23 @@ export function FilesPage() {
                 aria-pressed={desc}
                 onClick={() => setDesc((d) => !d)}
               >
+                {desc ? (
+                  <ArrowUpAZ aria-hidden="true" />
+                ) : (
+                  <ArrowDownAZ aria-hidden="true" />
+                )}
                 {desc ? "Descending" : "Ascending"}
               </Button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => setPrompt("mkdir")}>
+              <FolderPlus aria-hidden="true" />
               New folder
             </Button>
             <Button size="sm" variant="outline" onClick={() => setPrompt("create")}>
+              <FilePlus aria-hidden="true" />
               New file
             </Button>
             <Button
@@ -212,18 +266,22 @@ export function FilesPage() {
               disabled={listing === null}
               onClick={() => fileInput.current?.click()}
             >
+              <Upload aria-hidden="true" />
               Upload here
             </Button>
+            <span className="bg-border mx-1 hidden h-5 w-px sm:block" role="presentation" />
             <Button
               size="sm"
               variant="outline"
               disabled={selection.entries.length === 0}
               onClick={() => void archiveSelected()}
             >
+              <Archive aria-hidden="true" />
               Archive selected
             </Button>
             {selection.entries.length === 1 && (
               <Button size="sm" variant="outline" onClick={() => setPrompt("rename")}>
+                <Pencil aria-hidden="true" />
                 Rename
               </Button>
             )}
@@ -236,6 +294,7 @@ export function FilesPage() {
                 setDeleting(selection.entries)
               }}
             >
+              <Trash2 aria-hidden="true" />
               Delete
             </Button>
             {selection.entries.length > 0 && (
@@ -257,7 +316,7 @@ export function FilesPage() {
           </div>
 
           {error && (
-            <p role="alert" className="text-destructive text-sm">
+            <p role="alert" className="text-destructive shrink-0 text-sm">
               {error}
             </p>
           )}
@@ -265,9 +324,15 @@ export function FilesPage() {
           {pending && listing === null ? (
             <p className="text-muted-foreground text-sm">Listing…</p>
           ) : listing !== null ? (
-            <div className="overflow-x-auto rounded-lg border">
+            // The one scroll container on the page: header row sticks, rows scroll.
+            <div
+              className={cn(
+                "bg-card min-h-0 flex-1 overflow-auto rounded-lg border transition-opacity",
+                pending && "opacity-60",
+              )}
+            >
               <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+                <thead className="bg-muted text-muted-foreground sticky top-0 z-10 text-left text-xs shadow-[0_1px_0_var(--border)]">
                   <tr>
                     <th scope="col" className="w-8 px-3 py-1.5">
                       <input
@@ -330,7 +395,21 @@ export function FilesPage() {
             </div>
           ) : null}
 
-          <UploadQueuePanel onQuiet={reload} />
+          {listing !== null && (
+            <div className="text-muted-foreground flex shrink-0 items-center justify-between gap-3 text-xs">
+              <span>
+                {listing.entries.filter((e) => e.kind === "dir").length} folders,{" "}
+                {listing.entries.filter((e) => e.kind !== "dir").length} files
+              </span>
+              <span>
+                {listing.entries.length < listing.total
+                  ? `Showing ${listing.entries.length} of ${listing.total}`
+                  : `Total ${listing.total}`}
+              </span>
+            </div>
+          )}
+
+          <UploadQueuePanel onQuiet={reload} className="max-h-40 shrink-0 overflow-y-auto" />
         </>
       )}
 
@@ -426,8 +505,37 @@ function FileRow({
       : [{ key: "download" as const, label: "Download" }]),
   ]
 
+  const menuButton = useRef<HTMLButtonElement>(null)
+
+  // Close the menu when anything scrolls, since a fixed menu would stay put
+  // while its row moves away.
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = () => onMenu()
+    window.addEventListener("scroll", close, true)
+    window.addEventListener("resize", close)
+    return () => {
+      window.removeEventListener("scroll", close, true)
+      window.removeEventListener("resize", close)
+    }
+  }, [menuOpen, onMenu])
+
+  let menuStyle: CSSProperties | undefined
+  if (menuOpen && menuButton.current) {
+    const r = menuButton.current.getBoundingClientRect()
+    const menuHeight = actions.length * 32 + 8
+    const flip = r.bottom + menuHeight > window.innerHeight
+    menuStyle = {
+      right: Math.max(8, window.innerWidth - r.right),
+      ...(flip ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+    }
+  }
+
   return (
-    <tr className={cn(selected && "bg-accent/50")} data-path={entry.path}>
+    <tr
+      className={cn("hover:bg-accent/40 transition-colors", selected && "bg-accent/50")}
+      data-path={entry.path}
+    >
       <td className="px-3 py-1.5">
         <input
           type="checkbox"
@@ -439,19 +547,21 @@ function FileRow({
       <td className="px-3 py-1.5">
         <button
           type="button"
-          className="text-left font-medium underline-offset-4 hover:underline"
+          className="flex items-center gap-2 text-left font-medium underline-offset-4 hover:underline"
           onClick={onOpen}
         >
-          {entry.name}
+          {entry.kind === "symlink" ? (
+            <Link2 className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          ) : dirLike ? (
+            <Folder className="size-4 shrink-0 fill-amber-400/30 text-amber-500" aria-hidden="true" />
+          ) : (
+            <FileIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          )}
+          <span>{entry.name}</span>
           {entry.kind === "symlink" && (
-            <span className="text-muted-foreground ml-1.5 text-xs">→ {entry.target}</span>
+            <span className="text-muted-foreground text-xs font-normal">→ {entry.target}</span>
           )}
         </button>
-        {dirLike && entry.kind !== "symlink" && (
-          <Badge variant="secondary" className="ml-2">
-            folder
-          </Badge>
-        )}
       </td>
       <td className="text-muted-foreground px-3 py-1.5 whitespace-nowrap">
         {formatSize(entry.size, dirLike)}
@@ -466,22 +576,26 @@ function FileRow({
         {formatMtime(entry.mtime)}
       </td>
       <td className="px-3 py-1.5 text-right">
-        <div className="relative flex justify-end">
+        <div className="flex justify-end">
           <Button
-            size="sm"
+            ref={menuButton}
+            size="icon-sm"
             variant="ghost"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-label={`Actions for ${entry.name}`}
             onClick={onMenu}
           >
-            ⋯
+            <MoreHorizontal aria-hidden="true" />
           </Button>
           {menuOpen && (
+            // Fixed, not absolute: the listing scrolls and clips, and a menu
+            // under the last row must not be cut off by it.
             <div
               role="menu"
               aria-label={`Actions for ${entry.name}`}
-              className="bg-background absolute right-0 z-10 mt-8 w-44 rounded-md border p-1 shadow-lg"
+              style={menuStyle}
+              className="bg-popover text-popover-foreground fixed z-50 w-44 rounded-md border p-1 shadow-lg"
             >
               {actions.map((a) => (
                 <button

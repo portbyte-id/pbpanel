@@ -1,7 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
   AppWindow,
-  Archive,
   CalendarClock,
   Cpu,
   FileText,
@@ -43,7 +42,7 @@ export interface FutureSection {
   milestone: string
 }
 
-export const futureSections: FutureSection[] = [{ label: "Docker", icon: Archive, milestone: "M8" }]
+export const futureSections: FutureSection[] = []
 
 export const navGroups: NavGroup[] = [
   {

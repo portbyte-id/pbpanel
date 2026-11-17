@@ -121,6 +121,7 @@ export function useAudit(limit?: number) {
 export function useSaveSettings() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Settings saved" },
     mutationFn: (writes: SettingWrite[]) => api.saveSettings(writes),
     onSuccess: (saved: SettingsResponse) => {
       client.setQueryData(queryKeys.settings, saved)
@@ -188,6 +189,7 @@ export function useSite(domain: string) {
 export function useCreateSite() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Site created" },
     mutationFn: (input: CreateSiteInput) => api.createSite(input),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.sites }),
   })
@@ -196,6 +198,7 @@ export function useCreateSite() {
 export function useUpdateSite(domain: string) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Site updated" },
     mutationFn: (input: UpdateSiteInput) => api.updateSite(domain, input),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.sites }),
   })
@@ -204,6 +207,7 @@ export function useUpdateSite(domain: string) {
 export function useDeleteSite() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Site deleted" },
     mutationFn: (domain: string) => api.deleteSite(domain),
     onSuccess: (_res, domain) => {
       client.removeQueries({ queryKey: queryKeys.site(domain) })
@@ -249,6 +253,7 @@ export function useConfigFile(source: ConfigSource) {
 export function useSaveConfigFile(source: ConfigSource) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Configuration saved" },
     mutationFn: (content: string) => {
       switch (source.kind) {
         case "site":
@@ -297,6 +302,7 @@ export function useNginxSettings() {
 export function useSaveNginxSettings() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "nginx settings saved" },
     mutationFn: (settings: NginxSettings) => api.saveNginxSettings(settings),
     onSuccess: (saved) => client.setQueryData(queryKeys.nginxSettings, saved),
   })
@@ -418,6 +424,7 @@ export function usePHPSettings(version: string) {
 export function useSavePHPSettings(version: string) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "PHP settings saved" },
     mutationFn: (settings: PHPSettings) => api.savePHPSettings(version, settings),
     onSuccess: (saved) => client.setQueryData(queryKeys.phpSettings(version), saved),
   })
@@ -430,6 +437,7 @@ export function useSitePool(domain: string) {
 export function useSaveSitePool(domain: string) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "PHP pool saved" },
     mutationFn: (settings: PoolSettings) => api.saveSitePool(domain, settings),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.sitePool(domain) }),
   })
@@ -479,6 +487,7 @@ function useFirewallInvalidate() {
 export function useSaveFirewallRule() {
   const invalidate = useFirewallInvalidate()
   return useMutation({
+    meta: { success: "Firewall rule saved" },
     mutationFn: (input: { id?: string; rule: FirewallRuleInput }) =>
       input.id === undefined
         ? api.createFirewallRule(input.rule)
@@ -490,6 +499,7 @@ export function useSaveFirewallRule() {
 export function useDeleteFirewallRule() {
   const invalidate = useFirewallInvalidate()
   return useMutation({
+    meta: { success: "Firewall rule deleted" },
     mutationFn: (id: string) => api.deleteFirewallRule(id),
     onSuccess: invalidate,
   })
@@ -498,6 +508,7 @@ export function useDeleteFirewallRule() {
 export function useAddBlocklistEntry() {
   const invalidate = useFirewallInvalidate()
   return useMutation({
+    meta: { success: "Added to the blocklist" },
     mutationFn: (input: { addr: string; comment?: string }) => api.addBlocklistEntry(input),
     onSuccess: invalidate,
   })
@@ -506,6 +517,7 @@ export function useAddBlocklistEntry() {
 export function useRemoveBlocklistEntry() {
   const invalidate = useFirewallInvalidate()
   return useMutation({
+    meta: { success: "Removed from the blocklist" },
     mutationFn: (id: string) => api.removeBlocklistEntry(id),
     onSuccess: invalidate,
   })
@@ -518,6 +530,7 @@ export function useRemoveBlocklistEntry() {
 function useFirewallApplyMutation(fn: () => Promise<FirewallPending>) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Removed from the blocklist" },
     mutationFn: fn,
     onSuccess: (pending) => {
       client.setQueryData<FirewallState>(queryKeys.firewallState, (old) =>
@@ -552,7 +565,7 @@ export function useRevertFirewall() {
 
 export function useDisableFirewall() {
   const invalidate = useFirewallInvalidate()
-  return useMutation({ mutationFn: () => api.disableFirewall(), onSuccess: invalidate })
+  return useMutation({ meta: { success: "Firewall disabled" }, mutationFn: () => api.disableFirewall(), onSuccess: invalidate })
 }
 
 /* --- Apps and runtimes (M5) ----------------------------------------------- */
@@ -565,6 +578,7 @@ export function useApps() {
 export function useSaveApp() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "App saved" },
     // `name` set means an edit: the name is the program name and cannot change.
     mutationFn: (input: { name?: string; app: AppInput }) =>
       input.name === undefined ? api.createApp(input.app) : api.updateApp(input.name, input.app),
@@ -575,6 +589,7 @@ export function useSaveApp() {
 export function useDeleteApp() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "App deleted" },
     mutationFn: (name: string) => api.deleteApp(name),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
   })
@@ -583,6 +598,7 @@ export function useDeleteApp() {
 export function useControlApp() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "App command sent" },
     mutationFn: (input: { name: string; action: AppAction }) =>
       api.controlApp(input.name, input.action),
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
@@ -655,6 +671,7 @@ export function useRefreshTLS() {
 export function useSetSiteRedirect(domain: string) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Redirect updated" },
     mutationFn: (on: boolean) => api.setSiteRedirect(domain, on),
     onSuccess: () => invalidateSiteTLS(client, domain),
   })
@@ -663,6 +680,7 @@ export function useSetSiteRedirect(domain: string) {
 export function useRemoveSiteCert(domain: string) {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Certificate removed" },
     mutationFn: () => api.removeSiteCert(domain),
     onSuccess: () => invalidateSiteTLS(client, domain),
   })
@@ -679,6 +697,7 @@ export function useTLSProviders() {
 export function useSaveTLSProvider() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Provider saved" },
     mutationFn: (input: { name: string; kind: string; apiToken: string }) =>
       api.saveTLSProvider(input.name, input.kind, input.apiToken),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsProviders }),
@@ -688,6 +707,7 @@ export function useSaveTLSProvider() {
 export function useDeleteTLSProvider() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Provider deleted" },
     mutationFn: (name: string) => api.deleteTLSProvider(name),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsProviders }),
   })
@@ -764,6 +784,7 @@ export function useServices() {
 export function useControlService() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Service command sent" },
     mutationFn: (input: { name: string; action: ServiceAction }) =>
       api.controlService(input.name, input.action),
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.services }),
@@ -806,6 +827,7 @@ export function useCronJobs() {
 export function useSaveCronJob() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Cron job saved" },
     // `id` set means an edit: the name cannot change.
     mutationFn: (input: { id?: number; job: CronJobInput }) =>
       input.id === undefined ? api.createCronJob(input.job) : api.updateCronJob(input.id, input.job),
@@ -816,6 +838,7 @@ export function useSaveCronJob() {
 export function useDeleteCronJob() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Cron job deleted" },
     mutationFn: (id: number) => api.deleteCronJob(id),
     onSuccess: (_res, id) => {
       client.removeQueries({ queryKey: queryKeys.cronRuns(id) })
@@ -827,6 +850,7 @@ export function useDeleteCronJob() {
 export function useSetCronEnabled() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Cron job updated" },
     mutationFn: (input: { id: number; enabled: boolean }) => api.setCronEnabled(input.id, input.enabled),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.cron }),
   })
@@ -835,6 +859,7 @@ export function useSetCronEnabled() {
 export function useRunCronJob() {
   const client = useQueryClient()
   return useMutation({
+    meta: { success: "Cron job started" },
     mutationFn: (id: number) => api.runCronJob(id),
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.cron }),
   })
