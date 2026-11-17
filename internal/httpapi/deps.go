@@ -45,6 +45,9 @@ type Deps struct {
 	// answering 503, which is what a host without Docker looks like.
 	Nginx *NginxDeps
 
+	// Files is the file manager. Nil leaves /api/fm answering 503.
+	Files FileManager
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

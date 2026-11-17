@@ -407,3 +407,29 @@ func (s *Service) RunPurgeLoop(ctx context.Context, onError func(error)) {
 		}
 	}
 }
+
+// PreflightTrash runs the guardrails of Trash without moving anything, so the
+// API can refuse a protected or unconfirmed delete with a status code before it
+// has started a job.
+func (s *Service) PreflightTrash(clean, confirm string) error {
+	p, err := s.parentOf(clean)
+	if err != nil {
+		return err
+	}
+	defer p.close()
+	real := p.full()
+	if err := s.pol.CheckDestructive(real); err != nil {
+		return err
+	}
+	if s.internalTree(real) {
+		return fmt.Errorf("%w: use the Trash view for %s", ErrProtected, real)
+	}
+	st, err := lstatAt(p.fd, p.base)
+	if err != nil {
+		return err
+	}
+	if isDir(st) {
+		return s.pol.CheckConfirm(real, confirm)
+	}
+	return nil
+}

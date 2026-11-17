@@ -464,7 +464,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
 	groups := r.Groups()
-	wantGroups := []string{"Panel", "Login", "Session", "PHP"}
+	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Files"}
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("got %d groups, want %d: %+v", len(groups), len(wantGroups), groups)
 	}
@@ -479,6 +479,8 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"Login":   {"login.max_attempts", "login.lockout"},
 		"Session": {"session.idle_timeout"},
 		"PHP":     {"php.versions"},
+		"Files": {"fm.editor.max_bytes", "fm.upload.chunk_max_bytes", "fm.upload.sweep_age",
+			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
 	}
 	seen := 0
 	for _, g := range groups {

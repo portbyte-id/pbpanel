@@ -96,6 +96,8 @@ func serve(ctx context.Context, _ []string) error {
 		nginxDeps = nginxStack.deps()
 	}
 
+	files := newFileManager(ctx, st, reg, layout, logger)
+
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
 	var listener *httpapi.Listener
@@ -109,6 +111,7 @@ func serve(ctx context.Context, _ []string) error {
 		Jobs:  jobsMgr,
 		UI:    ui,
 		Nginx: nginxDeps,
+		Files: files,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {

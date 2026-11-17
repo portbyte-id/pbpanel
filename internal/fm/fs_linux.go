@@ -805,3 +805,31 @@ func treeSize(ctx context.Context, fd int, name string, st unix.Stat_t) (int64, 
 	}
 	return total, nil
 }
+
+// CheckRecursive runs the guardrails of a recursive chmod or chown without
+// touching anything, so the API can refuse (and say why) before it creates a
+// job. It judges the real path, so a link to /etc is judged as /etc.
+func (f *FS) CheckRecursive(clean, confirm string) error {
+	p, err := f.parentOf(clean)
+	if err != nil {
+		return err
+	}
+	defer p.close()
+	if p.base == "" {
+		return fmt.Errorf("%w: the filesystem root", ErrProtected)
+	}
+	if err := f.pol.CheckDestructive(p.full()); err != nil {
+		return err
+	}
+	st, err := lstatAt(p.fd, p.base)
+	if err != nil {
+		return err
+	}
+	if isLink(st) {
+		return fmt.Errorf("%w: %s", ErrSymlink, p.full())
+	}
+	if !isDir(st) {
+		return nil
+	}
+	return f.pol.CheckConfirm(p.full(), confirm)
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -228,6 +229,27 @@ func LanguageOf(name string) string {
 	}
 	if name == "Dockerfile" {
 		return "shell"
+	}
+	return ""
+}
+
+// Archive formats.
+const (
+	FormatZip   = "zip"
+	FormatTarGz = "tar.gz"
+	FormatTar   = "tar"
+)
+
+// ArchiveFormatOf picks a format from a file name, or "".
+func ArchiveFormatOf(name string) string {
+	l := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(l, ".zip"):
+		return FormatZip
+	case strings.HasSuffix(l, ".tar.gz"), strings.HasSuffix(l, ".tgz"):
+		return FormatTarGz
+	case strings.HasSuffix(l, ".tar"):
+		return FormatTar
 	}
 	return ""
 }
