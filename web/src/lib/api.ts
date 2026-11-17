@@ -353,6 +353,45 @@ export interface NginxServiceStatus {
   }
 }
 
+export type FirewallProtocol = "tcp" | "udp" | "both"
+
+export interface FirewallPending {
+  token: string
+  startedAt: string
+  deadline: string
+}
+
+export interface FirewallState {
+  enabled: boolean
+  ipv6: boolean
+  /** Stored rules differ from the live, confirmed ruleset. */
+  dirty: boolean
+  sshPorts: number[]
+  panelPort: number
+  pending: FirewallPending | null
+  /** Non-panel containers publishing ports; Docker bypasses the panel's rules for these. */
+  dockerPorts: { container: string; port: number; protocol: string }[]
+  builtins: { label: string; detail: string }[]
+}
+
+export interface FirewallRule {
+  id: string
+  portStart: number
+  portEnd: number
+  protocol: FirewallProtocol
+  source?: string
+  comment?: string
+  enabled: boolean
+}
+
+export type FirewallRuleInput = Omit<FirewallRule, "id">
+
+export interface BlocklistEntry {
+  id: string
+  addr: string
+  comment?: string
+}
+
 /** A failed request. `code` is the envelope's `error`, `detail` its sentence. */
 export class ApiError extends Error {
   readonly status: number
@@ -868,6 +907,75 @@ export class ApiClient {
       `/api/config-history/${encodeURIComponent(file)}/${version}/restore`,
       { method: "POST" },
     )
+  }
+
+  async firewall(): Promise<FirewallState> {
+    return this.request<FirewallState>("/api/firewall")
+  }
+
+  async firewallRules(): Promise<FirewallRule[]> {
+    return (await this.request<{ rules: FirewallRule[] }>("/api/firewall/rules")).rules
+  }
+
+  async createFirewallRule(input: FirewallRuleInput): Promise<FirewallRule> {
+    return this.request<FirewallRule>("/api/firewall/rules", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async updateFirewallRule(id: string, input: FirewallRuleInput): Promise<FirewallRule> {
+    return this.request<FirewallRule>(`/api/firewall/rules/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteFirewallRule(id: string): Promise<void> {
+    return this.request<void>(`/api/firewall/rules/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    })
+  }
+
+  async firewallBlocklist(): Promise<BlocklistEntry[]> {
+    return (await this.request<{ entries: BlocklistEntry[] }>("/api/firewall/blocklist")).entries
+  }
+
+  async addBlocklistEntry(input: { addr: string; comment?: string }): Promise<BlocklistEntry> {
+    return this.request<BlocklistEntry>("/api/firewall/blocklist", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async removeBlocklistEntry(id: string): Promise<void> {
+    return this.request<void>(`/api/firewall/blocklist/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    })
+  }
+
+  /** First enable: the server stops and masks ufw, then applies with the confirm timer. */
+  async enableFirewall(): Promise<FirewallPending> {
+    return this.request<FirewallPending>("/api/firewall/enable", { method: "POST", body: "{}" })
+  }
+
+  async applyFirewall(): Promise<FirewallPending> {
+    return this.request<FirewallPending>("/api/firewall/apply", { method: "POST", body: "{}" })
+  }
+
+  async confirmFirewall(token: string): Promise<void> {
+    return this.request<void>("/api/firewall/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+  }
+
+  async revertFirewall(): Promise<void> {
+    return this.request<void>("/api/firewall/revert", { method: "POST", body: "{}" })
+  }
+
+  async disableFirewall(): Promise<void> {
+    return this.request<void>("/api/firewall/disable", { method: "POST", body: "{}" })
   }
 
   /**
