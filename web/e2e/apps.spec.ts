@@ -15,7 +15,7 @@ async function login(page: Page) {
   await page.getByLabel("Username").fill("admin")
   await page.getByLabel("Password").fill(PASSWORD)
   await page.getByRole("button", { name: "Sign in" }).click()
-  await expect(page).toHaveURL(/\/settings/)
+  await expect(page).toHaveURL(/\/dashboard/)
 }
 
 test("add an app, control it, open the proxy-site shortcut, see a refused file", async ({ page }) => {

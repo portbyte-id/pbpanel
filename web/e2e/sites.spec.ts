@@ -17,7 +17,7 @@ async function login(page: Page) {
   await page.getByLabel("Username").fill("admin")
   await page.getByLabel("Password").fill(PASSWORD)
   await page.getByRole("button", { name: "Sign in" }).click()
-  await expect(page).toHaveURL(/\/settings/)
+  await expect(page).toHaveURL(/\/dashboard/)
 }
 
 /** Replaces the whole document of the CodeMirror editor. */

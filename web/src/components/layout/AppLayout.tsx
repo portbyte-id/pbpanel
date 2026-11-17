@@ -32,10 +32,16 @@ export function AppLayout() {
 }
 
 function pageTitle(path: string): string {
+  if (path.startsWith("/dashboard")) return "Dashboard"
   if (path.startsWith("/sites")) return "Sites"
   if (path.startsWith("/files")) return "Files"
   if (path.startsWith("/nginx")) return "Nginx"
+  if (path.startsWith("/php")) return "PHP"
+  if (path.startsWith("/tls")) return "TLS"
+  if (path.startsWith("/firewall")) return "Firewall"
   if (path.startsWith("/apps")) return "Apps"
+  if (path.startsWith("/logs")) return "Logs"
+  if (path.startsWith("/cron")) return "Cron"
   if (path.startsWith("/runtimes")) return "Runtimes"
   if (path.startsWith("/settings")) return "Settings"
   if (path.startsWith("/audit")) return "Audit log"
