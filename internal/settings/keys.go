@@ -2,6 +2,7 @@ package settings
 
 import (
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -13,6 +14,7 @@ const (
 	groupSession = "Session"
 	groupPHP     = "PHP"
 	groupFiles   = "Files"
+	groupTLS     = "TLS"
 )
 
 // File manager settings (development plan M3). Sizes are bytes.
@@ -25,6 +27,28 @@ const (
 	KeyFMArchiveMaxBytes    = "fm.archive.max_bytes"
 	KeyFMArchiveMaxEntries  = "fm.archive.max_entries"
 )
+
+// TLS settings (development plan M6). The certificate issuer and the renewal
+// job read them; the defaults are chosen so a fresh install cannot burn the
+// production rate limits.
+const (
+	// KeyTLSACMEDirectory is the ACME directory URL new orders go to.
+	KeyTLSACMEDirectory = "tls.acme.directory"
+	// KeyTLSRenewDaysBefore is how many days before expiry a certificate is renewed.
+	KeyTLSRenewDaysBefore = "tls.renew.days_before"
+
+	// DefaultACMEDirectory is Let's Encrypt staging. Staging certificates are
+	// not trusted by browsers; switching to production is a deliberate act.
+	DefaultACMEDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+)
+
+func validateACMEDirectory(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("must be an https URL such as " + DefaultACMEDirectory)
+	}
+	return nil
+}
 
 // KeyPHPVersions names the versions offered on the PHP page.
 const KeyPHPVersions = "php.versions"
@@ -172,6 +196,26 @@ func defaultKeys() []key {
 				Group:       groupFiles,
 			},
 			check: rangeInt(1, 10_000_000),
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSACMEDirectory,
+				Type:        TypeString,
+				Default:     DefaultACMEDirectory,
+				Description: "ACME directory URL certificates are ordered from. The default is the Let's Encrypt staging endpoint, whose certificates browsers do not trust; set the production URL to issue real ones.",
+				Group:       groupTLS,
+			},
+			check: validateACMEDirectory,
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSRenewDaysBefore,
+				Type:        TypeInt,
+				Default:     "30",
+				Description: "A certificate is renewed when it has this many days or fewer left.",
+				Group:       groupTLS,
+			},
+			check: rangeInt(1, 60),
 		},
 	}
 }
