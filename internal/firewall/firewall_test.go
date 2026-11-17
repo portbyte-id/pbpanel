@@ -124,7 +124,7 @@ func sampleInput() RenderInput {
 	return RenderInput{
 		SSHPorts:  []int{22, 2222},
 		PanelPort: 8443,
-		HookInput: true,
+		HookV4:    true, HookV6: true,
 		Rules: []Rule{
 			{ID: 1, PortStart: 80, PortEnd: 80, Protocol: ProtoTCP, Enabled: true, Comment: "http"},
 			{ID: 2, PortStart: 443, PortEnd: 443, Protocol: ProtoBoth, Enabled: true},
@@ -218,7 +218,7 @@ func TestRenderBuiltinsAlwaysPresent(t *testing.T) {
 		t.Fatalf("built-in port 22 rendered %d times", n)
 	}
 	if strings.Contains(r.V4, "-I INPUT") {
-		t.Fatal("jump emitted without HookInput")
+		t.Fatal("jump emitted without a hook flag")
 	}
 	if !strings.Contains(r.V4, "-A PANEL-INPUT -j DROP") {
 		t.Fatal("final DROP missing")
