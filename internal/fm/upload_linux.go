@@ -165,15 +165,15 @@ func (s *Service) UploadChunk(ctx context.Context, id string, offset int64, sum 
 		return u, ErrChecksum
 	}
 
-	f, err := os.OpenFile(s.partPath(id), os.O_WRONLY, 0)
+	f, err := unix.Open(s.partPath(id), unix.O_WRONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return u, mapErr(err)
 	}
-	defer f.Close()
-	if _, err := f.WriteAt(buf, offset); err != nil {
+	defer unix.Close(f)
+	if _, err := unix.Pwrite(f, buf, offset); err != nil {
 		return u, mapErr(err)
 	}
-	if err := f.Sync(); err != nil {
+	if err := unix.Fsync(f); err != nil {
 		return u, mapErr(err)
 	}
 	u.Received += int64(len(buf))
@@ -224,6 +224,12 @@ func (s *Service) UploadComplete(ctx context.Context, id, wholeSum string) (stri
 	defer dp.close()
 	if err := s.pol.CheckWrite(dp.dir); err != nil {
 		return "", err
+	}
+	if s.internalTree(dp.dir) {
+		return "", fmt.Errorf("%w: %s is managed by the panel", ErrProtected, dp.dir)
+	}
+	if s.internalTree(dp.dir) {
+		return "", fmt.Errorf("%w: %s is managed by the panel", ErrProtected, dp.dir)
 	}
 	mode, uid, gid := uint32(0o644), -1, -1
 	if st, err := lstatAt(dp.fd, dp.base); err == nil {

@@ -27,6 +27,12 @@ import (
 type FS struct {
 	pol Policy
 
+	// guard, when set, refuses a destination the embedding Service keeps to
+	// itself (the trash and uploads trees). It runs on the resolved real path
+	// of a create target or a move/copy destination, and nowhere else: the
+	// Trash and Upload APIs write into those trees on purpose.
+	guard func(real string) error
+
 	mu     sync.Mutex
 	users  map[uint32]string
 	groups map[uint32]string
@@ -381,6 +387,11 @@ func (f *FS) create(clean string, fn func(*parent) error) error {
 	if err := f.pol.CheckWrite(p.full()); err != nil {
 		return err
 	}
+	if f.guard != nil {
+		if err := f.guard(p.dir); err != nil {
+			return err
+		}
+	}
 	return fn(p)
 }
 
@@ -437,6 +448,11 @@ func (f *FS) Move(ctx context.Context, src, dst string, progress Progress) error
 	if err := f.pol.CheckWrite(dp.dir); err != nil {
 		return err
 	}
+	if f.guard != nil {
+		if err := f.guard(dp.dir); err != nil {
+			return err
+		}
+	}
 	if Within(sp.full(), dp.dir) {
 		return ErrIntoItself
 	}
@@ -471,6 +487,11 @@ func (f *FS) Copy(ctx context.Context, src, dst string, progress Progress) error
 	defer dp.close()
 	if err := f.pol.CheckWrite(dp.dir); err != nil {
 		return err
+	}
+	if f.guard != nil {
+		if err := f.guard(dp.dir); err != nil {
+			return err
+		}
 	}
 	if Within(sp.full(), dp.dir) {
 		return ErrIntoItself

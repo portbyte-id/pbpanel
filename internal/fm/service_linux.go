@@ -63,6 +63,15 @@ func New(o Options) (*Service, error) {
 		configTrees: []string{path.Join(panel, "nginx"), path.Join(panel, "php")},
 		limits:      o.Limits, now: o.Now,
 	}
+	// The trash and uploads trees are reachable only through the Trash and
+	// Upload APIs: a rename in there would orphan an index row. The guard runs
+	// on the resolved path of a create target or a move/copy destination.
+	s.FS.guard = func(real string) error {
+		if s.internalTree(real) {
+			return fmt.Errorf("%w: %s is managed by the panel", ErrProtected, real)
+		}
+		return nil
+	}
 	if s.limits == nil {
 		s.limits = func(context.Context) Limits { return DefaultLimits() }
 	}
