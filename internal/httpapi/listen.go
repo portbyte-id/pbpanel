@@ -32,8 +32,8 @@ func ListenAndServeTLS(ctx context.Context, reg *settings.Registry, paths CertPa
 // caller can decide when to bind. Step 0.8 (a port change without lock-out)
 // needs exactly this: start the new listener, then close the old one.
 //
-// The pair is loaded into TLSConfig.Certificates, which ListenAndServeTLS uses
-// when both of its file arguments are empty. ListenAndServe would ignore
+// The pair is served through TLSConfig.GetCertificate, which ListenAndServeTLS
+// accepts when both of its file arguments are empty. ListenAndServe would ignore
 // TLSConfig altogether and serve plain HTTP, so the TLS entry point is the only
 // correct way to start this server.
 func NewServer(ctx context.Context, reg *settings.Registry, paths CertPaths, h http.Handler) (*http.Server, error) {
@@ -42,7 +42,7 @@ func NewServer(ctx context.Context, reg *settings.Registry, paths CertPaths, h h
 		return nil, err
 	}
 
-	cert, err := tls.LoadX509KeyPair(paths.CertFile, paths.KeyFile)
+	certs, err := NewCertReloader(paths)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: load certificate pair: %w", err)
 	}
@@ -58,8 +58,8 @@ func NewServer(ctx context.Context, reg *settings.Registry, paths CertPaths, h h
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{cert},
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: certs.GetCertificate,
 		},
 	}
 
