@@ -23,6 +23,7 @@ const DefaultGrace = 5 * time.Second
 type Listener struct {
 	handler http.Handler
 	tlsCfg  *tls.Config
+	certs   *CertReloader
 	bind    string
 	grace   time.Duration
 
@@ -41,7 +42,7 @@ type Listener struct {
 // serving yet. bind is the interface address (panel.bind); grace is how long a
 // retired listener lingers, with zero meaning DefaultGrace.
 func NewListener(h http.Handler, paths CertPaths, bind string, grace time.Duration) (*Listener, error) {
-	cert, err := tls.LoadX509KeyPair(paths.CertFile, paths.KeyFile)
+	certs, err := NewCertReloader(paths)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: load certificate pair: %w", err)
 	}
@@ -52,9 +53,13 @@ func NewListener(h http.Handler, paths CertPaths, bind string, grace time.Durati
 		handler: h,
 		bind:    bind,
 		grace:   grace,
+		certs:   certs,
+		// GetCertificate, not Certificates: every listener the Listener ever binds
+		// (including a rebound one) shares this config, so one swap in the
+		// reloader reaches them all.
 		tlsCfg: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{cert},
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: certs.GetCertificate,
 		},
 	}, nil
 }
@@ -173,3 +178,7 @@ func shutdown(srv *http.Server) {
 		_ = srv.Close()
 	}
 }
+
+// Certs is the reloader behind the listener's certificate, so the API that
+// replaces the panel certificate can swap it without a restart.
+func (l *Listener) Certs() *CertReloader { return l.certs }
