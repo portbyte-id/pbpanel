@@ -79,7 +79,7 @@ export function Sidebar({
                 activeOptions={{ exact: false }}
                 onClick={onNavigate}
                 className={cn(
-                  "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground flex h-7 items-center gap-2 rounded-md px-2 text-sm",
+                  "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground flex h-7 items-center gap-2 rounded-md px-2 text-sm pointer-coarse:h-11",
                   "data-[status=active]:bg-sidebar-accent data-[status=active]:text-foreground data-[status=active]:font-medium",
                   collapsed && "justify-center px-0",
                 )}
@@ -123,7 +123,7 @@ export function Sidebar({
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-pressed={collapsed}
           className={cn(
-            "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground flex h-7 w-full items-center gap-2 rounded-md px-2 text-xs",
+            "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground flex h-7 w-full items-center gap-2 rounded-md px-2 text-xs pointer-coarse:h-11",
             collapsed && "justify-center px-0",
           )}
         >

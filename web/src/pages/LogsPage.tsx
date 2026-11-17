@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 
@@ -7,7 +8,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError } from "@/lib/api"
 import {
   DEFAULT_LAST_MB,
   DEFAULT_LIMIT,
@@ -42,13 +42,7 @@ export function LogsPage() {
     return <SkeletonRows label="Loading log sources…" />
   }
   if (sources.error) {
-    return (
-      <p role="alert" className="text-destructive text-sm">
-        {sources.error instanceof ApiError
-          ? sources.error.detail
-          : "The log sources could not be loaded."}
-      </p>
-    )
+    return <ErrorState error={sources.error} fallback="The log sources could not be loaded." onRetry={() => void sources.refetch()} />
   }
 
   return (
@@ -502,6 +496,7 @@ export function SearchPanel({ source }: { source: LogSource }) {
                           title="This file was read from the middle, so the line number counts from the first line read."
                         >
                           partial
+                          <span className="sr-only">: this file was read from the middle, so the line number counts from the first line read</span>
                         </Badge>
                       )}
                     </td>

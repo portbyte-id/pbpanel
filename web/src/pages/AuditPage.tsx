@@ -1,10 +1,11 @@
+import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { useState } from "react"
 
 import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ApiError, type AuditEntry } from "@/lib/api"
+import { type AuditEntry } from "@/lib/api"
 import { useAudit } from "@/lib/queries"
 
 const PAGE_SIZE = 100
@@ -18,18 +19,14 @@ const PAGE_SIZE = 100
  * free-form by design and the writer has already redacted it.
  */
 export function AuditPage() {
-  const { data, isPending, error } = useAudit(PAGE_SIZE)
+  const { data, isPending, error, refetch } = useAudit(PAGE_SIZE)
   const [jobId, setJobId] = useState<string | null>(null)
 
   if (isPending) {
     return <SkeletonRows label="Loading audit log…" />
   }
   if (error) {
-    return (
-      <p role="alert" className="text-destructive text-sm">
-        {error instanceof ApiError ? error.detail : "The audit log could not be loaded."}
-      </p>
-    )
+    return <ErrorState error={error} fallback="The audit log could not be loaded." onRetry={() => void refetch()} />
   }
 
   const entries = data?.entries ?? []

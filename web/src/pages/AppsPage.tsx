@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
@@ -39,7 +40,7 @@ export function isRunning(app: Pick<PanelApp, "state">): boolean {
 
 /** The apps: their state, controls, logs, and a shortcut to put a site in front of one. */
 export function AppsPage() {
-  const { data, isPending, error } = useApps()
+  const { data, isPending, error, refetch } = useApps()
   const control = useControlApp()
   const remove = useDeleteApp()
   const [editing, setEditing] = useState<PanelApp | "new" | null>(null)
@@ -50,11 +51,7 @@ export function AppsPage() {
     return <SkeletonRows label="Loading apps…" />
   }
   if (error) {
-    return (
-      <p role="alert" className="text-destructive text-sm">
-        {error instanceof ApiError ? error.detail : "The apps could not be loaded."}
-      </p>
-    )
+    return <ErrorState error={error} fallback="The apps could not be loaded." onRetry={() => void refetch()} />
   }
 
   const act = (name: string, action: AppAction) => control.mutate({ name, action })

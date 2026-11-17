@@ -1,19 +1,21 @@
 import { useNavigate } from "@tanstack/react-router"
-import { CornerDownLeft, Search } from "lucide-react"
+import { CornerDownLeft, Globe, Search } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
-import { builtSections } from "@/components/layout/nav"
+import { builtSections, type NavItem } from "@/components/layout/nav"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { useSites } from "@/lib/queries"
 import { cn } from "@/lib/utils"
 
 /**
- * Jump to any page by name. The pages are the whole navigation, so this is a
- * filter over the same list the sidebar shows; nothing here reaches the server.
+ * Jump to any page or site by name. Pages are the whole navigation; sites come
+ * from the cached site list, so opening the palette sends no request of its own.
  */
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
   const [active, setActive] = useState(0)
+  const sites = useSites()
 
   useEffect(() => {
     if (open) {
@@ -22,13 +24,24 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     }
   }, [open])
 
+  const entries = useMemo<NavItem[]>(() => {
+    const siteEntries: NavItem[] = (sites.data ?? []).map((s) => ({
+      label: s.domain,
+      icon: Globe,
+      path: `/sites/${s.domain}`,
+      description: "Site",
+      keywords: s.aliases.join(" "),
+    }))
+    return [...builtSections, ...siteEntries]
+  }, [sites.data])
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (q === "") return builtSections
-    return builtSections.filter((item) =>
+    return entries.filter((item) =>
       `${item.label} ${item.description} ${item.keywords ?? ""}`.toLowerCase().includes(q),
     )
-  }, [query])
+  }, [query, entries])
 
   const go = (path: string) => {
     onOpenChange(false)
@@ -61,13 +74,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 go(results[active].path)
               }
             }}
-            placeholder="Go to a page…"
-            aria-label="Search pages"
+            placeholder="Go to a page or site…"
+            aria-label="Search pages and sites"
             className="placeholder:text-muted-foreground h-10 w-full bg-transparent text-sm outline-none"
           />
         </div>
-        <ul className="max-h-72 overflow-y-auto p-1" role="listbox" aria-label="Pages">
-          {results.length === 0 && <li className="text-muted-foreground px-3 py-6 text-center text-sm">No page matches “{query}”.</li>}
+        <ul className="max-h-72 overflow-y-auto p-1" role="listbox" aria-label="Pages and sites">
+          {results.length === 0 && <li className="text-muted-foreground px-3 py-6 text-center text-sm">Nothing matches “{query}”.</li>}
           {results.map((item, i) => (
             <li key={item.path} role="option" aria-selected={i === active}>
               <button

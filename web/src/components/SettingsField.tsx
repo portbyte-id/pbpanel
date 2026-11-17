@@ -41,6 +41,7 @@ export function SettingField({
           {setting.restart_required && (
             <Badge variant="outline" title="A change takes effect after the panel restarts">
               restart required
+              <span className="sr-only">: a change takes effect after the panel restarts</span>
             </Badge>
           )}
           {!setting.is_default && (
