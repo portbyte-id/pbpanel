@@ -52,8 +52,11 @@ type Cert struct {
 	LastRenewalError  string
 	// RedirectHTTP sends plain-HTTP requests to HTTPS, except the ACME path.
 	RedirectHTTP bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Provider is the DNS provider a dns01 certificate was issued through; empty
+	// for other sources. Renewal orders again with it.
+	Provider  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Account is an ACME account at one CA. Key and Registration are plaintext here
@@ -118,7 +121,7 @@ func formatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
 func parseTime(s string) (time.Time, error) { return time.Parse(timeLayout, s) }
 
 const certColumns = `id, domain, source, names, not_before, not_after, issuer, serial,
-	last_renewal_at, last_renewal_result, last_renewal_error, redirect_http, created_at, updated_at`
+	last_renewal_at, last_renewal_result, last_renewal_error, redirect_http, provider, created_at, updated_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -131,7 +134,7 @@ func scanCert(r scanner) (Cert, error) {
 		redirect                 int
 	)
 	if err := r.Scan(&c.ID, &c.Domain, &c.Source, &names, &nb, &na, &c.Issuer, &c.Serial,
-		&renewedAt, &c.LastRenewalResult, &c.LastRenewalError, &redirect, &created, &updated); err != nil {
+		&renewedAt, &c.LastRenewalResult, &c.LastRenewalError, &redirect, &c.Provider, &created, &updated); err != nil {
 		return Cert{}, err
 	}
 	if err := json.Unmarshal([]byte(names), &c.Names); err != nil {
@@ -232,8 +235,8 @@ func (s *Store) PutCert(ctx context.Context, c Cert) error {
 	now := formatTime(s.now())
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO certs (domain, source, names, not_before, not_after, issuer, serial,
-			last_renewal_at, last_renewal_result, last_renewal_error, redirect_http, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_renewal_at, last_renewal_result, last_renewal_error, redirect_http, provider, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (domain) DO UPDATE SET
 			source = excluded.source, names = excluded.names,
 			not_before = excluded.not_before, not_after = excluded.not_after,
@@ -241,10 +244,10 @@ func (s *Store) PutCert(ctx context.Context, c Cert) error {
 			last_renewal_at = excluded.last_renewal_at,
 			last_renewal_result = excluded.last_renewal_result,
 			last_renewal_error = excluded.last_renewal_error,
-			redirect_http = excluded.redirect_http,
+			redirect_http = excluded.redirect_http, provider = excluded.provider,
 			updated_at = excluded.updated_at`,
 		c.Domain, c.Source, string(namesJSON), formatTime(c.NotBefore), formatTime(c.NotAfter),
-		c.Issuer, c.Serial, renewedAt, c.LastRenewalResult, c.LastRenewalError, redirect, now, now)
+		c.Issuer, c.Serial, renewedAt, c.LastRenewalResult, c.LastRenewalError, redirect, c.Provider, now, now)
 	if err != nil {
 		return fmt.Errorf("tls: put certificate: %w", err)
 	}
