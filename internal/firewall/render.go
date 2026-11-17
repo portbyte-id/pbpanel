@@ -19,9 +19,9 @@ type RenderInput struct {
 	Blocklist []BlockEntry
 	SSHPorts  []int
 	PanelPort int
-	// HookInput adds the jump from INPUT to PANEL-INPUT. The applier sets it only
-	// when `iptables -C` says the jump is missing, so repeated applies never stack it.
-	HookInput bool
+	// HookV4 and HookV6 add the jump from INPUT to PANEL-INPUT. The applier sets each only
+	// when `iptables -C` says that family's jump is missing, so repeated applies never stack it.
+	HookV4, HookV6 bool
 }
 
 // Rendered holds the two iptables-restore inputs, applied with --noflush.
@@ -101,7 +101,7 @@ func renderFamily(in RenderInput, f family) string {
 	}
 
 	line("-A %s -j DROP", ChainInput)
-	if in.HookInput {
+	if (f == fam4 && in.HookV4) || (f == fam6 && in.HookV6) {
 		line("-I INPUT 1 -j %s", ChainInput)
 	}
 	line("COMMIT")
