@@ -34,9 +34,20 @@ func ContainerName(ver string) string { return "panel-php-" + ver }
 // BaseImage is the official image a version runs on.
 func BaseImage(ver string) string { return "php:" + ver + "-fpm" }
 
-// Image is the derived image: the official one plus the `www` account, the same
-// approach as nginx (decision 1.1).
-func Image(ver string) string { return "panel/php:" + ver + "-fpm" }
+// Repo is the repository of the derived images: `panel/php:<ver>-<build-id>`.
+// Which build serves is a pointer in the database (package images), never a
+// mutable tag.
+const Repo = "panel/php"
+
+// LegacyImage is the reference the derived image had before builds had IDs. It
+// is adopted at boot and not written again.
+func LegacyImage(ver string) string { return Repo + ":" + ver + "-fpm" }
+
+// BuildDir is the build context of one build on the host. The panel writes the
+// Dockerfile there and sends the directory to the Engine.
+func (p Paths) BuildDir(ver, id string) string {
+	return path.Join(p.Root, "panel", "build", "php", ver, id)
+}
 
 // ServiceName is the confedit service name, which keys the apply lock.
 func ServiceName(ver string) string { return "php-" + ver }

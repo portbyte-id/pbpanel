@@ -74,7 +74,7 @@ func TestGoldenFiles(t *testing.T) {
 // The spec is small enough to read as a golden value: every field decides what
 // the container is.
 func TestSpec(t *testing.T) {
-	spec := Spec(testPaths, "8.3")
+	spec := Spec(testPaths, "8.3", "panel/php:8.3-test")
 	if err := spec.Validate(testPaths.Root); err != nil {
 		t.Fatalf("the php spec breaks the mount rule: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSpec(t *testing.T) {
 		strings.Join(cfg.Env, " "), strings.Join(cfg.Binds, " "),
 	}, "\n")
 	want := strings.Join([]string{
-		"panel-php-8.3", "panel/php:8.3-fpm", "host", "unless-stopped", "SIGQUIT",
+		"panel-php-8.3", "panel/php:8.3-test", "host", "unless-stopped", "SIGQUIT",
 		"php-fpm", "-F -y /www/panel/php/8.3/php-fpm.conf -c /www/panel/php/8.3/php.ini",
 		"PHP_INI_SCAN_DIR=:/www/panel/php/8.3/conf.d",
 		"/www/panel/php/8.3:/www/panel/php/8.3:ro /www/panel/run:/www/panel/run /www/panel/logs/sites:/www/panel/logs/sites /www/services/sites:/www/services/sites",
@@ -93,7 +93,7 @@ func TestSpec(t *testing.T) {
 	if got != want {
 		t.Errorf("spec:\n--- want\n%s\n--- got\n%s", want, got)
 	}
-	if Spec(testPaths, "8.3").Hash() == Spec(testPaths, "8.4").Hash() {
+	if Spec(testPaths, "8.3", "panel/php:8.3-test").Hash() == Spec(testPaths, "8.4", "panel/php:8.4-test").Hash() {
 		t.Error("two versions share a spec hash")
 	}
 }
@@ -107,7 +107,7 @@ func TestNoTCPListener(t *testing.T) {
 			t.Errorf("listener outside the socket directory: %q", line)
 		}
 	}
-	if strings.Contains(string(Dockerfile("8.3")), "EXPOSE") {
+	if strings.Contains(string(Dockerfile("8.3", nil)), "EXPOSE") {
 		t.Error("the derived image exposes a port")
 	}
 }
@@ -348,6 +348,7 @@ func newRig(t *testing.T) *rig {
 	ap := &memApplier{files: map[string][]byte{}}
 	m, err := New(Options{
 		Store: st, Engine: eng, Applier: ap, Paths: testPaths, Read: ap.read,
+		Scratch:   t.TempDir(),
 		Supported: func(context.Context) ([]string, error) { return []string{"8.3", "8.4"}, nil },
 	})
 	if err != nil {
@@ -361,7 +362,7 @@ func (r *rig) pull(t *testing.T, ver string) {
 	if err := r.m.StartPull(ctx, ver); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.m.Pull(ctx, ver, nil); err != nil {
+	if err := r.m.Pull(ctx, ver, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -379,7 +380,7 @@ func (r *rig) state(t *testing.T, ver string) Version {
 
 func TestValidateExecsInTheRunningContainer(t *testing.T) {
 	eng := &fakeEngine{container: running(), exec: docker.ExecResult{Stderr: []byte("NOTICE: configuration file test is successful\n")}}
-	if _, err := NewService(eng, testPaths, "8.3", false).Validate(ctx); err != nil {
+	if _, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
 	want := "exec panel-php-8.3 php-fpm -t -y /www/panel/php/8.3/php-fpm.conf -c /www/panel/php/8.3/php.ini env=PHP_INI_SCAN_DIR=:/www/panel/php/8.3/conf.d"
@@ -390,7 +391,7 @@ func TestValidateExecsInTheRunningContainer(t *testing.T) {
 
 func TestValidateRunsAOneShotWhenTheContainerIsDown(t *testing.T) {
 	eng := &fakeEngine{}
-	if _, err := NewService(eng, testPaths, "8.3", false).Validate(ctx); err != nil {
+	if _, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
 	if !eng.called("run panel-php-8.3-validate php-fpm -t -y ") {
@@ -406,7 +407,7 @@ func TestValidateRejects(t *testing.T) {
 		"fpm error with zero": {Stderr: []byte("[17-Nov-2026 12:00:00] ERROR: [pool a] bad value\n")},
 	} {
 		eng := &fakeEngine{container: running(), exec: res}
-		out, err := NewService(eng, testPaths, "8.3", false).Validate(ctx)
+		out, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx)
 		if err == nil {
 			t.Errorf("%s: accepted", name)
 		}
@@ -416,14 +417,14 @@ func TestValidateRejects(t *testing.T) {
 	}
 	// A notice or a warning about an empty include pattern is not a rejection.
 	ok := docker.ExecResult{Stderr: []byte("WARNING: Nothing matches the include pattern '/www/panel/php/8.3/pool.d/*.conf'\nNOTICE: configuration file test is successful\n")}
-	if _, err := NewService(&fakeEngine{container: running(), exec: ok}, testPaths, "8.3", false).Validate(ctx); err != nil {
+	if _, err := NewService(&fakeEngine{container: running(), exec: ok}, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
 		t.Errorf("a clean test was rejected: %v", err)
 	}
 }
 
 func TestReloadSignalsARunningContainer(t *testing.T) {
 	eng := &fakeEngine{container: running()}
-	if err := NewService(eng, testPaths, "8.3", false).Reload(ctx); err != nil {
+	if err := NewService(eng, testPaths, "8.3", false, fixedImage).Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if !eng.called("kill panel-php-8.3 USR2") {
@@ -435,7 +436,7 @@ func TestReloadSignalsARunningContainer(t *testing.T) {
 // comes up with its first site.
 func TestReloadStartsTheContainerOnlyWhenAsked(t *testing.T) {
 	eng := &fakeEngine{}
-	plain := NewService(eng, testPaths, "8.3", false)
+	plain := NewService(eng, testPaths, "8.3", false, fixedImage)
 	if err := plain.Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +447,7 @@ func TestReloadStartsTheContainerOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("a plain reload touched Docker: %v", eng.calls)
 	}
 
-	starting := NewService(eng, testPaths, "8.3", true)
+	starting := NewService(eng, testPaths, "8.3", true, fixedImage)
 	if err := starting.Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +473,7 @@ func (r *restartingEngine) ContainerInspect(context.Context, string) (docker.Con
 
 func TestHealthyCatchesARestart(t *testing.T) {
 	eng := &restartingEngine{fakeEngine: fakeEngine{container: running()}}
-	svc := NewService(eng, testPaths, "8.3", false)
+	svc := NewService(eng, testPaths, "8.3", false, fixedImage)
 	svc.wait = time.Millisecond
 	if err := svc.Healthy(ctx); err == nil || !strings.Contains(err.Error(), "restarted") {
 		t.Errorf("Healthy = %v, want a restart to be reported", err)
@@ -510,14 +511,14 @@ func TestPullStateTransitions(t *testing.T) {
 		t.Errorf("second StartPull = %v, want ErrBusy", err)
 	}
 	var lines []string
-	if err := r.m.Pull(ctx, "8.3", func(l string) { lines = append(lines, l) }); err != nil {
+	if err := r.m.Pull(ctx, "8.3", nil, func(l string) { lines = append(lines, l) }); err != nil {
 		t.Fatal(err)
 	}
 	v := r.state(t, "8.3")
 	if v.State != StateReady || v.Digest != "php@sha256:abc" || v.Output != "" || v.UpdatedAt == nil {
 		t.Errorf("after Pull: %+v", v)
 	}
-	if !r.eng.called("pull php:8.3-fpm") || !r.eng.called("build panel/php:8.3-fpm") || len(lines) != 2 {
+	if !r.eng.called("pull php:8.3-fpm") || !r.eng.called("build panel/php:8.3-") || len(lines) != 2 {
 		t.Errorf("calls = %v, lines = %v", r.eng.calls, lines)
 	}
 	if err := r.m.Usable(ctx, "8.3"); err != nil {
@@ -535,7 +536,7 @@ func TestFailedPullLeavesFailedWithOutput(t *testing.T) {
 		if err := r.m.StartPull(ctx, "8.4"); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.m.Pull(ctx, "8.4", nil); err == nil {
+		if err := r.m.Pull(ctx, "8.4", nil, nil); err == nil {
 			t.Fatalf("%s: Pull succeeded", name)
 		}
 		v := r.state(t, "8.4")
@@ -673,4 +674,19 @@ func TestIniReadAndWrite(t *testing.T) {
 	if b, _ = r.m.ReadIni(ctx, "8.3"); string(b) != "memory_limit = 1G\n" {
 		t.Errorf("php.ini after a rejected write = %q", b)
 	}
+}
+
+// fixedImage is the image a test service runs.
+var fixedImage ImageFunc = func(context.Context) (string, error) { return "panel/php:8.3-test", nil }
+
+// ImageTag and ImageRemove complete the fake as a php.Engine. The fake keeps
+// no tags: a build is found by inspect whenever the test set no image map.
+func (f *fakeEngine) ImageTag(_ context.Context, src, dst string) error {
+	f.log("tag " + src + " " + dst)
+	return nil
+}
+
+func (f *fakeEngine) ImageRemove(_ context.Context, ref string) error {
+	f.log("rmi " + ref)
+	return nil
 }

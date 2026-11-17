@@ -10,6 +10,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
@@ -29,6 +30,8 @@ type nginxStack struct {
 	Reconciler *sites.Reconciler
 	Paths      nginx.Paths
 	PHP        *php.Manager
+	// Images is the nginx image family: builds, the one that serves, rollback.
+	Images *nginx.Images
 
 	phpMu    sync.Mutex
 	phpSteps []sites.PHPStep
@@ -45,10 +48,14 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	if err != nil {
 		return nil, err
 	}
-	live := nginx.NewService(eng, paths)
+	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), logger)
+	if err != nil {
+		return nil, err
+	}
+	live := nginx.NewService(eng, paths, imgs.ImageFunc())
 	global := nginx.NewGlobal(st, ed, live, paths)
 	phpMgr, err := php.New(php.Options{
-		Store: st, Engine: eng, Applier: ed, Paths: phpPaths,
+		Store: st, Engine: eng, Applier: ed, Paths: phpPaths, Log: logger,
 		Supported: func(ctx context.Context) ([]string, error) {
 			csv, err := reg.Str(ctx, settings.KeyPHPVersions)
 			if err != nil {
@@ -67,7 +74,8 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 
 	buildImage := func(ctx context.Context) error {
 		job, err := jobsMgr.Start(ctx, "nginx.image", func(ctx context.Context, out *jobs.Writer) error {
-			return nginx.BuildImage(ctx, eng, func(line string) { _ = out.Line(line) })
+			_, err := imgs.Build(ctx, func(line string) { _ = out.Line(line) })
+			return err
 		})
 		if err != nil {
 			return err
@@ -77,18 +85,18 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 			return err
 		}
 		if done.State != jobs.StateSucceeded {
-			return fmt.Errorf("building %s: job %s %s: %s", nginx.Image, job.ID, done.State, done.Err)
+			return fmt.Errorf("building the nginx image: job %s %s: %s", job.ID, done.State, done.Err)
 		}
 		return nil
 	}
 
 	return &nginxStack{
-		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr,
+		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
-			Boot:    nginx.NewValidateOnly(eng, paths),
-			Live:    live, Runtime: nginx.NewRuntime(eng, paths),
+			Boot:    nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()),
+			Live:    live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
 			BuildImage: buildImage, Logger: logger,
 		},
 	}, nil
@@ -99,6 +107,12 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 // logged and kept in the reconciler's status, never fatal.
 func (n *nginxStack) start(ctx context.Context, logger *slog.Logger) {
 	go func() {
+		// The image catalogue first: an image from before builds had IDs is adopted
+		// here, and a build the last daemon left running is failed. Without this a
+		// reconcile could find no build and start a second one.
+		if _, err := n.Images.Reconcile(ctx); err != nil {
+			logger.Error("nginx image catalogue reconcile failed", "error", err)
+		}
 		status := n.Reconciler.Run(ctx)
 		if !status.OK {
 			// Without Docker, or with confedit's journal not replayed, PHP
@@ -138,6 +152,6 @@ func (n *nginxStack) deps() *httpapi.NginxDeps {
 	return &httpapi.NginxDeps{
 		Sites: n.Sites, Global: n.Global, History: n.Editor,
 		Service: n.Service, Reconciler: n.Reconciler, Paths: n.Paths,
-		PHP: n.PHP, PHPReconcile: n.phpReconcile,
+		PHP: n.PHP, PHPReconcile: n.phpReconcile, Images: n.Images,
 	}
 }

@@ -1,7 +1,7 @@
 # Server Panel — Development Plan
 
 Date: 2026-11-16. Source: [plan.md](plan.md) (decisions, layout, architecture, stages).
-Status: M0 and M1 built and smoke-tested on Ubuntu; M6 and M7 built, their smokes (6, 7) written and not run (§8, §9). This document turns the ten stages of `plan.md` §4 into milestones with
+Status: M0 and M1 built and smoke-tested on Ubuntu; M6, M7 and M8 built, their smokes (6, 7, 8) written and not run (§8, §9, §10). This document turns the ten stages of `plan.md` §4 into milestones with
 ordered steps, deliverables, tests, and exit gates. Where this file and `plan.md` disagree,
 `plan.md` wins and this file is corrected.
 
@@ -759,6 +759,43 @@ nginx image updates with rollback — all without taking a live site down on fai
 | 8.6 | nginx update | Same candidate/promote flow for nginx with `nginx -t` against the live config; rollback to the previous image with one action. | — |
 | 8.7 | API + UI | PHP versions page (installed, extensions, build history, rebuild, remove), nginx image page. | Vitest. |
 | 8.8 | Smoke | `scripts/smoke/8-docker-mgmt.sh`. | — |
+
+### Status (2026-11-17)
+
+Built. The real-Engine checks pass in WSL (Docker 29.9, `php:8.3-fpm`): `TestRealImageLifecycle`
+builds PHP with `intl` and `redis`, swaps it under a running container, rejects a build of a missing
+package with the container untouched, and activates the earlier build. Smoke 8 is written and its dry
+run passes, but it has **not been run on a host**, so the exit gate is open.
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 8.1 | done | Migration `0015_images.sql`: `image_builds` (one row per build) and `image_pointers` (current and previous build per family). Images are `panel/php:<ver>-<build-id>` and `panel/nginx:1.29-<build-id>`. `TestNewIDHasTheShapeTheTagsNeed`, the family tests. |
+| 8.2 | done | `php.Dockerfile(ver, exts)` golden tests. The build context is a host directory (`/www/panel/build/php/<ver>/<id>`) sent with `docker.BuildOptions.ContextDir`; a symbolic link in it is refused (`TestTarDirRefusesRelativeAndLinkedContexts`). A failed build step fails the job, and the tag is inspected after the stream (risk 11): `TestBuildFailureKeepsTheServingImage`, and the real build of a missing package. |
+| 8.3 | done | `php.Catalogue()`: 31 entries, bundled and PECL, with their apt build packages. A custom PECL name must match `^[a-z][a-z0-9_]{1,39}$`; at most 32 names per build (`TestParseExtensionsRefusesWhatIsNotAPackageName`). The list is the same for every supported version; an entry that does not compile on a version fails that build, with its output kept. |
+| 8.4 | done, with a deviation | The candidate is checked in a one-shot container of the candidate image, never by exec into the running one. Promotion stops the old container gracefully (SIGQUIT, up to 20 s), removes it, starts the candidate from its spec and checks it. If the candidate does not come up, it is removed and the previous image is started again (`TestSwapRestoresThePreviousImageWhenTheNewOneFails`). **Deviation:** the step says to start the new container before stopping the old one. Both cannot run at once: they share host networking and socket paths. A swap therefore leaves a short gap in which requests get no answer. Smoke 8 allows 5% of its request loop to fail; the gap has not been measured on a host. |
+| 8.5 | done | Install is pull, build, check, promote. `DELETE /api/php/{ver}` is refused with 409 while a site uses the version. Removal stops the container and deletes the version's images, but keeps `php.ini`, the form settings and the pools, so installing again restores them. |
+| 8.6 | done | nginx update is a fresh base pull (`Pull: true`), a candidate `nginx -t` in a one-shot container, the same swap, and rollback through activation of the previous build (`TestRollbackPutsThePreviousBuildBack`). If nginx is not running, an update records the build and does not start nginx; the boot reconcile starts it on the build that serves. |
+| 8.7 | done | UI: the PHP page gets extension chips, a Rebuild dialog with the catalogue and custom PECL names, Remove (409 detail shown), and build history with Activate; the nginx status tab gets an Image card with Update and Roll back. vitest 274/274 and `tsc` clean (not clicked through in a browser). API, all under `/api`: `GET /api/php/extensions`; `POST /api/php/{ver}/pull` with an optional body; `POST /api/php/{ver}/build`; `DELETE /api/php/{ver}`; `GET /api/php/{ver}/builds`; `POST /api/php/{ver}/builds/{id}/activate`; `GET /api/nginx/image`; `POST /api/nginx/image/update`; `POST /api/nginx/image/builds/{id}/activate`. All are in the 401 and CSRF matrix (`routes_test.go`) and have behaviour tests (`handlers_images_test.go`). |
+| 8.8 | written, not run | `scripts/smoke/8-docker-mgmt.sh`; the dry run passes. |
+
+**A first build is checked less.** Nothing serves before the first apply, and the apply writes the
+configuration that a check would test against (the FPM file and `php.ini` for PHP; nginx's include
+files for nginx). So a first build checks only the PHP modules, and skips `nginx -t`. The first apply
+then validates the configuration with the image that serves at that point. This was found by the real
+sites integration test (`TestRealNginxTLS`), which failed when the first build ran `nginx -t` before
+the panel had written its includes.
+
+**Boot.** The image catalogue is reconciled before nginx. A build left `building` is failed. A family
+with no current build but an image from before builds had IDs (`panel/php:<ver>-fpm`,
+`panel/nginx:1.29`) adopts that image: it is tagged with a build ID, and the old tag stays. A version
+whose image is gone becomes `absent`.
+
+**Also in this milestone.** The Docker client gained `ImageTag`, `ImageRemove` and directory build
+contexts. The php and nginx containers take their image from the catalogue (`php.Spec(p, ver, image)`,
+`nginx.Spec(p, image)`), so a swap takes effect at the next create.
+
+**Not done, and why.** Nothing has been run on the Ubuntu VM or on Rocky 9 in this session, so the
+swap gap is unmeasured and smoke 8 is unproven. EL9 is M9.
 
 ### Exit gate (smoke 8)
 

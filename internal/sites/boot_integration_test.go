@@ -15,6 +15,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
@@ -93,7 +94,11 @@ func TestRealNginxEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := nginx.NewService(eng, paths)
+	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := nginx.NewService(eng, paths, imgs.ImageFunc())
 	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}})
 	if err != nil {
 		t.Fatal(err)
@@ -101,9 +106,10 @@ func TestRealNginxEndToEnd(t *testing.T) {
 	global := nginx.NewGlobal(st, ed, live, paths)
 	rec := &Reconciler{
 		Sites: mgr, Global: global, Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths), Live: live, Runtime: nginx.NewRuntime(eng, paths),
+		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
 		BuildImage: func(ctx context.Context) error {
-			return nginx.BuildImage(ctx, eng, func(l string) { t.Log(l) })
+			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
+			return err
 		},
 	}
 

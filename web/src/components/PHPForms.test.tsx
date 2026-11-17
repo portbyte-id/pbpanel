@@ -35,6 +35,7 @@ const version = (over: Partial<PHPVersion>): PHPVersion => ({
   supported: true,
   container: { exists: false, running: false, status: "missing" },
   sites: [],
+  current: null,
   ...over,
 })
 

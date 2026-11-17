@@ -1,15 +1,32 @@
+import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
+import { BuildHistory, ExtensionChips, formatBuildTime } from "@/components/ImageBuilds"
+import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError, type NginxServiceStatus, type NginxSettings } from "@/lib/api"
-import { useNginxService, useNginxSettings, useSaveNginxSettings } from "@/lib/queries"
+import {
+  ApiError,
+  type ImageBuild,
+  type JobRef,
+  type NginxServiceStatus,
+  type NginxSettings,
+} from "@/lib/api"
+import {
+  queryKeys,
+  useActivateNginxImageBuild,
+  useNginxImage,
+  useNginxService,
+  useNginxSettings,
+  useSaveNginxSettings,
+  useUpdateNginxImage,
+} from "@/lib/queries"
 
 /** nginx as a whole: whether it is running, the common settings, and nginx.conf. */
 export function NginxPage() {
@@ -21,6 +38,7 @@ export function NginxPage() {
       </TabsList>
       <TabsContent value="settings" className="flex flex-col gap-6">
         <ServiceStatus />
+        <ImageCard />
         <SettingsForm />
       </TabsContent>
       <TabsContent value="conf">
@@ -113,6 +131,129 @@ function StatusBody({ status }: { status: NginxServiceStatus }) {
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * The nginx image: which build serves, the build it rolls back to, and the update
+ * that builds a new one from the newest base. A build's job is watched in the drawer.
+ */
+export function ImageCard() {
+  const client = useQueryClient()
+  const { data, isPending, error } = useNginxImage()
+  const update = useUpdateNginxImage()
+  const activate = useActivateNginxImageBuild()
+  const [jobId, setJobId] = useState<string | null>(null)
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Image</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 text-sm">
+        {isPending ? (
+          <p className="text-muted-foreground">Loading the image…</p>
+        ) : error ? (
+          <p role="alert" className="text-destructive">
+            {error instanceof ApiError ? error.detail : "The image could not be loaded."}
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge variant={data.present ? "secondary" : "destructive"}>
+                {data.present ? "present" : "missing"}
+              </Badge>
+              <span>
+                {data.present
+                  ? "The nginx image is on this host."
+                  : "The nginx image is not on this host."}
+              </span>
+            </div>
+
+            <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[max-content_1fr]">
+              <dt className="text-muted-foreground">Base</dt>
+              <dd className="font-mono text-xs">{data.base}</dd>
+              <dt className="text-muted-foreground">Repository</dt>
+              <dd className="font-mono text-xs">{data.repo}</dd>
+              <dt className="text-muted-foreground">Serving</dt>
+              <dd>
+                {data.current ? (
+                  <BuildSummary build={data.current} />
+                ) : (
+                  <span className="text-muted-foreground">No build yet.</span>
+                )}
+              </dd>
+              {data.previous && (
+                <>
+                  <dt className="text-muted-foreground">Previous</dt>
+                  <dd>
+                    <BuildSummary build={data.previous} />
+                  </dd>
+                </>
+              )}
+            </dl>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                disabled={data.busy || update.isPending}
+                onClick={() => update.mutate(undefined, { onSuccess: (job: JobRef) => setJobId(job.id) })}
+              >
+                {update.isPending ? "Starting…" : "Update image"}
+              </Button>
+              {data.previous && data.previous.state === "ready" && (
+                <Button
+                  variant="outline"
+                  disabled={data.busy || activate.isPending}
+                  onClick={() =>
+                    activate.mutate(data.previous?.id ?? "", {
+                      onSuccess: (job: JobRef) => setJobId(job.id),
+                    })
+                  }
+                >
+                  Roll back
+                </Button>
+              )}
+              {data.busy && (
+                <span className="text-muted-foreground text-xs" aria-live="polite">
+                  An image build is running.
+                </span>
+              )}
+            </div>
+            <ApplyError error={update.error ?? activate.error} fallback="The image could not be changed." />
+
+            <div className="flex flex-col gap-2">
+              <h3 className="text-sm font-medium">History</h3>
+              <BuildHistory
+                builds={data.builds}
+                emptyText="No image builds yet."
+                onActivate={(build) => activate.mutate(build.id, { onSuccess: (job: JobRef) => setJobId(job.id) })}
+                activating={activate.isPending || data.busy}
+                error={null}
+                fallback=""
+              />
+            </div>
+          </>
+        )}
+      </CardContent>
+
+      <JobsDrawer
+        jobId={jobId}
+        onClose={() => {
+          setJobId(null)
+          void client.invalidateQueries({ queryKey: queryKeys.nginxImage, exact: true })
+        }}
+      />
+    </Card>
+  )
+}
+
+function BuildSummary({ build }: { build: ImageBuild }) {
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="font-mono text-xs">{build.id}</span>
+      <span className="text-muted-foreground text-xs">created {formatBuildTime(build.created_at)}</span>
+      <ExtensionChips names={build.extensions} empty="extensions none" />
+    </span>
   )
 }
 

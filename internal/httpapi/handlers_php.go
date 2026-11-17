@@ -7,6 +7,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/sites"
@@ -19,7 +20,14 @@ type PHPManager interface {
 	List(ctx context.Context) ([]php.Version, error)
 	Get(ctx context.Context, ver string) (php.Version, error)
 	StartPull(ctx context.Context, ver string) error
-	Pull(ctx context.Context, ver string, progress docker.Progress) error
+	Pull(ctx context.Context, ver string, exts []php.Extension, progress docker.Progress) error
+	CurrentExtensions(ctx context.Context, ver string) ([]php.Extension, error)
+	StartRebuild(ctx context.Context, ver string, names []string) ([]php.Extension, error)
+	Rebuild(ctx context.Context, ver string, exts []php.Extension, progress docker.Progress) (images.Build, error)
+	Builds(ctx context.Context, ver string) ([]images.Build, error)
+	StartActivate(ctx context.Context, ver string) error
+	Activate(ctx context.Context, ver, id string) (images.Build, error)
+	Remove(ctx context.Context, ver string, inUse func(context.Context) (bool, error)) error
 	Settings(ctx context.Context, ver string) (php.Settings, error)
 	SetSettings(ctx context.Context, ver string, s php.Settings) (confedit.Result, error)
 	ReadIni(ctx context.Context, ver string) ([]byte, error)
@@ -42,7 +50,12 @@ func (s *server) phpRoutes(mux *http.ServeMux, h func(func(*NginxDeps, http.Resp
 	}
 
 	mux.Handle("GET /api/php", php(s.handleListPHP))
+	mux.Handle("GET /api/php/extensions", php(s.handleExtensions))
 	mux.Handle("POST /api/php/{ver}/pull", php(s.handlePullPHP))
+	mux.Handle("DELETE /api/php/{ver}", php(s.handleRemovePHP))
+	mux.Handle("POST /api/php/{ver}/build", php(s.handleBuildPHP))
+	mux.Handle("GET /api/php/{ver}/builds", php(s.handleListPHPBuilds))
+	mux.Handle("POST /api/php/{ver}/builds/{id}/activate", php(s.handleActivatePHPBuild))
 	mux.Handle("GET /api/php/{ver}/settings", php(s.handleGetPHPSettings))
 	mux.Handle("PUT /api/php/{ver}/settings", php(s.handlePutPHPSettings))
 	mux.Handle("GET /api/php/{ver}/ini", php(s.handleGetPHPIni))
@@ -117,15 +130,36 @@ func (s *server) handleListPHP(n *NginxDeps, w http.ResponseWriter, r *http.Requ
 	}{out, steps})
 }
 
+// handlePullPHP installs a version. The body is optional: `{"extensions":[…]}`
+// names the extensions of the build; without a body the version keeps the
+// extensions of the build it serves, or has none when it was never built.
 func (s *server) handlePullPHP(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
-	ver := r.PathValue("ver")
+	ver, ok := s.phpVersion(n, w, r)
+	if !ok {
+		return
+	}
+	names, given, err := extensionsBody(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errBadRequest, decodeErrorDetail(err))
+		return
+	}
+	var exts []php.Extension
+	if given {
+		exts, err = php.ParseExtensions(names)
+	} else {
+		exts, err = n.PHP.CurrentExtensions(r.Context(), ver)
+	}
+	if err != nil {
+		s.writeNginxError(w, r, err)
+		return
+	}
 	if err := n.PHP.StartPull(r.Context(), ver); err != nil {
 		s.writeNginxError(w, r, err)
 		return
 	}
 	// The job outlives the request that started it.
 	job, err := s.deps.Jobs.Start(context.WithoutCancel(r.Context()), "php.pull", func(ctx context.Context, out *jobs.Writer) error {
-		return n.PHP.Pull(ctx, ver, func(line string) { _ = out.Line(line) })
+		return n.PHP.Pull(ctx, ver, exts, func(line string) { _ = out.Line(line) })
 	})
 	if err != nil {
 		s.writeInternal(w, r, err)

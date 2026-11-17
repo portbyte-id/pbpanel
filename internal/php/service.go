@@ -23,29 +23,27 @@ type Engine interface {
 	RunOnce(ctx context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error)
 	ImagePull(ctx context.Context, ref string, progress docker.Progress) (docker.Image, error)
 	ImageBuild(ctx context.Context, opts docker.BuildOptions, progress docker.Progress) (docker.Image, error)
+	ImageTag(ctx context.Context, src, dst string) error
+	ImageRemove(ctx context.Context, ref string) error
 }
 
-// Dockerfile is the derived image of a version: the official one plus the `www`
-// group and user at the fixed IDs. The `-fpm` images are Debian based.
-func Dockerfile(ver string) []byte {
-	return fmt.Appendf(nil,
-		"FROM %s\nRUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
-		BaseImage(ver), WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
-}
+// ImageFunc names the image a version's container runs now. It is a function so
+// that a swap takes effect on the next start without rebuilding the service.
+type ImageFunc func(ctx context.Context) (string, error)
 
 // scanDirEnv makes PHP read the panel's conf.d after the image's own: a
 // leading colon keeps the compiled-in directory, where the image enables its
 // extensions.
 func scanDirEnv(p Paths, ver string) string { return "PHP_INI_SCAN_DIR=:" + p.ConfDir(ver) }
 
-// Spec is the container of one version. FPM is started on the panel's own
-// php-fpm.conf, so the image's php-fpm.d (and with it the `www` pool that
-// listens on TCP 9000) is never read, and nothing is mounted over it. The
-// master runs as root, as the image intends, and each pool drops to `www`.
-func Spec(p Paths, ver string) docker.Spec {
+// Spec is the container of one version running image. FPM is started on the
+// panel's own php-fpm.conf, so the image's php-fpm.d (and with it the `www`
+// pool that listens on TCP 9000) is never read, and nothing is mounted over it.
+// The master runs as root, as the image intends, and each pool drops to `www`.
+func Spec(p Paths, ver, image string) docker.Spec {
 	return docker.Spec{
 		Name:       ContainerName(ver),
-		Image:      Image(ver),
+		Image:      image,
 		Role:       "php-" + ver,
 		Entrypoint: []string{"php-fpm"},
 		Args:       []string{"-F", "-y", p.FPMConf(ver), "-c", p.IniPath(ver)},
@@ -63,10 +61,11 @@ func Spec(p Paths, ver string) docker.Spec {
 // Service is one PHP version as a confedit.Service: it validates with
 // `php-fpm -t`, reloads with USR2 and checks the container is still up.
 type Service struct {
-	eng  Engine
-	p    Paths
-	ver  string
-	wait time.Duration
+	eng   Engine
+	p     Paths
+	ver   string
+	wait  time.Duration
+	image ImageFunc
 	// start makes Reload create or start the container when it is not running.
 	// Changes that give the version its first site use it; a settings edit does
 	// not, so a version nobody uses stays down (step 2.7).
@@ -74,9 +73,10 @@ type Service struct {
 }
 
 // NewService returns the service of a version. With start set, a reload brings
-// the container up if it is not running.
-func NewService(eng Engine, p Paths, ver string, start bool) *Service {
-	return &Service{eng: eng, p: p, ver: ver, wait: settle, start: start}
+// the container up if it is not running. image names the build to run when a
+// container has to be created.
+func NewService(eng Engine, p Paths, ver string, start bool, image ImageFunc) *Service {
+	return &Service{eng: eng, p: p, ver: ver, wait: settle, start: start, image: image}
 }
 
 // Name implements confedit.Service.
@@ -122,7 +122,11 @@ func (s *Service) run(ctx context.Context, cmd []string) (docker.ExecResult, err
 	case err == nil && c.State.Running:
 		return s.eng.Exec(ctx, name, docker.ExecOptions{Cmd: cmd, Env: []string{scanDirEnv(s.p, s.ver)}})
 	case err == nil || errors.Is(err, docker.ErrNotFound):
-		cfg := Spec(s.p, s.ver).Config()
+		img, err := s.image(ctx)
+		if err != nil {
+			return docker.ExecResult{}, err
+		}
+		cfg := Spec(s.p, s.ver, img).Config()
 		cfg.Entrypoint, cfg.Cmd = cmd[:1], cmd[1:]
 		// A leftover from a daemon that died mid-validation would hold the name.
 		_ = s.eng.ContainerRemove(ctx, name+"-validate", true)
@@ -149,7 +153,11 @@ func (s *Service) Reload(ctx context.Context) error {
 	if !s.start {
 		return nil
 	}
-	if _, err := docker.Ensure(ctx, s.eng, Spec(s.p, s.ver), s.p.Root); err != nil {
+	img, err := s.image(ctx)
+	if err != nil {
+		return fmt.Errorf("php %s start: %w", s.ver, err)
+	}
+	if _, err := docker.Ensure(ctx, s.eng, Spec(s.p, s.ver, img), s.p.Root); err != nil {
 		return fmt.Errorf("php %s start: %w", s.ver, err)
 	}
 	return nil
