@@ -9,6 +9,9 @@ import {
 import {
   api,
   type CreateSiteInput,
+  type FirewallPending,
+  type FirewallRuleInput,
+  type FirewallState,
   type NginxSettings,
   type PHPSettings,
   type PoolSettings,
@@ -32,6 +35,10 @@ export const queryKeys = {
   php: ["php"] as const,
   phpSettings: (version: string) => ["php", version, "settings"] as const,
   phpIni: (version: string) => ["php", version, "ini"] as const,
+  firewall: ["firewall"] as const,
+  firewallState: ["firewall", "state"] as const,
+  firewallRules: ["firewall", "rules"] as const,
+  firewallBlocklist: ["firewall", "blocklist"] as const,
   sitePool: (domain: string) => ["sites", domain, "pool"] as const,
 }
 
@@ -343,4 +350,101 @@ export function useLogout() {
       client.clear()
     },
   })
+}
+
+export function useFirewall() {
+  return useQuery({ queryKey: queryKeys.firewallState, queryFn: () => api.firewall() })
+}
+
+export function useFirewallRules() {
+  return useQuery({ queryKey: queryKeys.firewallRules, queryFn: () => api.firewallRules() })
+}
+
+export function useFirewallBlocklist() {
+  return useQuery({ queryKey: queryKeys.firewallBlocklist, queryFn: () => api.firewallBlocklist() })
+}
+
+/** Rule and blocklist writes change `dirty`, so they refresh the status too. */
+function useFirewallInvalidate() {
+  const client = useQueryClient()
+  return () => client.invalidateQueries({ queryKey: queryKeys.firewall })
+}
+
+export function useSaveFirewallRule() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    mutationFn: (input: { id?: string; rule: FirewallRuleInput }) =>
+      input.id === undefined
+        ? api.createFirewallRule(input.rule)
+        : api.updateFirewallRule(input.id, input.rule),
+    onSuccess: invalidate,
+  })
+}
+
+export function useDeleteFirewallRule() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    mutationFn: (id: string) => api.deleteFirewallRule(id),
+    onSuccess: invalidate,
+  })
+}
+
+export function useAddBlocklistEntry() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    mutationFn: (input: { addr: string; comment?: string }) => api.addBlocklistEntry(input),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRemoveBlocklistEntry() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    mutationFn: (id: string) => api.removeBlocklistEntry(id),
+    onSuccess: invalidate,
+  })
+}
+
+/**
+ * Enable and apply answer with the pending apply. It is written into the cached
+ * state at once so the countdown starts without waiting for the refetch.
+ */
+function useFirewallApplyMutation(fn: () => Promise<FirewallPending>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (pending) => {
+      client.setQueryData<FirewallState>(queryKeys.firewallState, (old) =>
+        old ? { ...old, enabled: true, pending } : old,
+      )
+      return client.invalidateQueries({ queryKey: queryKeys.firewall })
+    },
+  })
+}
+
+export function useEnableFirewall() {
+  return useFirewallApplyMutation(() => api.enableFirewall())
+}
+
+export function useApplyFirewall() {
+  return useFirewallApplyMutation(() => api.applyFirewall())
+}
+
+/** Confirm, revert and disable all end any pending apply, so everything is refetched. */
+export function useConfirmFirewall() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    mutationFn: (token: string) => api.confirmFirewall(token),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRevertFirewall() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({ mutationFn: () => api.revertFirewall(), onSuccess: invalidate })
+}
+
+export function useDisableFirewall() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({ mutationFn: () => api.disableFirewall(), onSuccess: invalidate })
 }

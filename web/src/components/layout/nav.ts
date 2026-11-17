@@ -31,7 +31,6 @@ export interface NavSection {
 export const futureSections: NavSection[] = [
   { label: "Dashboard", icon: Gauge, milestone: "M5" },
 
-  { label: "Firewall", icon: ShieldCheck, milestone: "M4" },
   { label: "Apps", icon: AppWindow, milestone: "M5" },
   { label: "TLS", icon: LockKeyhole, milestone: "M3" },
   { label: "Docker", icon: Archive, milestone: "M8" },
@@ -43,6 +42,7 @@ export const builtSections: NavSection[] = [
   { label: "Files", icon: FolderTree, path: "/files" },
   { label: "Nginx", icon: Network, path: "/nginx" },
   { label: "PHP", icon: Terminal, path: "/php" },
+  { label: "Firewall", icon: ShieldCheck, path: "/firewall" },
   { label: "Settings", icon: Settings, path: "/settings" },
   { label: "Audit", icon: FileText, path: "/audit" },
 ]
