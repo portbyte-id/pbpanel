@@ -8,6 +8,8 @@ import {
 
 import {
   api,
+  type AppAction,
+  type AppInput,
   type CreateSiteInput,
   type FirewallPending,
   type FirewallRuleInput,
@@ -40,6 +42,8 @@ export const queryKeys = {
   firewallRules: ["firewall", "rules"] as const,
   firewallBlocklist: ["firewall", "blocklist"] as const,
   sitePool: (domain: string) => ["sites", domain, "pool"] as const,
+  apps: ["apps"] as const,
+  runtimes: ["runtimes"] as const,
 }
 
 /**
@@ -447,4 +451,63 @@ export function useRevertFirewall() {
 export function useDisableFirewall() {
   const invalidate = useFirewallInvalidate()
   return useMutation({ mutationFn: () => api.disableFirewall(), onSuccess: invalidate })
+}
+
+/* --- Apps and runtimes (M5) ----------------------------------------------- */
+
+/** The list polls: an app's state changes under it (a crash, a restart) with no request. */
+export function useApps() {
+  return useQuery({ queryKey: queryKeys.apps, queryFn: () => api.apps(), refetchInterval: 5_000 })
+}
+
+export function useSaveApp() {
+  const client = useQueryClient()
+  return useMutation({
+    // `name` set means an edit: the name is the program name and cannot change.
+    mutationFn: (input: { name?: string; app: AppInput }) =>
+      input.name === undefined ? api.createApp(input.app) : api.updateApp(input.name, input.app),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
+  })
+}
+
+export function useDeleteApp() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.deleteApp(name),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
+  })
+}
+
+export function useControlApp() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { name: string; action: AppAction }) =>
+      api.controlApp(input.name, input.action),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
+  })
+}
+
+/** Polls faster than the apps list: an install is a job that ends by a version appearing. */
+export function useRuntimes() {
+  return useQuery({
+    queryKey: queryKeys.runtimes,
+    queryFn: () => api.runtimes(),
+    refetchInterval: 4_000,
+  })
+}
+
+export function useInstallNode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => api.installNode(version),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.runtimes }),
+  })
+}
+
+export function useUninstallNode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => api.uninstallNode(version),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.runtimes }),
+  })
 }

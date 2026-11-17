@@ -38,7 +38,10 @@ export function CreateSiteForm({
   pending,
   error,
   phpVersions = [],
+  initial,
 }: {
+  /** Starting values, for a site created from elsewhere (an app's "Proxy site"). */
+  initial?: { kind: SiteKind; target: string }
   onSubmit: (input: CreateSiteInput) => void
   onCancel: () => void
   pending: boolean
@@ -47,11 +50,11 @@ export function CreateSiteForm({
   phpVersions?: string[]
 }) {
   const id = useId()
-  const [kind, setKind] = useState<SiteKind>("static")
+  const [kind, setKind] = useState<SiteKind>(initial?.kind ?? "static")
   const [domain, setDomain] = useState("")
   const [aliases, setAliases] = useState("")
   const [root, setRoot] = useState("")
-  const [target, setTarget] = useState("")
+  const [target, setTarget] = useState(initial?.target ?? "")
   // The newest installed version is the default.
   const [phpVersion, setPHPVersion] = useState(phpVersions[phpVersions.length - 1] ?? "")
   const [phpinfo, setPHPInfo] = useState(false)
@@ -246,7 +249,9 @@ export function CreateSiteDialog({
   open,
   onOpenChange,
   onCreated,
+  initial,
 }: {
+  initial?: { kind: SiteKind; target: string }
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: (domain: string) => void
@@ -275,6 +280,7 @@ export function CreateSiteDialog({
           <CreateSiteForm
             // Remounted when the versions arrive, so the picker starts on one.
             key={ready.join(",")}
+            initial={initial}
             phpVersions={ready}
             pending={create.isPending}
             error={create.error}
