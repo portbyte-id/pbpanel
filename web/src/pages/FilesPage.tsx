@@ -269,7 +269,7 @@ export function FilesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
                   <tr>
-                    <th className="w-8 px-3 py-1.5">
+                    <th scope="col" className="w-8 px-3 py-1.5">
                       <input
                         type="checkbox"
                         checked={selection.all}
@@ -277,12 +277,12 @@ export function FilesPage() {
                         aria-label="Select all"
                       />
                     </th>
-                    <th className="px-3 py-1.5 font-medium">Name</th>
-                    <th className="px-3 py-1.5 font-medium">Size</th>
-                    <th className="px-3 py-1.5 font-medium">Mode</th>
-                    <th className="px-3 py-1.5 font-medium">Owner</th>
-                    <th className="px-3 py-1.5 font-medium">Modified</th>
-                    <th className="px-3 py-1.5 font-medium">
+                    <th scope="col" className="px-3 py-1.5 font-medium">Name</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">Size</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">Mode</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">Owner</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">Modified</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>

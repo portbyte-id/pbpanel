@@ -2,6 +2,7 @@ import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { Button } from "@/components/ui/button"
+import { calloutVariants } from "@/components/ui/callout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
@@ -325,7 +326,7 @@ export function UploadCertForm({
 export function TLSWarnings({ warnings }: { warnings: TLSWarning[] }) {
   if (warnings.length === 0) return null
   return (
-    <div role="status" className="rounded-md border border-amber-500/50 bg-amber-500/5 p-3">
+    <div role="status" className={calloutVariants({ tone: "warning", className: "rounded-md p-3" })}>
       <p className="text-sm font-medium">
         The certificate was saved, with{" "}
         {warnings.length === 1 ? "one warning" : `${warnings.length} warnings`}:

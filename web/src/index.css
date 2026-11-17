@@ -44,6 +44,9 @@
   --text-sm--line-height: 1.2rem;
   --text-base: 0.875rem;
   --text-base--line-height: 1.3rem;
+  /* Between sm and lg: card and dialog titles, the page title. */
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.35rem;
   --text-lg: 1rem;
   --text-lg--line-height: 1.4rem;
   --text-xl: 1.125rem;
@@ -65,13 +68,13 @@
   --secondary: oklch(0.955 0.006 258);
   --secondary-foreground: oklch(0.28 0.03 258);
   --muted: oklch(0.955 0.006 258);
-  --muted-foreground: oklch(0.5 0.02 258);
+  --muted-foreground: oklch(0.46 0.02 258);
   --accent: oklch(0.94 0.012 258);
   --accent-foreground: oklch(0.25 0.04 258);
   --destructive: oklch(0.52 0.21 27);
   --destructive-foreground: oklch(0.985 0 0);
   --success: oklch(0.52 0.13 152);
-  --warning: oklch(0.55 0.14 70);
+  --warning: oklch(0.5 0.13 70);
   --info: oklch(0.5 0.15 245);
   --border: oklch(0.905 0.008 258);
   --input: oklch(0.87 0.01 258);
@@ -132,6 +135,17 @@
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 1px;
+  }
+  /* Motion is decoration here: honour the operating-system setting. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
   /* Scrollbars follow the palette instead of the platform default. */
   * {

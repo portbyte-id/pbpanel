@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useState } from "react"
 
 import { ApplyError, ApplyWarnings } from "@/components/ApplyError"
@@ -37,7 +38,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
   const service = configService(source)
 
   if (file.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading the file…</p>
+    return <SkeletonRows label="Loading the file…" />
   }
   if (file.error) {
     return (
@@ -162,7 +163,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
           </p>
         )}
         {history.isPending ? (
-          <p className="text-muted-foreground text-sm">Loading history…</p>
+          <SkeletonRows label="Loading history…" />
         ) : (history.data ?? []).length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No earlier versions yet. Every saved change is kept here, up to the last ten.
@@ -172,10 +173,10 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
                 <tr>
-                  <th className="px-3 py-1.5 font-medium">Version</th>
-                  <th className="px-3 py-1.5 font-medium">Saved</th>
-                  <th className="px-3 py-1.5 font-medium">Change</th>
-                  <th className="px-3 py-1.5 font-medium">
+                  <th scope="col" className="px-3 py-1.5 font-medium">Version</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Saved</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Change</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>

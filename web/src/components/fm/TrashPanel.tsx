@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useState } from "react"
 
 import { ConfirmDialog } from "@/components/fm/FMDialogs"
@@ -72,7 +73,7 @@ export function TrashPanel({ onChanged }: { onChanged: () => void }) {
     )
   }
   if (items === null) {
-    return <p className="text-muted-foreground text-sm">Loading the trash…</p>
+    return <SkeletonRows label="Loading the trash…" />
   }
 
   return (
@@ -94,11 +95,11 @@ export function TrashPanel({ onChanged }: { onChanged: () => void }) {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Original location</th>
-                <th className="px-3 py-2 font-medium">Size</th>
-                <th className="px-3 py-2 font-medium">Deleted</th>
-                <th className="px-3 py-2 font-medium">
+                <th scope="col" className="px-3 py-2 font-medium">Name</th>
+                <th scope="col" className="px-3 py-2 font-medium">Original location</th>
+                <th scope="col" className="px-3 py-2 font-medium">Size</th>
+                <th scope="col" className="px-3 py-2 font-medium">Deleted</th>
+                <th scope="col" className="px-3 py-2 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>

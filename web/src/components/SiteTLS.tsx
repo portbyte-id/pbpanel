@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
@@ -30,8 +31,7 @@ export function ExpiryBadge({ daysLeft }: { daysLeft: number }) {
   const tone = expiryTone(daysLeft)
   return (
     <Badge
-      variant={tone === "expired" ? "destructive" : "outline"}
-      className={tone === "warn" ? "border-amber-500 text-amber-700 dark:text-amber-400" : undefined}
+      variant={tone === "expired" ? "destructive" : tone === "warn" ? "warning" : "outline"}
       data-tone={tone}
     >
       {expiryText(daysLeft)}
@@ -49,7 +49,7 @@ export function SiteTLS({ detail }: { detail: SiteDetail }) {
   const detached = feature !== undefined && !feature.attached
 
   if (tls.isPending || providers.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading the certificate…</p>
+    return <SkeletonRows label="Loading the certificate…" />
   }
   if (tls.error) {
     return (

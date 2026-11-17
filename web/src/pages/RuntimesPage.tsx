@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useId, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -23,7 +24,7 @@ export function RuntimesPage() {
   const [started, setStarted] = useState<string | null>(null)
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading runtimes…</p>
+    return <SkeletonRows label="Loading runtimes…" />
   }
   if (error) {
     return (

@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Pencil, Plus, Trash2, TriangleAlert } from "lucide-react"
 import { useEffect, useId, useState } from "react"
 
@@ -5,8 +6,10 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { FirewallRuleDialog, portLabel } from "@/components/FirewallRuleDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { calloutVariants } from "@/components/ui/callout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type FirewallPending, type FirewallRule, type FirewallState } from "@/lib/api"
 import { coarseSeconds, useCountdown } from "@/lib/countdown"
 import {
@@ -47,7 +50,7 @@ export function FirewallPage() {
   const state = useFirewall()
 
   if (state.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading firewall…</p>
+    return <SkeletonRows label="Loading firewall…" />
   }
   if (state.error || !state.data) {
     return (
@@ -65,8 +68,18 @@ export function FirewallPage() {
       {fw.pending && <PendingBar pending={fw.pending} />}
       {!fw.pending && fw.enabled && fw.dirty && <ApplyBar />}
       {fw.dockerPorts.length > 0 && <DockerWarning ports={fw.dockerPorts} />}
-      <RulesSection fw={fw} />
-      <BlocklistSection />
+      <Tabs defaultValue="rules">
+        <TabsList>
+          <TabsTrigger value="rules">Rules</TabsTrigger>
+          <TabsTrigger value="blocklist">Blocklist</TabsTrigger>
+        </TabsList>
+        <TabsContent value="rules">
+          <RulesSection fw={fw} />
+        </TabsContent>
+        <TabsContent value="blocklist">
+          <BlocklistSection />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -86,9 +99,7 @@ function StatusHeader({ fw }: { fw: FirewallState }) {
         </Badge>
         <Badge variant="outline">IPv6 {fw.ipv6 ? "on" : "off"}</Badge>
         {fw.enabled && fw.dirty && !fw.pending && (
-          <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
-            Unapplied changes
-          </Badge>
+          <Badge variant="warning">Unapplied changes</Badge>
         )}
       </div>
 
@@ -159,7 +170,10 @@ function ApplyBar() {
   return (
     <section
       aria-label="Unapplied changes"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/5 p-4"
+      className={calloutVariants({
+        tone: "warning",
+        className: "flex flex-wrap items-center justify-between gap-3",
+      })}
     >
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium">Saved rules differ from what is live.</p>
@@ -207,7 +221,7 @@ function PendingBar({ pending }: { pending: FirewallPending }) {
     return (
       <section
         aria-label="Pending firewall change"
-        className="rounded-lg border border-amber-500/50 bg-amber-500/5 p-4"
+        className={calloutVariants({ tone: "warning" })}
       >
         <p role="status" className="text-sm font-medium">
           Time ran out. The previous rules are being restored…
@@ -227,7 +241,10 @@ function PendingBar({ pending }: { pending: FirewallPending }) {
   return (
     <section
       aria-label="Pending firewall change"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/5 p-4"
+      className={calloutVariants({
+        tone: "warning",
+        className: "flex flex-wrap items-center justify-between gap-3",
+      })}
     >
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium">
@@ -323,12 +340,12 @@ function RulesSection({ fw }: { fw: FirewallState }) {
           <caption className="sr-only">Firewall allow rules</caption>
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-1.5 font-medium">Port</th>
-              <th className="px-3 py-1.5 font-medium">Protocol</th>
-              <th className="px-3 py-1.5 font-medium">From</th>
-              <th className="px-3 py-1.5 font-medium">Comment</th>
-              <th className="px-3 py-1.5 font-medium">State</th>
-              <th className="px-3 py-1.5 text-right font-medium">Actions</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Port</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Protocol</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">From</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">State</th>
+              <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
@@ -509,9 +526,9 @@ function BlocklistSection() {
             <caption className="sr-only">Blocked addresses</caption>
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-1.5 font-medium">Address</th>
-                <th className="px-3 py-1.5 font-medium">Comment</th>
-                <th className="px-3 py-1.5 text-right font-medium">Actions</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">

@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useState } from "react"
 
 import { JobsDrawer } from "@/components/JobsDrawer"
@@ -21,7 +22,7 @@ export function AuditPage() {
   const [jobId, setJobId] = useState<string | null>(null)
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading audit log…</p>
+    return <SkeletonRows label="Loading audit log…" />
   }
   if (error) {
     return (
@@ -52,12 +53,12 @@ export function AuditPage() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-1.5 font-medium">Time</th>
-              <th className="px-3 py-1.5 font-medium">Actor</th>
-              <th className="px-3 py-1.5 font-medium">Action</th>
-              <th className="px-3 py-1.5 font-medium">Target</th>
-              <th className="px-3 py-1.5 font-medium">Result</th>
-              <th className="px-3 py-1.5 font-medium">Detail</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Time</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Actor</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Action</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Target</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Result</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Detail</th>
             </tr>
           </thead>
           <tbody className="divide-border divide-y">

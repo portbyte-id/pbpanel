@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link } from "@tanstack/react-router"
 import { ArrowRight, CircleAlert, CircleCheck, TriangleAlert } from "lucide-react"
 import { useMemo, useState, type ReactNode } from "react"
@@ -115,7 +116,7 @@ function HealthBar({
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-      <p role="status" className="flex items-center gap-2 text-[0.8125rem] font-medium">
+      <p role="status" className="flex items-center gap-2 text-sm font-medium">
         <span className={cn("size-2 rounded-full", dot)} aria-hidden="true" />
         {text}
       </p>
@@ -180,7 +181,7 @@ export function AlertsPanel({
       note={alerts.length > 0 ? `${alerts.length}` : undefined}
     >
       {alerts.length === 0 ? (
-        <p className="text-muted-foreground flex items-center gap-2 px-3 py-3 text-[0.8125rem]" role="status">
+        <p className="text-muted-foreground flex items-center gap-2 px-3 py-3 text-sm" role="status">
           {!checking && unchecked.length === 0 && (
             <CircleCheck className="text-success size-4 shrink-0" aria-hidden="true" />
           )}
@@ -208,7 +209,7 @@ export function AlertsPanel({
                   <TriangleAlert className="text-warning mt-0.5 size-4 shrink-0" aria-hidden="true" />
                 )}
                 <div className="flex min-w-0 flex-col">
-                  <p className="text-[0.8125rem] font-medium">
+                  <p className="text-sm font-medium">
                     <span className="sr-only">{a.severity === "error" ? "Problem: " : "Warning: "}</span>
                     {a.title}
                   </p>
@@ -227,7 +228,7 @@ export function AlertsPanel({
           Could not read: {unchecked.join(", ")}. Alerts from these are missing.
         </p>
       )}
-      <p className="text-muted-foreground border-border border-t px-3 py-2 text-[0.6875rem] leading-4">
+      <p className="text-muted-foreground border-border border-t px-3 py-2 text-xs leading-4">
         Failed background jobs are not listed here: the panel has no job list to read. Failed cron
         runs and failed actions in the audit log are.
       </p>
@@ -364,7 +365,7 @@ function SeriesStats({ series }: { series: Series }) {
       {stats.map(([name, v]) => (
         <div key={name} className="bg-muted/50 rounded-md px-2 py-1.5 text-center">
           <dt className="text-muted-foreground text-xs">{name}</dt>
-          <dd className="text-[0.8125rem] font-semibold tabular-nums">{format(v)}</dd>
+          <dd className="text-sm font-semibold tabular-nums">{format(v)}</dd>
         </div>
       ))}
     </dl>
@@ -382,14 +383,14 @@ export function DisksPanel({ disks }: { disks: Snapshot["disks"] }) {
   return (
     <Panel title="Disks" note={disks.length > 0 ? `${disks.length}` : undefined}>
       {disks.length === 0 ? (
-        <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">No mounted disks were reported.</p>
+        <p className="text-muted-foreground px-3 py-3 text-sm">No mounted disks were reported.</p>
       ) : (
         <ul className="divide-border divide-y">
           {disks.map((d) => (
             <li key={d.mount} className="flex flex-col gap-1.5 px-3 py-2">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="font-mono text-xs break-all">{d.mount}</span>
-                <span className={cn("text-[0.8125rem] font-medium tabular-nums", levelText(d.used_percent))}>
+                <span className={cn("text-sm font-medium tabular-nums", levelText(d.used_percent))}>
                   {formatPercent(d.used_percent)}
                 </span>
               </div>
@@ -527,7 +528,7 @@ function MetricsSection({ live }: { live: LiveSysinfo }) {
   const { latest, history, isPending, error } = live
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading metrics…</p>
+    return <SkeletonRows label="Loading metrics…" />
   }
   if (error && latest === null) {
     return (
@@ -602,7 +603,7 @@ export function ServiceGrid({
   onAct: (row: ServiceRow, action: ServiceAction) => void
 }) {
   if (services.length === 0) {
-    return <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">No services are reported.</p>
+    return <p className="text-muted-foreground px-3 py-3 text-sm">No services are reported.</p>
   }
   return (
     <ul className="divide-border divide-y">
@@ -616,7 +617,7 @@ export function ServiceGrid({
             className="hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5 md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_5.5rem_11rem]"
           >
             <div className="min-w-0">
-              <p className="text-[0.8125rem] leading-5 font-medium break-all">{row.name}</p>
+              <p className="text-sm leading-5 font-medium break-all">{row.name}</p>
               <p className="text-muted-foreground text-xs leading-4">{KIND_LABEL[row.kind] ?? row.kind}</p>
             </div>
             <p
@@ -734,9 +735,9 @@ export function ServicesSection({ limit, filters = false }: { limit?: number; fi
       )}
 
       {services.isPending ? (
-        <p className="text-muted-foreground px-3 py-3 text-[0.8125rem]">Loading services…</p>
+        <div className="px-3 py-3"><SkeletonRows label="Loading services…" /></div>
       ) : services.error ? (
-        <p role="alert" className="text-destructive px-3 py-3 text-[0.8125rem]">
+        <p role="alert" className="text-destructive px-3 py-3 text-sm">
           {errorText(services.error, "The services could not be loaded.")}
         </p>
       ) : (

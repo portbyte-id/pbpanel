@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
@@ -318,7 +319,7 @@ export function ExtensionPicker({
 function CataloguePicker(props: Omit<Parameters<typeof ExtensionPicker>[0], "catalogue">) {
   const catalogue = usePHPExtensions()
   if (catalogue.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading extensions…</p>
+    return <SkeletonRows label="Loading extensions…" />
   }
   if (catalogue.error || !catalogue.data) {
     return (

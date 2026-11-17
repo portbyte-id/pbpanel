@@ -26,7 +26,7 @@ export function LoginPage() {
         // `redirect` is set when the guard sent the operator here from a page
         // they asked for, so they land back on it instead of the default one.
         onSuccess: () => {
-          void navigate({ to: search.redirect ?? "/settings", replace: true })
+          void navigate({ to: search.redirect ?? "/dashboard", replace: true })
         },
       },
     )

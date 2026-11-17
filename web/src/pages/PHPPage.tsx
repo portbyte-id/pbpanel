@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useState } from "react"
 
@@ -72,7 +73,7 @@ export function PHPPage() {
   const [jobId, setJobId] = useState<string | null>(null)
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading PHP versions…</p>
+    return <SkeletonRows label="Loading PHP versions…" />
   }
   if (error) {
     return (
@@ -247,7 +248,7 @@ function VersionRow({
       {ready && historyOpen && (
         <div className="flex flex-col gap-2">
           {builds.isPending ? (
-            <p className="text-muted-foreground text-sm">Loading builds…</p>
+            <SkeletonRows label="Loading builds…" />
           ) : builds.error ? (
             <p role="alert" className="text-destructive text-sm">
               {messageOf(builds.error, "The builds could not be loaded.")}
@@ -345,7 +346,7 @@ function VersionConfig({ version }: { version: string }) {
         </TabsList>
         <TabsContent value="settings">
           {isPending ? (
-            <p className="text-muted-foreground text-sm">Loading settings…</p>
+            <SkeletonRows label="Loading settings…" />
           ) : error ? (
             <p role="alert" className="text-destructive text-sm">
               {error instanceof ApiError ? error.detail : "The settings could not be loaded."}

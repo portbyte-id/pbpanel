@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -38,7 +39,7 @@ export function LogsPage() {
   const [selected, setSelected] = useState<LogSource | null>(null)
 
   if (sources.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading log sources…</p>
+    return <SkeletonRows label="Loading log sources…" />
   }
   if (sources.error) {
     return (
@@ -315,13 +316,13 @@ export function SearchSummary({
         {stats.files === 1 ? "file" : "files"}, {formatBytes(stats.bytesScanned)} scanned.
       </p>
       {stats.limitHit && (
-        <p className="text-amber-700 dark:text-amber-400">
+        <p className="text-warning">
           Stopped at the limit of {limit} matches, so there may be more. Raise the limit or narrow the
           search.
         </p>
       )}
       {stats.windowCapped && (
-        <p className="text-amber-700 dark:text-amber-400">
+        <p className="text-warning">
           Only the last {lastMB} MB was searched; older log content was not looked at.
         </p>
       )}
@@ -485,8 +486,8 @@ export function SearchPanel({ source }: { source: LogSource }) {
               <caption className="sr-only">Search matches</caption>
               <thead className="bg-muted text-muted-foreground text-left text-xs">
                 <tr>
-                  <th className="px-3 py-1.5 font-medium">File and line</th>
-                  <th className="px-3 py-1.5 font-medium">Text</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">File and line</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Text</th>
                 </tr>
               </thead>
               <tbody className="divide-border divide-y">

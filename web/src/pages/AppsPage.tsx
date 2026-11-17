@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 import { useState } from "react"
@@ -46,7 +47,7 @@ export function AppsPage() {
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading apps…</p>
+    return <SkeletonRows label="Loading apps…" />
   }
   if (error) {
     return (
@@ -85,13 +86,13 @@ export function AppsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-1.5 font-medium">Name</th>
-                <th className="px-3 py-1.5 font-medium">Kind</th>
-                <th className="px-3 py-1.5 font-medium">State</th>
-                <th className="px-3 py-1.5 font-medium">PID</th>
-                <th className="px-3 py-1.5 font-medium">Up for</th>
-                <th className="px-3 py-1.5 font-medium">Port</th>
-                <th className="px-3 py-1.5 font-medium">
+                <th scope="col" className="px-3 py-1.5 font-medium">Name</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Kind</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">State</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">PID</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Up for</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Port</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>

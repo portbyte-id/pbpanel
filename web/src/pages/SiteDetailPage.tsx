@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft } from "lucide-react"
 import { useState } from "react"
@@ -29,7 +30,7 @@ export function SiteDetailPage({ domain }: { domain: string }) {
   const { data, isPending, error } = useSite(domain)
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading {domain}…</p>
+    return <SkeletonRows label="Loading {domain}…" />
   }
   if (error) {
     return (

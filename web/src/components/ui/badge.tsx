@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const badgeVariants = cva(
-  "inline-flex items-center justify-center gap-1 rounded border px-1.5 py-px text-[0.6875rem] leading-4 font-medium whitespace-nowrap [&>svg]:size-3",
+  "inline-flex items-center justify-center gap-1 rounded border px-1.5 py-px text-xs leading-4 font-medium whitespace-nowrap [&>svg]:size-3",
   {
     variants: {
       variant: {
@@ -12,6 +12,11 @@ const badgeVariants = cva(
         secondary: "border-transparent bg-secondary text-secondary-foreground",
         outline: "text-foreground",
         destructive: "border-transparent bg-destructive text-destructive-foreground",
+        // Outlined, not filled: the tone colour is the text, which clears 4.5:1
+        // on both card and muted surfaces in both themes.
+        success: "border-success/50 text-success",
+        warning: "border-warning/50 text-warning",
+        info: "border-info/50 text-info",
       },
     },
     defaultVariants: {

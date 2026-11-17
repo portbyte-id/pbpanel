@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useState } from "react"
 
 import { ConfigEditor } from "@/components/ConfigEditor"
@@ -140,7 +141,7 @@ export function EditorDialog({
             onChange={setDraft}
           />
         ) : (
-          <p className="text-muted-foreground text-sm">Loading the file…</p>
+          <SkeletonRows label="Loading the file…" />
         )}
 
         {saveError && (
