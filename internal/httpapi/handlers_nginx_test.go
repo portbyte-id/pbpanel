@@ -243,7 +243,7 @@ func TestSiteLifecycle(t *testing.T) {
 	}
 
 	code, out = h.call(http.MethodGet, "/api/sites/api.test", nil)
-	if code != 200 || len(out["features"].([]any)) != 4 || out["site_file"] != "/www/panel/nginx/sites/api.test.conf" {
+	if code != 200 || len(out["features"].([]any)) != 5 || out["site_file"] != "/www/panel/nginx/sites/api.test.conf" {
 		t.Fatalf("detail: %d %v", code, out)
 	}
 	for _, f := range out["features"].([]any) {

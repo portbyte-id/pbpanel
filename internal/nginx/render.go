@@ -27,6 +27,7 @@ const (
 	IncludeListen = "listen.conf"
 	IncludeNames  = "names.conf"
 	IncludeACME   = "acme.conf"
+	IncludeTLS    = "tls.conf"
 	IncludeProxy  = "proxy.conf"
 	IncludePHP    = "php.conf"
 )
@@ -108,6 +109,7 @@ server {
     include {{.Listen}};
     include {{.Names}};
     include {{.ACME}};
+    include {{.TLS}};
 
     access_log {{.AccessLog}};
     error_log {{.ErrorLog}};
@@ -132,7 +134,7 @@ server {
 }
 `
 
-const listenIncludeTemplate = `# Managed by PB panel. Ports are added here when TLS arrives.
+const listenIncludeTemplate = `# Managed by PB panel. Port 443 is added by tls.conf once the site has a certificate.
 listen 80;
 listen [::]:80;
 `
@@ -141,7 +143,59 @@ const namesIncludeTemplate = `# Managed by PB panel (site domains).
 server_name{{range .}} {{.}}{{end}};
 `
 
-const acmeIncludeTemplate = `# Managed by PB panel. Certificate challenge handling is added here with TLS.
+// acmeIncludeTemplate answers HTTP-01 challenges from the shared webroot. With
+// `root`, nginx appends the whole request URI, so the token file lives at
+// <webroot>/.well-known/acme-challenge/<token>, which is where the ACME client
+// writes it. The location is a ^~ prefix so no regex location (the PHP one) can
+// take the request, and tls.conf exempts the same path from the HTTPS redirect.
+const acmeIncludeTemplate = `# Managed by PB panel (certificate challenges).
+location ^~ /.well-known/acme-challenge/ {
+    root {{.Webroot}};
+    default_type text/plain;
+    try_files $uri =404;
+}
+`
+
+// tlsEmptyTemplate is what a site without a certificate gets: nothing that
+// nginx could fail on, since a listen 443 ssl without certificate files makes
+// `nginx -t` refuse the whole configuration.
+const tlsEmptyTemplate = `# Managed by PB panel (TLS). This site has no certificate yet.
+`
+
+// tlsIncludeTemplate adds the HTTPS listener to the site's one server block.
+//
+// The optional redirect lives here, not in a second server block, because the
+// panel owns only include files and the site file stays the operator's: a
+// second block would have to be a file nginx.conf globs, which is the operator's
+// territory. A server-level `if` runs before location matching, so it would
+// also redirect the challenge path; the second `if` clears the flag for exactly
+// that prefix. The flag is built with set rather than a nested condition
+// because nginx has no "and". The scheme test makes it a no-op on :443.
+const tlsIncludeTemplate = `# Managed by PB panel (TLS). Rewritten when the certificate changes.
+listen 443 ssl;
+listen [::]:443 ssl;
+http2 on;
+
+ssl_certificate {{.Cert}};
+ssl_certificate_key {{.Key}};
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_session_cache shared:SSL:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+{{- if .Redirect}}
+
+set $pb_https_redirect "";
+if ($scheme = http) {
+    set $pb_https_redirect 1;
+}
+if ($uri ~ ^/\.well-known/acme-challenge/) {
+    set $pb_https_redirect "";
+}
+if ($pb_https_redirect) {
+    return 301 https://$host$request_uri;
+}
+{{- end}}
 `
 
 const proxyIncludeTemplate = `# Managed by PB panel (proxy target).
@@ -185,6 +239,8 @@ func init() {
 		"listen":          listenIncludeTemplate,
 		"names":           namesIncludeTemplate,
 		"acme":            acmeIncludeTemplate,
+		"tls":             tlsIncludeTemplate,
+		"tls-empty":       tlsEmptyTemplate,
 		"proxy":           proxyIncludeTemplate,
 		"php":             phpIncludeTemplate,
 	} {
@@ -234,6 +290,7 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 	return execute("site", struct {
 		Domain, IncludesDir        string
 		Listen, Names, ACME, Proxy string
+		TLS                        string
 		AccessLog, ErrorLog, Root  string
 		Static                     bool
 		PHPSite                    bool
@@ -242,6 +299,7 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 		s.Domain, p.SiteIncludesDir(s.Domain),
 		p.SiteInclude(s.Domain, IncludeListen), p.SiteInclude(s.Domain, IncludeNames),
 		p.SiteInclude(s.Domain, IncludeACME), p.SiteInclude(s.Domain, IncludeProxy),
+		p.SiteInclude(s.Domain, IncludeTLS),
 		p.AccessLog(s.Domain), p.ErrorLog(s.Domain), s.Root,
 		s.Kind == KindStatic, s.Kind == KindPHP, p.SiteInclude(s.Domain, IncludePHP),
 	})
@@ -251,8 +309,44 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 // include files.
 func RenderListen() ([]byte, error) { return execute("listen", nil) }
 
-// RenderACME renders the placeholder acme.conf.
-func RenderACME() ([]byte, error) { return execute("acme", nil) }
+// RenderACME renders acme.conf, which serves the shared challenge webroot.
+func (p Paths) RenderACME() ([]byte, error) {
+	return execute("acme", struct{ Webroot string }{p.ACMEWebroot()})
+}
+
+// TLS is a site's certificate as nginx.conf needs it.
+type TLS struct {
+	// CertFile is the full chain and KeyFile the private key, both inside the
+	// site's certificate directory, where the container can read them.
+	CertFile, KeyFile string
+	// RedirectHTTP answers every plain-HTTP request except ACME challenges
+	// with a 301 to the same URL on HTTPS.
+	RedirectHTTP bool
+}
+
+// RenderTLS renders tls.conf. A nil t is a site without a certificate and
+// renders no directive at all.
+func (p Paths) RenderTLS(domain string, t *TLS) ([]byte, error) {
+	if t == nil {
+		return execute("tls-empty", nil)
+	}
+	if err := safeToken("domain", domain); err != nil {
+		return nil, err
+	}
+	dir := p.SiteCertDir(domain)
+	for what, f := range map[string]string{"certificate": t.CertFile, "private key": t.KeyFile} {
+		if err := safeToken(what+" path", f); err != nil {
+			return nil, err
+		}
+		if path.Clean(f) != f || !strings.HasPrefix(f, dir+"/") {
+			return nil, fmt.Errorf("nginx: %s %q is outside %s, where the container cannot see it", what, f, dir)
+		}
+	}
+	return execute("tls", struct {
+		Cert, Key string
+		Redirect  bool
+	}{t.CertFile, t.KeyFile, t.RedirectHTTP})
+}
 
 // RenderNames renders names.conf: the primary domain first, then the aliases.
 func RenderNames(domain string, aliases []string) ([]byte, error) {
