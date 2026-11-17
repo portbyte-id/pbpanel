@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -49,8 +50,11 @@ func (c *Client) State(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if m, ok := unwrap(v).(map[string]any); ok {
-		return asString(m["statename"]), nil
+	switch got := unwrap(v).(type) {
+	case map[string]any:
+		return asString(got["statename"]), nil
+	case string: // a one-member reply, unwrapped to its value
+		return got, nil
 	}
 	return "", fmt.Errorf("supervisord getState: unexpected reply %T", v)
 }
@@ -76,9 +80,14 @@ func (c *Client) Processes(ctx context.Context) ([]Process, error) {
 	return out, nil
 }
 
+// stateName upper-cases a supervisord state name: RUNNING, STOPPED, FATAL.
+func stateName(s string) string { return strings.ToUpper(s) }
+
 func processFrom(m map[string]any) Process {
 	p := Process{
-		Name: asString(m["name"]), Group: asString(m["group"]), State: asString(m["statename"]),
+		// The Go supervisord reports "Running" where the Python one says RUNNING
+		// (seen on a live daemon, smoke 5), so the state is normalised once here.
+		Name: asString(m["name"]), Group: asString(m["group"]), State: stateName(asString(m["statename"])),
 		SpawnErr: asString(m["spawnerr"]), Description: asString(m["description"]),
 		StdoutLogfile: asString(m["stdout_logfile"]),
 	}
@@ -224,7 +233,7 @@ func (r *reloader) Healthy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if state != "RUNNING" {
+	if stateName(state) != "RUNNING" {
 		return fmt.Errorf("supervisord is %s", state)
 	}
 	return nil
