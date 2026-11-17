@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 import { useState } from "react"
 
@@ -16,7 +16,10 @@ export function kindLabel(kind: Site["kind"]): string {
 /** The sites list. A row leads to the site; the button adds one. */
 export function SitesPage() {
   const { data, isPending, error } = useSites()
-  const [creating, setCreating] = useState(false)
+  // `?proxy=<url>` comes from an app's "Proxy site" button: the dialog opens on
+  // "Another server" with the app's address filled in.
+  const { proxy } = useSearch({ strict: false }) as { proxy?: string }
+  const [creating, setCreating] = useState(proxy !== undefined)
   const navigate = useNavigate()
 
   if (isPending) {
@@ -95,7 +98,12 @@ export function SitesPage() {
 
       <CreateSiteDialog
         open={creating}
-        onOpenChange={setCreating}
+        initial={proxy === undefined ? undefined : { kind: "proxy", target: proxy }}
+        onOpenChange={(open) => {
+          setCreating(open)
+          // Drop the parameter so a reload does not reopen a dialog that was closed.
+          if (!open && proxy !== undefined) void navigate({ to: "/sites", search: {}, replace: true })
+        }}
         onCreated={(domain) => void navigate({ to: "/sites/$domain", params: { domain } })}
       />
     </div>

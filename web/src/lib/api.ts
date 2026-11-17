@@ -190,6 +190,75 @@ export interface JobRef {
   state: string
 }
 
+/* --- Apps and runtimes (M5) --------------------------------------------- */
+
+export type AppType = "go" | "node" | "command"
+export type AppRestart = "always" | "on-failure" | "never"
+
+/** An app as the server reports it: its definition and what supervisord says. */
+export interface PanelApp {
+  id: number
+  name: string
+  type: AppType
+  command: string
+  args: string[]
+  workdir: string
+  env: Record<string, string>
+  user: string
+  node_version: string
+  autostart: boolean
+  restart: AppRestart
+  port: number | null
+  created_at: string
+  /** supervisord's state name, "unknown" when it could not be asked, "not loaded" when it has no such program. */
+  state: string
+  pid: number
+  uptime_seconds: number
+  exitstatus: number
+  spawn_error: string
+  /** `http://127.0.0.1:<port>`, empty when the app has no port. */
+  proxy_url: string
+}
+
+export interface AppInput {
+  name: string
+  type: AppType
+  command: string
+  args?: string[]
+  workdir?: string
+  env?: Record<string, string>
+  user?: string
+  node_version?: string
+  autostart?: boolean
+  restart?: AppRestart
+  port?: number | null
+}
+
+export interface AppResponse {
+  app: PanelApp
+  warnings: string[]
+}
+
+export type AppAction = "start" | "stop" | "restart"
+
+export interface LogChunk {
+  data: string
+  /** Where to continue reading. */
+  offset: number
+}
+
+export interface NodeVersion {
+  version: string
+  path: string
+  used_by: string[]
+}
+
+export interface RuntimesState {
+  nvm_installed: boolean
+  nvm_tag: string
+  node: NodeVersion[]
+}
+
 /* --- File manager (M3 3.10) ------------------------------------------- */
 
 export type FMKind = "file" | "dir" | "symlink" | "other"
@@ -907,6 +976,60 @@ export class ApiClient {
       `/api/config-history/${encodeURIComponent(file)}/${version}/restore`,
       { method: "POST" },
     )
+  }
+
+  async apps(): Promise<PanelApp[]> {
+    return (await this.request<{ apps: PanelApp[] }>("/api/apps")).apps
+  }
+
+  async createApp(input: AppInput): Promise<AppResponse> {
+    return this.request<AppResponse>("/api/apps", { method: "POST", body: JSON.stringify(input) })
+  }
+
+  /** The name cannot change: it is the program name supervisord knows. */
+  async updateApp(name: string, input: AppInput): Promise<AppResponse> {
+    return this.request<AppResponse>(`/api/apps/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteApp(name: string): Promise<void> {
+    return this.request<void>(`/api/apps/${encodeURIComponent(name)}`, { method: "DELETE" })
+  }
+
+  async controlApp(name: string, action: AppAction): Promise<AppResponse> {
+    return this.request<AppResponse>(`/api/apps/${encodeURIComponent(name)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+
+  /** No offset reads the tail; an offset reads on from there. */
+  async appLog(name: string, offset?: number): Promise<LogChunk> {
+    const q = offset === undefined ? "" : `?offset=${offset}`
+    return this.request<LogChunk>(`/api/apps/${encodeURIComponent(name)}/logs${q}`)
+  }
+
+  async runtimes(): Promise<RuntimesState> {
+    return this.request<RuntimesState>("/api/runtimes")
+  }
+
+  /** Always a job: nvm downloads and unpacks Node.js. */
+  async installNode(version: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/runtimes/node", {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    })
+    return res.job
+  }
+
+  async uninstallNode(version: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(
+      `/api/runtimes/node/${encodeURIComponent(version)}`,
+      { method: "DELETE" },
+    )
+    return res.job
   }
 
   async firewall(): Promise<FirewallState> {
