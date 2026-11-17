@@ -4,6 +4,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { appRoute } from "@/routes/_app"
 import { auditRoute } from "@/routes/_app/audit"
 import { appIndexRoute } from "@/routes/_app/index"
+import { filesRoute } from "@/routes/_app/files"
 import { nginxRoute } from "@/routes/_app/nginx"
 import { phpRoute } from "@/routes/_app/php"
 import { settingsRoute } from "@/routes/_app/settings"
@@ -24,6 +25,7 @@ const routeTree = rootRoute.addChildren([
     appIndexRoute,
     sitesRoute,
     siteRoute,
+    filesRoute,
     nginxRoute,
     phpRoute,
     settingsRoute,

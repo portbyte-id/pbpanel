@@ -17,6 +17,10 @@ export interface ErrorEnvelope {
   detail: string
   field?: string
   output?: string
+  /** An edit conflict's file as it is on disk now (`edit_conflict` only). */
+  current?: unknown
+  /** The offset the server actually has (`offset_mismatch` only). */
+  received?: number
 }
 
 /** Header the server compares against the session's CSRF token. */
@@ -186,6 +190,96 @@ export interface JobRef {
   state: string
 }
 
+/* --- File manager (M3 3.10) ------------------------------------------- */
+
+export type FMKind = "file" | "dir" | "symlink" | "other"
+
+export interface FMEntry {
+  name: string
+  path: string
+  kind: FMKind
+  size: number
+  mode: number
+  uid: number
+  gid: number
+  owner: string
+  group: string
+  /** Unix nanoseconds. */
+  mtime: number
+  target?: string
+  target_kind?: FMKind
+}
+
+export interface FMListing {
+  path: string
+  entries: FMEntry[]
+  total: number
+  offset: number
+}
+
+export interface FMMount {
+  device: string
+  path: string
+  type: string
+  total: number
+  used: number
+  free: number
+}
+
+export interface FMFile {
+  path: string
+  content: string
+  size: number
+  mtime: number
+  hash: string
+  mode: number
+}
+
+export interface FMBase {
+  size: number
+  mtime: number
+  hash: string
+}
+
+export interface FMTrashItem {
+  id: string
+  name: string
+  orig_path: string
+  size: number
+  is_dir: boolean
+  mode: number
+  uid: number
+  gid: number
+  deleted_at: string
+}
+
+export interface FMUploadInfo {
+  id: string
+  dir: string
+  name: string
+  size: number
+  received: number
+  overwrite: boolean
+  chunk_max: number
+}
+
+/** Error classes only the file manager produces; see handlers_fm.go. */
+export type FMErrorCode =
+  | "protected_path"
+  | "confirmation_required"
+  | "too_large"
+  | "binary_file"
+  | "checksum_mismatch"
+  | "no_space"
+  | "unsafe_archive"
+  | "edit_conflict"
+  | "use_config_editor"
+  | "offset_mismatch"
+
+export interface FMDownloadFolderOptions {
+  format?: "zip" | "tar.gz"
+}
+
 export interface UpdateSiteInput {
   aliases?: string[]
   proxy_target?: string
@@ -268,12 +362,14 @@ export class ApiError extends Error {
   readonly field: string | null
   /** A validator's own text (`nginx -t`), shown verbatim. */
   readonly output: string | null
+  /** The raw envelope, for codes that carry extra fields (`edit_conflict`). */
+  readonly payload: ErrorEnvelope
 
   constructor(
     status: number,
     code: string,
     detail: string,
-    extra: { field?: string; output?: string } = {},
+    extra: { field?: string; output?: string; payload?: ErrorEnvelope } = {},
   ) {
     super(detail || code)
     this.name = "ApiError"
@@ -282,10 +378,18 @@ export class ApiError extends Error {
     this.detail = detail
     this.field = extra.field ?? null
     this.output = extra.output ?? null
+    this.payload = extra.payload ?? { error: code, detail }
   }
 
   get isUnauthorized(): boolean {
     return this.status === 401
+  }
+
+  /** The file as it is on disk, for an `edit_conflict`. */
+  get conflictCurrent(): FMFile | null {
+    const c = this.payload.current
+    if (this.code !== "edit_conflict" || typeof c !== "object" || c === null) return null
+    return c as FMFile
   }
 }
 
@@ -515,6 +619,234 @@ export class ApiClient {
     })
   }
 
+  /** One page of a directory. `hidden` shows dotfiles; `sort` is name, size or mtime. */
+  async fmList(input: {
+    path: string
+    hidden?: boolean
+    sort?: "name" | "size" | "mtime"
+    desc?: boolean
+    offset?: number
+    limit?: number
+  }): Promise<FMListing> {
+    const q = new URLSearchParams({ path: input.path })
+    if (input.hidden) q.set("hidden", "1")
+    if (input.sort) q.set("sort", input.sort)
+    if (input.desc) q.set("desc", "1")
+    if (input.offset) q.set("offset", String(input.offset))
+    if (input.limit) q.set("limit", String(input.limit))
+    return this.request<FMListing>(`/api/fm/list?${q.toString()}`)
+  }
+
+  async fmStat(path: string): Promise<FMEntry> {
+    return this.request<FMEntry>(`/api/fm/stat?path=${encodeURIComponent(path)}`)
+  }
+
+  async fmDisks(): Promise<FMMount[]> {
+    const res = await this.request<{ mounts: FMMount[] }>("/api/fm/disks")
+    return res.mounts ?? []
+  }
+
+  async fmMkdir(path: string): Promise<FMEntry> {
+    return this.request<FMEntry>("/api/fm/mkdir", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    })
+  }
+
+  async fmCreateFile(path: string): Promise<FMEntry> {
+    return this.request<FMEntry>("/api/fm/create", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    })
+  }
+
+  async fmRename(path: string, name: string): Promise<FMEntry> {
+    return this.request<FMEntry>("/api/fm/rename", {
+      method: "POST",
+      body: JSON.stringify({ path, name }),
+    })
+  }
+
+  /** Same mount: answers `{moved}`. Across mounts: answers 202 with a job. */
+  async fmMove(paths: string[], dest: string): Promise<{ moved: number } | { job: JobRef }> {
+    return this.request<{ moved: number } | { job: JobRef }>("/api/fm/move", {
+      method: "POST",
+      body: JSON.stringify({ paths, dest }),
+    })
+  }
+
+  /** Always a job: answers 202. */
+  async fmCopy(paths: string[], dest: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/fm/copy", {
+      method: "POST",
+      body: JSON.stringify({ paths, dest }),
+    })
+    return res.job
+  }
+
+  /** Non-recursive answers `{changed}`; recursive needs `confirm` and answers a job. */
+  async fmChmod(input: {
+    path: string
+    mode: string
+    recursive?: boolean
+    confirm?: string
+  }): Promise<{ changed: number } | { job: JobRef }> {
+    return this.request<{ changed: number } | { job: JobRef }>("/api/fm/chmod", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async fmChown(input: {
+    path: string
+    owner?: string
+    group?: string
+    recursive?: boolean
+    confirm?: string
+  }): Promise<{ changed: number } | { job: JobRef }> {
+    return this.request<{ changed: number } | { job: JobRef }>("/api/fm/chown", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  /**
+   * Moves items to the trash. A folder needs `confirm` equal to its base name;
+   * a delete that crosses mounts answers 202 with a job instead of the items.
+   */
+  async fmDelete(
+    items: { path: string; confirm?: string }[],
+  ): Promise<{ trashed: FMTrashItem[] } | { job: JobRef }> {
+    return this.request<{ trashed: FMTrashItem[] } | { job: JobRef }>("/api/fm/delete", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    })
+  }
+
+  async fmTrash(): Promise<FMTrashItem[]> {
+    const res = await this.request<{ items: FMTrashItem[] }>("/api/fm/trash")
+    return res.items ?? []
+  }
+
+  /** Restore answers `{path}`, or 202 with a job when the copy is large. */
+  async fmRestore(id: string, name?: string): Promise<{ path: string } | { job: JobRef }> {
+    return this.request<{ path: string } | { job: JobRef }>(
+      `/api/fm/trash/${encodeURIComponent(id)}/restore`,
+      { method: "POST", body: JSON.stringify(name === undefined ? {} : { name }) },
+    )
+  }
+
+  /** Permanent: `confirm` must equal the item's base name. */
+  async fmPurge(id: string, confirm: string): Promise<void> {
+    await this.request<void>(
+      `/api/fm/trash/${encodeURIComponent(id)}?confirm=${encodeURIComponent(confirm)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  /** Opens a text file for editing. `language` is the server's CodeMirror mode. */
+  async fmOpenFile(path: string): Promise<FMFile & { language: string }> {
+    return this.request<FMFile & { language: string }>(
+      `/api/fm/file?path=${encodeURIComponent(path)}`,
+    )
+  }
+
+  /**
+   * Saves a text file. `base` is what was opened; the server answers 409
+   * `edit_conflict` with `current` when the file changed on disk meanwhile.
+   */
+  async fmSaveFile(path: string, content: string, base: FMBase): Promise<FMFile> {
+    return this.request<FMFile>("/api/fm/file", {
+      method: "PUT",
+      body: JSON.stringify({ path, content, base }),
+    })
+  }
+
+  async fmUploadStart(input: {
+    dir: string
+    name: string
+    size: number
+    overwrite?: boolean
+  }): Promise<FMUploadInfo> {
+    return this.request<FMUploadInfo>("/api/fm/uploads", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async fmUploadStatus(id: string): Promise<FMUploadInfo> {
+    return this.request<FMUploadInfo>(`/api/fm/uploads/${encodeURIComponent(id)}`)
+  }
+
+  /** One chunk as raw bytes, with its SHA-256 in `X-Chunk-SHA256`. */
+  async fmUploadChunk(
+    id: string,
+    offset: number,
+    chunk: Blob,
+    sha256: string,
+  ): Promise<FMUploadInfo> {
+    const headers = new Headers({
+      "Content-Type": "application/octet-stream",
+      "X-Chunk-SHA256": sha256,
+    })
+    if (this.csrfToken !== null) headers.set(CSRF_HEADER, this.csrfToken)
+    const res = await this.#fetch(
+      `${this.#baseUrl}/api/fm/uploads/${encodeURIComponent(id)}?offset=${offset}`,
+      { method: "PUT", headers, body: chunk, credentials: "same-origin" },
+    )
+    const body = await readBody(res)
+    if (!res.ok) {
+      const envelope: ErrorEnvelope = isErrorEnvelope(body)
+        ? body
+        : { error: `http_${res.status}`, detail: res.statusText || "the chunk failed" }
+      if (res.status === 401) this.#onUnauthorized?.()
+      throw new ApiError(res.status, envelope.error, envelope.detail, { payload: envelope })
+    }
+    return body as FMUploadInfo
+  }
+
+  async fmUploadComplete(id: string, sha256: string): Promise<string> {
+    const res = await this.request<{ path: string }>(
+      `/api/fm/uploads/${encodeURIComponent(id)}/complete`,
+      { method: "POST", body: JSON.stringify({ sha256 }) },
+    )
+    return res.path
+  }
+
+  async fmUploadCancel(id: string): Promise<void> {
+    await this.request<void>(`/api/fm/uploads/${encodeURIComponent(id)}`, { method: "DELETE" })
+  }
+
+  /** A file downloads as an attachment; a folder streams as an archive. */
+  fmDownloadUrl(path: string, opts: FMDownloadFolderOptions = {}): string {
+    const q = new URLSearchParams({ path })
+    if (opts.format) q.set("format", opts.format)
+    return `${this.#baseUrl}/api/fm/download?${q.toString()}`
+  }
+
+  /** Always a job. An empty `format` is taken from the destination's extension. */
+  async fmArchive(input: {
+    dir: string
+    names: string[]
+    dest: string
+    format?: "zip" | "tar.gz" | "tar"
+  }): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/fm/archive", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job
+  }
+
+  /** Always a job. */
+  async fmExtract(input: { path: string; dest: string; overwrite?: boolean }): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/fm/extract", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job
+  }
+
   /** `file` is a `history_file` key; it contains a slash, so it is escaped whole. */
   async configHistory(file: string): Promise<ConfigVersion[]> {
     const res = await this.request<{ versions: ConfigVersion[] }>(
@@ -569,6 +901,7 @@ export class ApiClient {
       const error = new ApiError(res.status, envelope.error, envelope.detail, {
         field: typeof envelope.field === "string" ? envelope.field : undefined,
         output: typeof envelope.output === "string" ? envelope.output : undefined,
+        payload: envelope,
       })
       // A 401 on login is a wrong password, not an expired session: redirecting
       // there would replace the form's own message with a pointless reload.
