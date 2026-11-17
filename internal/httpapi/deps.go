@@ -62,6 +62,16 @@ type Deps struct {
 	// routes answering 503.
 	TLS *TLSDeps
 
+	// Sysinfo is the host sampler and the service allowlist. Nil leaves
+	// /api/sysinfo and /api/services answering 503.
+	Sysinfo SysinfoService
+
+	// Logs is the log viewer. Nil leaves /api/logs answering 503.
+	Logs LogsService
+
+	// Cron is the job scheduler. Nil leaves /api/cron answering 503.
+	Cron CronService
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

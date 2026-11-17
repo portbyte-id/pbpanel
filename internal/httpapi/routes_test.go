@@ -69,6 +69,26 @@ func protectedRoutes() []protectedRoute {
 		{name: "history version", method: http.MethodGet, path: "/api/config-history/nginx.conf/1", okStatus: http.StatusServiceUnavailable},
 		{name: "history restore", method: http.MethodPost, path: "/api/config-history/nginx.conf/1/restore", okStatus: http.StatusServiceUnavailable},
 		{name: "nginx service", method: http.MethodGet, path: "/api/services/nginx", okStatus: http.StatusServiceUnavailable},
+
+		// M7: dashboard, log viewer and cron. No dependency is wired here, so a
+		// request that gets past the session and CSRF checks answers 503.
+		{name: "sysinfo", method: http.MethodGet, path: "/api/sysinfo", okStatus: http.StatusServiceUnavailable},
+		{name: "sysinfo stream", method: http.MethodGet, path: "/api/sysinfo/stream", okStatus: http.StatusServiceUnavailable},
+		{name: "services list", method: http.MethodGet, path: "/api/services", okStatus: http.StatusServiceUnavailable},
+		{name: "services control", method: http.MethodPost, path: "/api/services/panel/restart", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "logs list", method: http.MethodGet, path: "/api/logs", okStatus: http.StatusServiceUnavailable},
+		{name: "logs tail", method: http.MethodGet, path: "/api/logs/panel:audit/tail", okStatus: http.StatusServiceUnavailable},
+		{name: "logs search", method: http.MethodGet, path: "/api/logs/panel:audit/search?q=a", okStatus: http.StatusServiceUnavailable},
+		{name: "cron list", method: http.MethodGet, path: "/api/cron", okStatus: http.StatusServiceUnavailable},
+		{name: "cron create", method: http.MethodPost, path: "/api/cron", body: map[string]any{"name": "a"}, okStatus: http.StatusServiceUnavailable},
+		{name: "cron get", method: http.MethodGet, path: "/api/cron/1", okStatus: http.StatusServiceUnavailable},
+		{name: "cron put", method: http.MethodPut, path: "/api/cron/1", body: map[string]any{"schedule": "* * * * *"}, okStatus: http.StatusServiceUnavailable},
+		{name: "cron delete", method: http.MethodDelete, path: "/api/cron/1", okStatus: http.StatusServiceUnavailable},
+		{name: "cron enable", method: http.MethodPost, path: "/api/cron/1/enable", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "cron disable", method: http.MethodPost, path: "/api/cron/1/disable", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "cron run", method: http.MethodPost, path: "/api/cron/1/run", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "cron runs", method: http.MethodGet, path: "/api/cron/1/runs", okStatus: http.StatusServiceUnavailable},
+		{name: "cron run detail", method: http.MethodGet, path: "/api/cron/1/runs/2", okStatus: http.StatusServiceUnavailable},
 	}
 }
 

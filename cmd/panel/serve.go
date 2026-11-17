@@ -133,6 +133,13 @@ func serve(ctx context.Context, _ []string) error {
 	files := newFileManager(ctx, st, reg, layout, logger)
 	appsSvc, runtimesSvc := newApps(st, ed, layout, logger)
 
+	// A nil *sites.Manager inside the interface would not compare equal to nil.
+	var siteList siteLister
+	if nginxStack != nil {
+		siteList = nginxStack.Sites
+	}
+	m7 := newM7(st, reg, layout, appsSvc, siteList, logger)
+
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
 	var listener *httpapi.Listener
@@ -157,6 +164,9 @@ func serve(ctx context.Context, _ []string) error {
 		Apps:     appsSvc,
 		Runtimes: runtimesSvc,
 		TLS:      tlsDeps,
+		Sysinfo:  m7.Sysinfo,
+		Logs:     m7.Logs,
+		Cron:     m7.Cron,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
@@ -180,6 +190,7 @@ func serve(ctx context.Context, _ []string) error {
 	logger.Info("panel listening", "bind", bind, "port", listener.Port())
 
 	go sweepSessions(ctx, authSvc, logger)
+	waitM7 := m7.start(ctx, logger)
 	if tlsSvc != nil {
 		tlsSvc.start(ctx)
 	}
@@ -198,6 +209,9 @@ func serve(ctx context.Context, _ []string) error {
 	if err := listener.Close(shutdownCtx); err != nil {
 		logger.Warn("listener did not stop cleanly", "error", err)
 	}
+	// Cron cancels the jobs it started when ctx ends; give them the grace period
+	// to record their outcome.
+	waitM7(stopGrace)
 	return nil
 }
 
