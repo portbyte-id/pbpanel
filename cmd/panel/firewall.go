@@ -78,6 +78,6 @@ func firewallDisable(ctx context.Context, w io.Writer, dbPath string) error {
 	if err := firewall.DisableAll(ctx, st, firewall.ExecCmd{}); err != nil {
 		return fmt.Errorf("firewall disable: %w", err)
 	}
-	fmt.Fprintln(w, "firewall: disabled. The panel chains are flushed and unhooked; ufw and firewalld stay masked.")
+	fmt.Fprintln(w, "firewall: disabled. The panel chains are flushed and unhooked; the distribution's own firewall services stay masked.")
 	return nil
 }

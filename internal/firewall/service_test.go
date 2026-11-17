@@ -96,7 +96,7 @@ func TestEnableMasksThenAppliesAndConfirmEnables(t *testing.T) {
 		t.Fatal(err)
 	}
 	if mk.calls != 1 {
-		t.Fatal("ufw not masked before the first apply")
+		t.Fatal("the distribution firewall service was not masked before the first apply")
 	}
 	if !h.has("iptables", "2222") || !h.has("iptables", "8443") {
 		t.Fatal("detected SSH port and panel port must be live")
