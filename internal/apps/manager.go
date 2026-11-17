@@ -39,20 +39,24 @@ type Options struct {
 	// account. Nil does nothing, which is what the tests want: ownership is a
 	// property of a real host.
 	PrepareDirs func(App) error
+	// MakeDir creates an app's log directory; nil means os.MkdirAll with mode 0755.
+	// The browser test harness replaces it so no test creates directories.
+	MakeDir func(path string) error
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
 
 // Manager owns the apps: their rows, their program files and their processes.
 type Manager struct {
-	db   *sql.DB
-	ed   Applier
-	sv   Supervisor
-	rel  *reloader
-	p    Paths
-	node NodeResolver
-	prep func(App) error
-	now  func() time.Time
+	db    *sql.DB
+	ed    Applier
+	sv    Supervisor
+	rel   *reloader
+	p     Paths
+	node  NodeResolver
+	prep  func(App) error
+	mkdir func(string) error
+	now   func() time.Time
 }
 
 // New returns a Manager.
@@ -63,6 +67,10 @@ func New(o Options) (*Manager, error) {
 	m := &Manager{db: o.Store.DB(), ed: o.Applier, sv: o.Supervisor, p: o.Paths, node: o.Node, prep: o.PrepareDirs, now: o.Now}
 	if m.now == nil {
 		m.now = time.Now
+	}
+	m.mkdir = o.MakeDir
+	if m.mkdir == nil {
+		m.mkdir = func(p string) error { return os.MkdirAll(p, 0o755) }
 	}
 	m.rel = &reloader{sv: o.Supervisor, autostart: m.autostart}
 	return m, nil
@@ -266,7 +274,7 @@ func (m *Manager) Create(ctx context.Context, in Input) (Status, []string, error
 }
 
 func (m *Manager) prepareDirs(a App) error {
-	if err := os.MkdirAll(m.p.LogDir(a.Name), 0o755); err != nil {
+	if err := m.mkdir(m.p.LogDir(a.Name)); err != nil {
 		return fmt.Errorf("apps: create the log directory: %w", err)
 	}
 	if m.prep != nil {

@@ -48,8 +48,9 @@ test("login, change a setting, log out", async ({ page }) => {
 
   // 7. The sidebar offers the future sections as disabled controls, so nothing
   //    looks clickable that has no page behind it yet.
-  const files = page.getByRole("button", { name: /Files — not built yet/i })
-  await expect(files).toBeDisabled()
+  // Files was the example until M3, and Apps until M5; TLS is still one.
+  const tls = page.getByRole("button", { name: /TLS — not built yet/i })
+  await expect(tls).toBeDisabled()
   // PHP was one of them until M2; it is a page now.
   await page.getByRole("link", { name: "PHP" }).click()
   await expect(page).toHaveURL(/\/php/)

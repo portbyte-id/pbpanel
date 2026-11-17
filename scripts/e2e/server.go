@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/portbyte-id/server-panel/internal/apps"
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
 	"github.com/portbyte-id/server-panel/internal/confedit"
@@ -216,6 +217,86 @@ func fakeNginxDeps(st *store.Store) (*httpapi.NginxDeps, error) {
 	}, nil
 }
 
+// fakeApps stands in for supervisord and the config editor at once, the way
+// fakeNginx does for nginx: the HTTP chain and the apps manager are the real
+// ones, the process table is a map. It refuses any program file naming
+// `bogus_directive`, with a message shaped like supervisord's, so the journey can
+// see a rejection; real supervisord is covered by scripts/smoke/5-apps.sh.
+type fakeApps struct {
+	mu    sync.Mutex
+	state map[string]string
+	start map[string]int64
+}
+
+func newFakeApps() *fakeApps {
+	return &fakeApps{state: map[string]string{}, start: map[string]int64{}}
+}
+
+func (f *fakeApps) Apply(_ context.Context, ch confedit.Change) (confedit.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range ch.Files {
+		if !file.Delete && strings.Contains(string(file.Content), "bogus_directive") {
+			return confedit.Result{}, &confedit.ApplyError{
+				Stage: confedit.StageValidate, Service: "supervisord",
+				Output: "line 2: unknown program option bogus_directive",
+				Err:    errors.New("rejected"),
+			}
+		}
+	}
+	for _, file := range ch.Files {
+		name := strings.TrimSuffix(filepath.Base(file.Path), ".conf")
+		switch {
+		case file.Delete:
+			delete(f.state, name)
+		case strings.Contains(string(file.Content), "autostart=true"):
+			f.state[name], f.start[name] = "RUNNING", time.Now().Unix()
+		default:
+			if _, ok := f.state[name]; !ok {
+				f.state[name] = "STOPPED"
+			}
+		}
+	}
+	return confedit.Result{}, nil
+}
+
+func (f *fakeApps) State(context.Context) (string, error) { return "RUNNING", nil }
+
+func (f *fakeApps) Processes(context.Context) ([]apps.Process, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().Unix()
+	var out []apps.Process
+	for name, state := range f.state {
+		p := apps.Process{Name: name, State: state, Now: now}
+		if state == "RUNNING" {
+			p.PID, p.Start = 4242, f.start[name]
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (f *fakeApps) ReloadConfig(context.Context) (apps.ConfigDiff, error) {
+	return apps.ConfigDiff{}, nil
+}
+func (f *fakeApps) AddGroup(context.Context, string) error    { return nil }
+func (f *fakeApps) RemoveGroup(context.Context, string) error { return nil }
+
+func (f *fakeApps) Start(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state[name], f.start[name] = "RUNNING", time.Now().Unix()
+	return nil
+}
+
+func (f *fakeApps) Stop(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state[name] = "STOPPED"
+	return nil
+}
+
 func run(addr, password, dataDir string) error {
 	if dataDir == "" {
 		dir, err := os.MkdirTemp("", "panel-e2e-")
@@ -268,6 +349,18 @@ func run(addr, password, dataDir string) error {
 		return err
 	}
 
+	fa := newFakeApps()
+	appsMgr, err := apps.New(apps.Options{
+		Store: st, Applier: fa, Supervisor: fa,
+		// The same /www paths as fakeNginx: nothing is written to disk, so the root
+		// need not exist (and a Windows temp path is not absolute to package path).
+		Paths:   apps.Paths{Root: "/www"},
+		MakeDir: func(string) error { return nil },
+	})
+	if err != nil {
+		return err
+	}
+
 	handler, err := httpapi.New(httpapi.Deps{
 		Store:    st,
 		Settings: reg,
@@ -277,6 +370,7 @@ func run(addr, password, dataDir string) error {
 		UI:       ui,
 		Logger:   logger,
 		Nginx:    nginxDeps,
+		Apps:     appsMgr,
 	})
 	if err != nil {
 		return err
