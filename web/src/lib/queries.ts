@@ -14,6 +14,9 @@ import {
   type FirewallPending,
   type FirewallRuleInput,
   type FirewallState,
+  type IssueCertInput,
+  type IssuePanelCertInput,
+  type UploadCertInput,
   type NginxSettings,
   type PHPSettings,
   type PoolSettings,
@@ -42,6 +45,10 @@ export const queryKeys = {
   firewallRules: ["firewall", "rules"] as const,
   firewallBlocklist: ["firewall", "blocklist"] as const,
   sitePool: (domain: string) => ["sites", domain, "pool"] as const,
+  siteTLS: (domain: string) => ["sites", domain, "tls"] as const,
+  tlsCerts: ["tls", "certs"] as const,
+  tlsProviders: ["tls", "providers"] as const,
+  panelCert: ["tls", "panel"] as const,
   apps: ["apps"] as const,
   runtimes: ["runtimes"] as const,
 }
@@ -510,4 +517,100 @@ export function useUninstallNode() {
     mutationFn: (version: string) => api.uninstallNode(version),
     onSettled: () => client.invalidateQueries({ queryKey: queryKeys.runtimes }),
   })
+}
+
+/* --- TLS (M6) ------------------------------------------------------------ */
+
+/** A certificate change on one site also changes the all-certificates list. */
+function invalidateSiteTLS(client: QueryClient, domain: string) {
+  void client.invalidateQueries({ queryKey: queryKeys.siteTLS(domain) })
+  void client.invalidateQueries({ queryKey: queryKeys.tlsCerts })
+}
+
+export function useSiteTLS(domain: string) {
+  return useQuery({ queryKey: queryKeys.siteTLS(domain), queryFn: () => api.siteTLS(domain) })
+}
+
+export function useUploadSiteCert(domain: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: UploadCertInput) => api.uploadSiteCert(domain, input),
+    onSuccess: () => invalidateSiteTLS(client, domain),
+  })
+}
+
+/** Resolves to the job id to follow. The certificate is refetched when the job's output closes. */
+export function useIssueSiteCert(domain: string) {
+  return useMutation({ mutationFn: (input: IssueCertInput) => api.issueSiteCert(domain, input) })
+}
+
+export function useRenewSiteCert(domain: string) {
+  return useMutation({ mutationFn: () => api.renewSiteCert(domain) })
+}
+
+/** Called when a TLS job's output closes, whatever the job's outcome. */
+export function useRefreshTLS() {
+  const client = useQueryClient()
+  return () => {
+    void client.invalidateQueries({ queryKey: queryKeys.sites })
+    void client.invalidateQueries({ queryKey: ["tls"] })
+  }
+}
+
+export function useSetSiteRedirect(domain: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (on: boolean) => api.setSiteRedirect(domain, on),
+    onSuccess: () => invalidateSiteTLS(client, domain),
+  })
+}
+
+export function useRemoveSiteCert(domain: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.removeSiteCert(domain),
+    onSuccess: () => invalidateSiteTLS(client, domain),
+  })
+}
+
+export function useTLSCerts() {
+  return useQuery({ queryKey: queryKeys.tlsCerts, queryFn: () => api.tlsCerts() })
+}
+
+export function useTLSProviders() {
+  return useQuery({ queryKey: queryKeys.tlsProviders, queryFn: () => api.tlsProviders() })
+}
+
+export function useSaveTLSProvider() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { name: string; kind: string; apiToken: string }) =>
+      api.saveTLSProvider(input.name, input.kind, input.apiToken),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsProviders }),
+  })
+}
+
+export function useDeleteTLSProvider() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.deleteTLSProvider(name),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsProviders }),
+  })
+}
+
+export function usePanelCert() {
+  return useQuery({ queryKey: queryKeys.panelCert, queryFn: () => api.panelCert() })
+}
+
+export function useUploadPanelCert() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { certificate: string; chain?: string; private_key: string }) =>
+      api.uploadPanelCert(input),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.panelCert }),
+  })
+}
+
+export function useIssuePanelCert() {
+  return useMutation({ mutationFn: (input: IssuePanelCertInput) => api.issuePanelCert(input) })
 }

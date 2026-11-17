@@ -31,7 +31,6 @@ export interface NavSection {
 /** Sections for future milestones. Every one of these is disabled today. */
 export const futureSections: NavSection[] = [
   { label: "Dashboard", icon: Gauge, milestone: "M7" },
-  { label: "TLS", icon: LockKeyhole, milestone: "M6" },
   { label: "Docker", icon: Archive, milestone: "M8" },
 ]
 
@@ -41,6 +40,7 @@ export const builtSections: NavSection[] = [
   { label: "Files", icon: FolderTree, path: "/files" },
   { label: "Nginx", icon: Network, path: "/nginx" },
   { label: "PHP", icon: Terminal, path: "/php" },
+  { label: "TLS", icon: LockKeyhole, path: "/tls" },
   { label: "Firewall", icon: ShieldCheck, path: "/firewall" },
   { label: "Apps", icon: AppWindow, path: "/apps" },
   { label: "Runtimes", icon: Cpu, path: "/runtimes" },

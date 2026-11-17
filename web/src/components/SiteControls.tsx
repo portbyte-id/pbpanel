@@ -14,6 +14,7 @@ const featureLabel: Record<SiteFeature["feature"], string> = {
   names: "Domains",
   acme: "Certificate challenges",
   proxy: "Proxy target",
+  tls: "HTTPS certificate",
 }
 
 function featureOf(detail: SiteDetail, name: SiteFeature["feature"]): SiteFeature | undefined {

@@ -6,6 +6,7 @@ import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
 import { SiteControls } from "@/components/SiteControls"
 import { SitePHP } from "@/components/SitePHP"
+import { SiteTLS } from "@/components/SiteTLS"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -53,6 +54,7 @@ export function SiteDetailPage({ domain }: { domain: string }) {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {data.kind === "php" && <TabsTrigger value="php">PHP</TabsTrigger>}
+          <TabsTrigger value="tls">TLS</TabsTrigger>
           <TabsTrigger value="config">Config</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
@@ -64,6 +66,9 @@ export function SiteDetailPage({ domain }: { domain: string }) {
             <SitePHP detail={data} />
           </TabsContent>
         )}
+        <TabsContent value="tls">
+          <SiteTLS detail={data} />
+        </TabsContent>
         <TabsContent value="config">
           <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />
         </TabsContent>

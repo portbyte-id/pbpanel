@@ -94,7 +94,7 @@ export interface Site {
 
 /** Whether a site file still includes the file one panel control writes. */
 export interface SiteFeature {
-  feature: "listen" | "names" | "acme" | "proxy" | "php"
+  feature: "listen" | "names" | "acme" | "proxy" | "php" | "tls"
   include: string
   attached: boolean
   reason?: string
@@ -190,7 +190,83 @@ export interface JobRef {
   state: string
 }
 
-/* --- Apps and runtimes (M5) --------------------------------------------- */
+/* --- TLS (M6) ------------------------------------------------------------ */
+
+export type CertSource = "upload" | "http01" | "dns01"
+export type RenewalResult = "" | "ok" | "failed"
+
+/** One site's certificate, as the panel stores it. The private key is never in it. */
+export interface CertView {
+  domain: string
+  source: CertSource
+  names: string[]
+  not_before: string
+  not_after: string
+  issuer: string
+  serial: string
+  days_left: number
+  last_renewal_at: string | null
+  last_renewal_result: RenewalResult
+  last_renewal_error: string
+  redirect_http: boolean
+  provider: string
+}
+
+export interface TLSWarning {
+  code: string
+  message: string
+}
+
+export interface UploadCertInput {
+  certificate: string
+  chain: string
+  private_key: string
+}
+
+export type IssueMethod = "http01" | "dns01"
+
+export interface IssueCertInput {
+  method: IssueMethod
+  names: string[]
+  provider?: string
+  email?: string
+}
+
+export interface DNSProvider {
+  name: string
+  kind: string
+  updated_at: string
+}
+
+export interface DNSProviderList {
+  providers: DNSProvider[]
+  kinds: string[]
+}
+
+/** The certificate the panel's own listener serves. */
+export interface CertInfo {
+  subject: string
+  sans: string[]
+  issuer: string
+  not_before: string
+  not_after: string
+  serial: string
+  self_signed: boolean
+}
+
+export interface PanelCert {
+  cert: CertInfo
+  previous_available: boolean
+}
+
+export interface IssuePanelCertInput {
+  hostname: string
+  method: IssueMethod
+  provider?: string
+  email?: string
+}
+
+/* --- Apps and runtimes (M5)--------------------------------------------- */
 
 export type AppType = "go" | "node" | "command"
 export type AppRestart = "always" | "on-failure" | "never"
@@ -644,6 +720,94 @@ export class ApiClient {
     return this.request<ApplyResponse>(`/api/sites/${d}/regenerate?confirm=${d}`, {
       method: "POST",
     })
+  }
+
+  /** GET /api/sites/{domain}/tls. Null while the site has no certificate. */
+  async siteTLS(domain: string): Promise<CertView | null> {
+    const res = await this.request<{ cert: CertView | null }>(tlsPath(domain))
+    return res.cert
+  }
+
+  async uploadSiteCert(
+    domain: string,
+    input: UploadCertInput,
+  ): Promise<{ cert: CertView; warnings: TLSWarning[] }> {
+    return this.request<{ cert: CertView; warnings: TLSWarning[] }>(`${tlsPath(domain)}/upload`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  /** Starts an issuance job and returns its id; the certificate appears when it succeeds. */
+  async issueSiteCert(domain: string, input: IssueCertInput): Promise<string> {
+    const res = await this.request<{ job_id: string }>(`${tlsPath(domain)}/issue`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job_id
+  }
+
+  async renewSiteCert(domain: string): Promise<string> {
+    const res = await this.request<{ job_id: string }>(`${tlsPath(domain)}/renew`, {
+      method: "POST",
+    })
+    return res.job_id
+  }
+
+  async setSiteRedirect(domain: string, redirectHTTP: boolean): Promise<CertView> {
+    return this.request<CertView>(`${tlsPath(domain)}/redirect`, {
+      method: "PUT",
+      body: JSON.stringify({ redirect_http: redirectHTTP }),
+    })
+  }
+
+  async removeSiteCert(domain: string): Promise<void> {
+    await this.request<void>(tlsPath(domain), { method: "DELETE" })
+  }
+
+  async tlsCerts(): Promise<CertView[]> {
+    return (await this.request<{ certs: CertView[] }>("/api/tls/certs")).certs
+  }
+
+  async tlsProviders(): Promise<DNSProviderList> {
+    return this.request<DNSProviderList>("/api/tls/providers")
+  }
+
+  /** PUT adds the provider or replaces its credentials. The token is never read back. */
+  async saveTLSProvider(name: string, kind: string, apiToken: string): Promise<void> {
+    await this.request<unknown>(`/api/tls/providers/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ kind, credentials: { api_token: apiToken } }),
+    })
+  }
+
+  async deleteTLSProvider(name: string): Promise<void> {
+    await this.request<void>(`/api/tls/providers/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    })
+  }
+
+  async panelCert(): Promise<PanelCert> {
+    return this.request<PanelCert>("/api/panel/cert")
+  }
+
+  async uploadPanelCert(input: {
+    certificate: string
+    chain?: string
+    private_key: string
+  }): Promise<CertInfo> {
+    return this.request<CertInfo>("/api/panel/cert/upload", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async issuePanelCert(input: IssuePanelCertInput): Promise<string> {
+    const res = await this.request<{ job_id: string }>("/api/panel/cert/issue", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job_id
   }
 
   async nginxSettings(): Promise<NginxSettings> {
@@ -1159,6 +1323,10 @@ async function readBody(res: Response): Promise<unknown> {
     // envelope; the caller turns it into a generic ApiError.
     return undefined
   }
+}
+
+function tlsPath(domain: string): string {
+  return `/api/sites/${encodeURIComponent(domain)}/tls`
 }
 
 function isLoginPath(path: string): boolean {
