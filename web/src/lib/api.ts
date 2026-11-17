@@ -920,7 +920,8 @@ export class ApiClient {
 
   /** The curated extension catalogue, sorted by name. */
   async phpExtensions(): Promise<PHPExtension[]> {
-    return (await this.request<{ extensions: PHPExtension[] }>("/api/php/extensions")).extensions
+    const res = await this.request<{ extensions: PHPExtension[] | null }>("/api/php/extensions")
+    return (res.extensions ?? []).map((e) => ({ ...e, packages: e.packages ?? [] }))
   }
 
   /** Rebuilds a ready version with exactly these extensions. It serves until the build passes. */
@@ -942,10 +943,10 @@ export class ApiClient {
 
   /** Newest first. */
   async phpBuilds(version: string): Promise<ImageBuild[]> {
-    const res = await this.request<{ builds: ImageBuild[] }>(
+    const res = await this.request<{ builds: ImageBuild[] | null }>(
       `/api/php/${encodeURIComponent(version)}/builds`,
     )
-    return res.builds
+    return (res.builds ?? []).map((b) => ({ ...b, extensions: b.extensions ?? [] }))
   }
 
   /** Makes a ready build the one the version serves. This is the rollback. */
