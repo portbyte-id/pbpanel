@@ -51,6 +51,13 @@ type Deps struct {
 	// Firewall is the iptables firewall. Nil leaves /api/firewall answering 503.
 	Firewall FirewallService
 
+	// Apps runs Go, Node.js and command apps under supervisord. Nil leaves
+	// /api/apps answering 503, which is what a host without supervisord looks like.
+	Apps AppsService
+
+	// Runtimes installs Node.js versions. Nil leaves /api/runtimes answering 503.
+	Runtimes RuntimesService
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string
