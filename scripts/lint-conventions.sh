@@ -11,6 +11,8 @@ cd "$root"
 allowlist="scripts/convention-allowlist.txt"
 
 status=0
+flag=$(mktemp "${TMPDIR:-/tmp}/lint-conventions.XXXXXX")
+trap 'rm -f "$flag"' EXIT
 
 is_allowlisted() {
 	[ -f "$allowlist" ] || return 1
@@ -48,6 +50,10 @@ is_comment() {
 report() {
 	# $1 file, $2 line number, $3 message
 	printf '%s:%s: %s\n' "$1" "$2" "$3" >&2
+	# The reports are made inside `| while` subshells, so a variable would die with
+	# them; the flag file is how a real violation reaches the exit status. A hit in a
+	# comment never gets here, so it can no longer fail the run.
+	printf x >>"$flag"
 }
 
 for file in $files; do
@@ -67,7 +73,6 @@ for file in $files; do
 				report "$file" "${hit%%:*}" \
 					"shell string (no \`sh -c\` / \`bash -c\`): $(printf '%s' "$text" | sed 's/^[[:space:]]*//')"
 			done
-			status=1
 		fi
 	fi
 
@@ -87,10 +92,10 @@ for file in $files; do
 			report "$file" "${hit%%:*}" \
 				"distro command outside internal/osdep: $(printf '%s' "$text" | sed 's/^[[:space:]]*//')"
 		done
-		status=1
 	fi
 done
 
+[ -s "$flag" ] && status=1
 if [ "$status" -eq 0 ]; then
 	echo "lint-conventions: ok"
 fi
