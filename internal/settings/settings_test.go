@@ -193,6 +193,35 @@ func TestInvalidValuesAreRejected(t *testing.T) {
 	}
 }
 
+func TestTLSKeysValidate(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+
+	if s, err := r.Get(ctx, KeyTLSACMEDirectory); err != nil || s.Value != DefaultACMEDirectory || !strings.Contains(s.Value, "staging") {
+		t.Fatalf("directory default = %+v, %v; want Let's Encrypt staging", s, err)
+	}
+	if n, err := r.Int(ctx, KeyTLSRenewDaysBefore); err != nil || n != 30 {
+		t.Fatalf("renew days = %d, %v; want 30", n, err)
+	}
+
+	for _, v := range []string{"http://acme.example/dir", "ftp://x/y", "acme.example", "https://", "https://u:p@acme.example/d"} {
+		if err := r.Set(ctx, KeyTLSACMEDirectory, v); err == nil {
+			t.Errorf("directory %q accepted", v)
+		}
+	}
+	if err := r.Set(ctx, KeyTLSACMEDirectory, "https://acme-v02.api.letsencrypt.org/directory"); err != nil {
+		t.Errorf("production directory rejected: %v", err)
+	}
+	for _, v := range []string{"0", "61", "x", ""} {
+		if err := r.Set(ctx, KeyTLSRenewDaysBefore, v); err == nil {
+			t.Errorf("renew days %q accepted", v)
+		}
+	}
+	if err := r.Set(ctx, KeyTLSRenewDaysBefore, "60"); err != nil {
+		t.Errorf("60 rejected: %v", err)
+	}
+}
+
 // Each type's rules, independent of the five shipped keys, so a future key of
 // any type inherits the same guarantees.
 func TestTypeValidation(t *testing.T) {
@@ -464,7 +493,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
 	groups := r.Groups()
-	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Files"}
+	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Files", "TLS"}
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("got %d groups, want %d: %+v", len(groups), len(wantGroups), groups)
 	}
@@ -481,6 +510,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"PHP":     {"php.versions"},
 		"Files": {"fm.editor.max_bytes", "fm.upload.chunk_max_bytes", "fm.upload.sweep_age",
 			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
+		"TLS": {"tls.acme.directory", "tls.renew.days_before"},
 	}
 	seen := 0
 	for _, g := range groups {
