@@ -1,7 +1,7 @@
 # Server Panel — Development Plan
 
 Date: 2026-11-16. Source: [plan.md](plan.md) (decisions, layout, architecture, stages).
-Status: M0 and M1 built and smoke-tested on Ubuntu. This document turns the ten stages of `plan.md` §4 into milestones with
+Status: M0 and M1 built and smoke-tested on Ubuntu; M6 and M7 built, their smokes (6, 7) written and not run (§8, §9). This document turns the ten stages of `plan.md` §4 into milestones with
 ordered steps, deliverables, tests, and exit gates. Where this file and `plan.md` disagree,
 `plan.md` wins and this file is corrected.
 
@@ -684,6 +684,59 @@ and cron jobs whose output is recorded.
 Stop the nginx container from the host → dashboard shows it stopped → restart from the UI →
 sites serve. Create a cron job `* * * * *` writing a timestamp → within two minutes its output is
 in the run history and in its log file. Search a site access log for a request made by the script.
+
+### Status (2026-11-17)
+
+M7 is **built through 7.7 (backend) and 7.8 is written, not gated**. The exit gate (smoke 7) has
+not run on any host. API contract: `docs/design/m7-api.md`.
+
+| Step | State | Notes |
+|------|-------|-------|
+| 7.1 | done, fixtures only | `internal/sysinfo` parsers and sampler against `/proc` fixtures; never read a live `/proc` on a host. |
+| 7.2 | done, fakes only | Service list and control through fake runners; nothing ran `systemctl` or Docker. |
+| 7.3 | not done here | Dashboard UI belongs to the `web/` work and is not covered by this record. |
+| 7.4 | done, fixtures only | Log registry, SSE tail, NDJSON search incl. gz fixture. |
+| 7.5 | not recorded here | Rotation is not exercised by smoke 7. |
+| 7.6 | done, fake clock | `internal/cron` scheduler, overlap, shell gate (`cron.allow_shell`). No real run as another user on a host. |
+| 7.7 | backend done, fakes only | `/api/sysinfo`, `/api/services`, `/api/logs`, `/api/cron`; run detail is `GET /api/cron/{id}/runs/{runId}`. UI and Playwright are not part of this record. |
+| 7.8 | written, not run | See below. |
+
+**Step 7.8 status: written, not run.** `scripts/smoke/7-dashboard-logs-cron.sh` follows the exit
+gate above and needs a disposable Ubuntu VM with Docker, the nginx container `panel-nginx`
+publishing port 80, and root SSH. It was checked with `bash -n`, `dash -n` and a dry run only
+(shellcheck is not installed in the WSL image). It is disruptive: step 3 stops the nginx container
+for a few seconds, and an exit trap starts it again.
+
+Exit gate clauses and what the script covers:
+
+| Clause | In the script | Proven |
+|--------|---------------|--------|
+| Stop nginx from the host, panel shows it stopped | `docker stop`, then polls `GET /api/services` for `stopped`; curl on port 80 must fail | No |
+| Restart, sites serve | `POST /api/services/panel-nginx/start` (204), then curl with the site's Host header; also `restart` | No |
+| Cron `* * * * *`, output in run history and log file within two minutes | script job run by the scheduler (`source` is `schedule`), waited up to 150 s; run output tail, `log_path` read with `cat` on the VM, and `cron:<job>` tail in the log viewer | No |
+| Search a site access log for the script's request | the cron script requests a unique path from the site; the search match count must equal `grep -c` on the VM | No |
+
+Also covered: snapshot memory total against `/proc/meminfo`, uptime within 120 s, SSE stream yields
+a `snapshot` event, `panel` stop refused (403 `not_allowed`), unknown service 404, log source list
+without server paths, tail, literal / regex / case-insensitive / bad-pattern search, shell job refused
+(403 `shell_not_allowed`) then accepted after `PUT /api/settings` sets `cron.allow_shell` and refused
+again on run once it is off, manual run, enable and disable, duplicate 409, validation 400, cross-job
+run 404, delete removing history and the log directory.
+
+Not covered by the script, and not proven anywhere: the dashboard UI and its alerts (7.3), "restart
+from the UI" (the script uses the API, the UI path is for Playwright), log rotation (7.5), and the
+jobs-run-as-another-user path (the job runs as root).
+
+Unproven assumptions in the script: the key order and shapes in `m7-api.md` (`"memory":{...}` with
+`total_bytes` first, `"latest":{`, run field names, `"outcome":"started"`); `PUT /api/settings` takes
+`{"settings":[{"name","value"}]}` with the value as a string for a bool, and `GET /api/settings`
+shows `cron.allow_shell` with a `"value"` field; the panel's service state for a container stopped
+behind its back turns `stopped` within 45 s; `POST .../start` on a running or stopped container
+answers 204; the cron script may live in `/usr/local/bin` and the job may run as `root`; run logs
+sit under `/www/panel/logs/cron/<job>/` and deleting a job removes that directory; the site access
+log is `/www/panel/logs/sites/<domain>.access.log` and is written without buffering delay beyond 20 s;
+the `docker:panel-nginx` and `panel:audit` source ids exist; a POST to `/run` on a yearly job answers
+202 `started`; running a stored shell job after the setting is turned off answers 403.
 
 ---
 
