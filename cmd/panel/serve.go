@@ -88,7 +88,11 @@ func serve(ctx context.Context, _ []string) error {
 	// Building the stack touches neither Docker nor the disk; a failure here is
 	// a wiring problem, and the nginx routes then answer 503.
 	var nginxDeps *httpapi.NginxDeps
-	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, logger)
+	ed, err := newEditor(st, layout)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, ed, logger)
 	if err != nil {
 		logger.Error("nginx is not available", "error", err)
 		nginxStack = nil
@@ -97,6 +101,7 @@ func serve(ctx context.Context, _ []string) error {
 	}
 
 	files := newFileManager(ctx, st, reg, layout, logger)
+	appsSvc, runtimesSvc := newApps(st, ed, layout, logger)
 
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
@@ -113,6 +118,8 @@ func serve(ctx context.Context, _ []string) error {
 		Nginx:    nginxDeps,
 		Files:    files,
 		Firewall: newFirewall(ctx, st, reg, logger),
+		Apps:     appsSvc,
+		Runtimes: runtimesSvc,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
