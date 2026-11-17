@@ -226,10 +226,16 @@ func dockerArch(goarch string) (string, error) {
 }
 
 // MaskFirewallServices stops and masks ufw so it cannot overwrite the panel's
-// iptables chains. Unused until the firewall milestone.
+// iptables chains. A host without ufw (minimal images ship none) has nothing to
+// stop, but the unit is still masked so installing ufw later cannot start it.
 func (u *Ubuntu) MaskFirewallServices(ctx context.Context) error {
-	if err := u.run.Run(ctx, "systemctl", "stop", "ufw"); err != nil {
-		return fmt.Errorf("osdep: stop ufw: %w", err)
+	// `systemctl stop` of a unit that does not exist fails with exit 5, which would
+	// block every first enable on a host that never had ufw. `systemctl cat` tells
+	// the two cases apart: it fails only when there is no such unit.
+	if u.run.Run(ctx, "systemctl", "cat", "ufw") == nil {
+		if err := u.run.Run(ctx, "systemctl", "stop", "ufw"); err != nil {
+			return fmt.Errorf("osdep: stop ufw: %w", err)
+		}
 	}
 	if err := u.run.Run(ctx, "systemctl", "mask", "ufw"); err != nil {
 		return fmt.Errorf("osdep: mask ufw: %w", err)

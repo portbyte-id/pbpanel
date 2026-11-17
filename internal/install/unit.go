@@ -8,6 +8,39 @@ import (
 // unitName is the systemd unit install writes and enables.
 const unitName = "panel.service"
 
+// firewallUnitName is the oneshot unit that restores the confirmed firewall ruleset
+// at boot, before the network comes up and without the daemon (development plan 4.6).
+const firewallUnitName = "panel-firewall.service"
+
+// FirewallUnitFile renders panel-firewall.service. It replays the saved ruleset from
+// the database, so the host is filtered before any service listens and does not
+// depend on panel.service starting. It is installed enabled but never started by
+// install: with the firewall off in the database it does nothing at boot.
+func FirewallUnitFile(binaryPath string) string {
+	var b strings.Builder
+	b.WriteString("[Unit]\n")
+	b.WriteString("Description=Server Panel firewall restore\n")
+	// No default dependencies: the unit must run before network-pre.target, which
+	// the default sysinit ordering would put it after. The database lives under
+	// /www, so that mount has to be there first.
+	b.WriteString("DefaultDependencies=no\n")
+	b.WriteString("RequiresMountsFor=/www\n")
+	b.WriteString("After=local-fs.target\n")
+	b.WriteString("Before=network-pre.target\n")
+	b.WriteString("Wants=network-pre.target\n")
+	b.WriteString("Conflicts=shutdown.target\n")
+	b.WriteString("Before=shutdown.target\n")
+	b.WriteString("\n")
+	b.WriteString("[Service]\n")
+	b.WriteString("Type=oneshot\n")
+	b.WriteString("RemainAfterExit=yes\n")
+	fmt.Fprintf(&b, "ExecStart=%s firewall restore\n", binaryPath)
+	b.WriteString("\n")
+	b.WriteString("[Install]\n")
+	b.WriteString("WantedBy=multi-user.target\n")
+	return b.String()
+}
+
 // UnitFile renders the panel's systemd unit from plan.md §3.2.
 //
 // The hardening set is exactly that section: NoNewPrivileges, LockPersonality,

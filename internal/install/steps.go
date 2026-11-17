@@ -152,6 +152,8 @@ func (s *runState) steps() []step {
 		{name: "panel-cert", done: s.certDone, run: s.generateCert},
 		{name: "binary", done: s.binaryDone, run: s.installBinary},
 		{name: "unit-file", done: s.unitDone, run: s.writeUnit},
+		{name: "firewall-unit", done: s.firewallUnitDone, run: s.writeFirewallUnit},
+		{name: "enable-firewall-unit", done: s.firewallEnabledDone, run: s.enableFirewallUnit},
 		{name: "enable-service", done: s.enabledDone, run: s.enableService},
 		{name: "start-service", done: s.activeDone, run: s.startService},
 		{name: "print-url", done: always, run: s.printURL},
@@ -468,6 +470,41 @@ func (s *runState) writeUnit(ctx context.Context) error {
 	}
 	s.unitChanged = true
 	return s.Runner.Run(ctx, "systemctl", "daemon-reload")
+}
+
+// --- firewall restore unit -------------------------------------------------
+
+func (s *runState) firewallUnitPath() string {
+	return filepath.Join(filepath.Dir(s.Layout.UnitPath), firewallUnitName)
+}
+
+func (s *runState) firewallUnitDone(_ context.Context) (bool, error) {
+	have, err := os.ReadFile(s.firewallUnitPath())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return string(have) == FirewallUnitFile(s.Layout.BinaryPath()), nil
+}
+
+// writeFirewallUnit writes panel-firewall.service. It never restarts the daemon:
+// the unit is a oneshot that only matters at the next boot.
+func (s *runState) writeFirewallUnit(ctx context.Context) error {
+	path := s.firewallUnitPath()
+	if err := os.WriteFile(path, []byte(FirewallUnitFile(s.Layout.BinaryPath())), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return s.Runner.Run(ctx, "systemctl", "daemon-reload")
+}
+
+func (s *runState) firewallEnabledDone(ctx context.Context) (bool, error) {
+	return s.Runner.Run(ctx, "systemctl", "is-enabled", "--quiet", firewallUnitName) == nil, nil
+}
+
+func (s *runState) enableFirewallUnit(ctx context.Context) error {
+	return s.Runner.Run(ctx, "systemctl", "enable", firewallUnitName)
 }
 
 // --- enable and start ------------------------------------------------------

@@ -33,6 +33,7 @@ type hostState struct {
 	dockerUp   bool
 	enabled    bool
 	active     bool
+	fwEnabled  bool
 }
 
 // fakeRunner records every command and answers the probes from hostState.
@@ -70,6 +71,10 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) error {
 		if !f.state.enabled {
 			return errors.New("disabled")
 		}
+	case "systemctl is-enabled --quiet panel-firewall.service":
+		if !f.state.fwEnabled {
+			return errors.New("disabled")
+		}
 	case "systemctl is-active --quiet panel.service":
 		if !f.state.active {
 			return errors.New("inactive")
@@ -90,6 +95,8 @@ func (f *fakeRunner) apply() {
 			f.state.dockerUp = true
 		case joined == "systemctl enable panel.service":
 			f.state.enabled = true
+		case joined == "systemctl enable panel-firewall.service":
+			f.state.fwEnabled = true
 		case joined == "systemctl restart panel.service":
 			f.state.active = true
 		}
@@ -243,6 +250,8 @@ func TestInstallStepOrder(t *testing.T) {
 		"panel-cert",
 		"binary",
 		"unit-file",
+		"firewall-unit",
+		"enable-firewall-unit",
 		"enable-service",
 		"start-service",
 		"print-url",
@@ -284,6 +293,11 @@ func TestFirstInstallEmitsExpectedArgv(t *testing.T) {
 		// deliberately absent: this run rewrote the unit, so it restarts rather
 		// than asking whether the old process is up.
 		"systemctl daemon-reload",
+		// firewall-unit writes panel-firewall.service (another reload) and enables it;
+		// it is never started here, since it only matters at the next boot.
+		"systemctl daemon-reload",
+		"systemctl is-enabled --quiet panel-firewall.service",
+		"systemctl enable panel-firewall.service",
 		"systemctl is-enabled --quiet panel.service",
 		"systemctl enable panel.service",
 		"systemctl restart panel.service",

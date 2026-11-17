@@ -379,9 +379,24 @@ func TestMaskFirewallServicesArgv(t *testing.T) {
 		t.Fatalf("MaskFirewallServices: %v", err)
 	}
 	want := []string{
+		"systemctl cat ufw",
 		"systemctl stop ufw",
 		"systemctl mask ufw",
 	}
+	if got := r.names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv:\n got %q\nwant %q", got, want)
+	}
+}
+
+// A host with no ufw unit (the sandbox VM is one) must not fail the first enable:
+// there is nothing to stop, and the unit is still masked.
+func TestMaskFirewallServicesWithoutUfw(t *testing.T) {
+	r := &fakeRunner{failOn: "systemctl cat ufw"}
+	u := newTestUbuntu(t, ubuntuOSRelease, basePasswd, baseGroup, r)
+	if err := u.MaskFirewallServices(context.Background()); err != nil {
+		t.Fatalf("MaskFirewallServices on a host without ufw: %v", err)
+	}
+	want := []string{"systemctl cat ufw", "systemctl mask ufw"}
 	if got := r.names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv:\n got %q\nwant %q", got, want)
 	}
@@ -393,8 +408,10 @@ func TestMaskFirewallServicesStopsOnFailure(t *testing.T) {
 	if err := u.MaskFirewallServices(context.Background()); err == nil {
 		t.Fatal("MaskFirewallServices ignored a failed stop")
 	}
-	if len(r.calls) != 1 {
-		t.Fatalf("masked after the stop failed: %v", r.names())
+	for _, c := range r.names() {
+		if c == "systemctl mask ufw" {
+			t.Fatalf("masked after the stop failed: %v", r.names())
+		}
 	}
 }
 

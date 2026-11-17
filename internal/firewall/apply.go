@@ -127,13 +127,7 @@ type famCmds struct {
 	restore string
 }
 
-func (m *Manager) families() []famCmds {
-	fs := []famCmds{{fam4, "iptables", "iptables-save", "iptables-restore"}}
-	if m.ipv6 {
-		fs = append(fs, famCmds{fam6, "ip6tables", "ip6tables-save", "ip6tables-restore"})
-	}
-	return fs
-}
+func (m *Manager) families() []famCmds { return families(m.ipv6) }
 
 // snapshot is the owned-chain state of one family, enough to put it back.
 type snapshot struct {

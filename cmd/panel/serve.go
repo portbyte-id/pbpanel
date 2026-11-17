@@ -108,10 +108,11 @@ func serve(ctx context.Context, _ []string) error {
 		Audit: audit.New(st.DB(),
 			audit.WithMirrorPath(filepath.Join(layout.LogsDir(), "audit.log")),
 			audit.WithLogger(logger)),
-		Jobs:  jobsMgr,
-		UI:    ui,
-		Nginx: nginxDeps,
-		Files: files,
+		Jobs:     jobsMgr,
+		UI:       ui,
+		Nginx:    nginxDeps,
+		Files:    files,
+		Firewall: newFirewall(ctx, st, reg, logger),
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
