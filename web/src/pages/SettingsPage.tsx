@@ -1,8 +1,10 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useMemo, useState } from "react"
 
 import { SettingField } from "@/components/SettingsField"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type SettingKey, type SettingWrite } from "@/lib/api"
 import { useSaveSettings, useSettings } from "@/lib/queries"
 
@@ -20,6 +22,7 @@ export function SettingsPage() {
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [tab, setTab] = useState<string | null>(null)
 
   const effective = useMemo(() => {
     const out: Record<string, string> = {}
@@ -51,12 +54,16 @@ export function SettingsPage() {
       onError: (err) => {
         const mapped = mapSettingError(err, dirty)
         setFieldErrors(mapped.fieldErrors)
+        // The failing key may sit in a tab that is not showing: go to it.
+        const bad = Object.keys(mapped.fieldErrors)[0]
+        const owner = data?.groups.find((g) => g.keys.some((k) => k.name === bad))
+        if (owner) setTab(owner.name)
       },
     })
   }
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading settings…</p>
+    return <SkeletonRows label="Loading settings…" />
   }
   if (loadError) {
     return (
@@ -76,27 +83,50 @@ export function SettingsPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-4">
-      {(data?.groups ?? []).map((group) => (
-        <Card key={group.name}>
-          <CardHeader>
-            <CardTitle>{group.name}</CardTitle>
-          </CardHeader>
-          <CardContent className="divide-border divide-y">
-            {group.keys.map((key: SettingKey) => (
-              <SettingField
-                key={key.name}
-                setting={key}
-                value={draft[key.name] ?? key.value}
-                error={fieldErrors[key.name]}
-                onChange={(value) => {
-                  setDraft((prev) => ({ ...prev, [key.name]: value }))
-                  setSavedAt(null)
-                }}
-              />
-            ))}
-          </CardContent>
-        </Card>
-      ))}
+      {(data?.groups ?? []).length > 0 && (
+        <Tabs value={tab ?? data?.groups[0]?.name} onValueChange={setTab} className="gap-3">
+          <TabsList className="flex-wrap">
+            {(data?.groups ?? []).map((group) => {
+              const unsaved = group.keys.some((k) => dirty.some((d) => d.name === k.name))
+              return (
+                <TabsTrigger key={group.name} value={group.name}>
+                  {group.name}
+                  {unsaved && (
+                    <span
+                      className="bg-warning ml-1.5 inline-block size-1.5 rounded-full"
+                      role="img"
+                      aria-label="unsaved changes"
+                    />
+                  )}
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+          {(data?.groups ?? []).map((group) => (
+            <TabsContent key={group.name} value={group.name}>
+              <Card>
+                <CardHeader>
+                  <CardTitle>{group.name}</CardTitle>
+                </CardHeader>
+                <CardContent className="divide-border divide-y">
+                  {group.keys.map((key: SettingKey) => (
+                    <SettingField
+                      key={key.name}
+                      setting={key}
+                      value={draft[key.name] ?? key.value}
+                      error={fieldErrors[key.name]}
+                      onChange={(value) => {
+                        setDraft((prev) => ({ ...prev, [key.name]: value }))
+                        setSavedAt(null)
+                      }}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          ))}
+        </Tabs>
+      )}
 
       {generalError && (
         <p role="alert" className="text-destructive text-sm">

@@ -75,7 +75,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 onClick={() => go(item.path)}
                 onMouseMove={() => setActive(i)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem]",
+                  "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm",
                   i === active ? "bg-accent text-accent-foreground" : "text-foreground",
                 )}
               >

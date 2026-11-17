@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useState } from "react"
 
@@ -33,12 +34,18 @@ export function NginxPage() {
   return (
     <Tabs defaultValue="settings" className="max-w-4xl">
       <TabsList>
-        <TabsTrigger value="settings">Status and settings</TabsTrigger>
+        <TabsTrigger value="settings">Status</TabsTrigger>
+        <TabsTrigger value="image">Image</TabsTrigger>
+        <TabsTrigger value="common">Settings</TabsTrigger>
         <TabsTrigger value="conf">nginx.conf</TabsTrigger>
       </TabsList>
-      <TabsContent value="settings" className="flex flex-col gap-6">
+      <TabsContent value="settings">
         <ServiceStatus />
+      </TabsContent>
+      <TabsContent value="image">
         <ImageCard />
+      </TabsContent>
+      <TabsContent value="common">
         <SettingsForm />
       </TabsContent>
       <TabsContent value="conf">
@@ -79,7 +86,7 @@ function ServiceStatus() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {isPending ? (
-          <p className="text-muted-foreground">Asking Docker…</p>
+          <SkeletonRows label="Asking Docker…" />
         ) : error ? (
           <p role="alert" className="text-destructive">
             {error instanceof ApiError ? error.detail : "The status could not be loaded."}
@@ -152,7 +159,7 @@ export function ImageCard() {
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-sm">
         {isPending ? (
-          <p className="text-muted-foreground">Loading the image…</p>
+          <SkeletonRows label="Loading the image…" />
         ) : error ? (
           <p role="alert" className="text-destructive">
             {error instanceof ApiError ? error.detail : "The image could not be loaded."}
@@ -285,7 +292,7 @@ function SettingsForm() {
   }, [data])
 
   if (isPending || (!draft && !error)) {
-    return <p className="text-muted-foreground text-sm">Loading settings…</p>
+    return <SkeletonRows label="Loading settings…" />
   }
   if (error || !draft || !data) {
     return (

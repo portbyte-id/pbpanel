@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
@@ -99,7 +100,7 @@ function PoolSection({ domain }: { domain: string }) {
         Worker pool
       </h3>
       {isPending ? (
-        <p className="text-muted-foreground text-sm">Loading the pool…</p>
+        <SkeletonRows label="Loading the pool…" />
       ) : error ? (
         <p role="alert" className="text-destructive text-sm">
           {error instanceof ApiError ? error.detail : "The pool could not be loaded."}

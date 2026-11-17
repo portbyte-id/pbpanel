@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 import { useState } from "react"
@@ -23,7 +24,7 @@ export function SitesPage() {
   const navigate = useNavigate()
 
   if (isPending) {
-    return <p className="text-muted-foreground text-sm">Loading sites…</p>
+    return <SkeletonRows label="Loading sites…" />
   }
   if (error) {
     return (
@@ -56,16 +57,21 @@ export function SitesPage() {
             A site answers for one or more domains. It can serve files from a folder or pass
             requests to an app running on this server.
           </p>
+          <Button className="mt-4" onClick={() => setCreating(true)}>
+            <Plus aria-hidden="true" />
+            Add site
+          </Button>
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
+            <caption className="sr-only">Sites served by nginx</caption>
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-1.5 font-medium">Domain</th>
-                <th className="px-3 py-1.5 font-medium">Type</th>
-                <th className="px-3 py-1.5 font-medium">Serves</th>
-                <th className="px-3 py-1.5 font-medium">Other domains</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Domain</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Type</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Serves</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Other domains</th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">

@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Plus } from "lucide-react"
 import { useState } from "react"
 
@@ -57,7 +58,7 @@ export function CronPage() {
   const [ran, setRan] = useState<string | null>(null)
 
   if (jobs.isPending) {
-    return <p className="text-muted-foreground text-sm">Loading cron jobs…</p>
+    return <SkeletonRows label="Loading cron jobs…" />
   }
   if (jobs.error) {
     return (
@@ -119,12 +120,12 @@ export function CronPage() {
             <caption className="sr-only">Cron jobs</caption>
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-1.5 font-medium">Name</th>
-                <th className="px-3 py-1.5 font-medium">Schedule</th>
-                <th className="px-3 py-1.5 font-medium">User</th>
-                <th className="px-3 py-1.5 font-medium">Next run</th>
-                <th className="px-3 py-1.5 font-medium">Last run</th>
-                <th className="px-3 py-1.5 font-medium">
+                <th scope="col" className="px-3 py-1.5 font-medium">Name</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Schedule</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">User</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Next run</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Last run</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
@@ -275,7 +276,7 @@ export function RunHistory({ job }: { job: CronJob }) {
   const runs = useCronRuns(job.id)
   const [openRun, setOpenRun] = useState<number | null>(null)
 
-  if (runs.isPending) return <p className="text-muted-foreground text-sm">Loading runs…</p>
+  if (runs.isPending) return <SkeletonRows label="Loading runs…" />
   if (runs.error) {
     return (
       <p role="alert" className="text-destructive text-sm">
@@ -294,12 +295,12 @@ export function RunHistory({ job }: { job: CronJob }) {
           <caption className="sr-only">Runs of {job.name}</caption>
           <thead className="bg-muted text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-1.5 font-medium">Started</th>
-              <th className="px-3 py-1.5 font-medium">Trigger</th>
-              <th className="px-3 py-1.5 font-medium">Result</th>
-              <th className="px-3 py-1.5 font-medium">Exit</th>
-              <th className="px-3 py-1.5 font-medium">Took</th>
-              <th className="px-3 py-1.5 font-medium">
+              <th scope="col" className="px-3 py-1.5 font-medium">Started</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Trigger</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Result</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Exit</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">Took</th>
+              <th scope="col" className="px-3 py-1.5 font-medium">
                 <span className="sr-only">Output</span>
               </th>
             </tr>
@@ -351,7 +352,7 @@ function RunOutput({ jobId, runId, row }: { jobId: number; runId: number; row: C
         {detail.error instanceof ApiError ? detail.error.detail : "The run could not be loaded."}
       </p>
     ) : (
-      <p className="text-muted-foreground text-sm">Loading output…</p>
+      <SkeletonRows label="Loading output…" />
     )
   }
 

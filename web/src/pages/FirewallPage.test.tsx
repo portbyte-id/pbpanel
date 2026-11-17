@@ -247,6 +247,7 @@ describe("FirewallPage", () => {
     vi.mocked(api.removeBlocklistEntry).mockResolvedValue(undefined)
     const user = userEvent.setup()
 
+    await user.click(await screen.findByRole("tab", { name: "Blocklist" }))
     expect(await screen.findByText("198.51.100.7")).toBeInTheDocument()
     await user.type(screen.getByLabelText("Address or CIDR"), "203.0.113.9")
     await user.click(screen.getByRole("button", { name: "Block address" }))

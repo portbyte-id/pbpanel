@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link } from "@tanstack/react-router"
 import { useState, type ReactNode } from "react"
 
@@ -12,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type CertInfo, type CertView, type DNSProvider } from "@/lib/api"
 import {
   useDeleteTLSProvider,
@@ -28,11 +30,22 @@ import { formatDate, renewalStatus, sortCertsBySoonest, sourceLabel } from "@/li
 /** Every certificate, the one that needs attention first; DNS providers; the panel's own certificate. */
 export function TLSPage() {
   return (
-    <div className="flex max-w-4xl flex-col gap-4">
-      <CertificatesCard />
-      <ProvidersCard />
-      <PanelCertCard />
-    </div>
+    <Tabs defaultValue="certificates" className="max-w-4xl">
+      <TabsList>
+        <TabsTrigger value="certificates">Site certificates</TabsTrigger>
+        <TabsTrigger value="providers">DNS providers</TabsTrigger>
+        <TabsTrigger value="panel">Panel certificate</TabsTrigger>
+      </TabsList>
+      <TabsContent value="certificates">
+        <CertificatesCard />
+      </TabsContent>
+      <TabsContent value="providers">
+        <ProvidersCard />
+      </TabsContent>
+      <TabsContent value="panel">
+        <PanelCertCard />
+      </TabsContent>
+    </Tabs>
   )
 }
 
@@ -52,7 +65,7 @@ function CertificatesCard() {
       </CardHeader>
       <CardContent>
         {isPending ? (
-          <p className="text-muted-foreground text-sm">Loading certificates…</p>
+          <SkeletonRows label="Loading certificates…" />
         ) : error ? (
           <p role="alert" className="text-destructive text-sm">
             {errorText(error, "The certificates could not be loaded.")}
@@ -154,7 +167,7 @@ function ProvidersCard() {
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         {list.isPending ? (
-          <p className="text-muted-foreground text-sm">Loading providers…</p>
+          <SkeletonRows label="Loading providers…" />
         ) : list.error ? (
           <p role="alert" className="text-destructive text-sm">
             {errorText(list.error, "The providers could not be loaded.")}
@@ -280,7 +293,7 @@ function PanelCertCard() {
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         {cert.isPending ? (
-          <p className="text-muted-foreground text-sm">Loading the panel certificate…</p>
+          <SkeletonRows label="Loading the panel certificate…" />
         ) : cert.error ? (
           <p role="alert" className="text-destructive text-sm">
             {errorText(cert.error, "The panel certificate could not be loaded.")}
@@ -320,7 +333,7 @@ function PanelCertCard() {
         <div className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold">Get one for a hostname</h3>
           {providers.isPending ? (
-            <p className="text-muted-foreground text-sm">Loading providers…</p>
+            <SkeletonRows label="Loading providers…" />
           ) : (
             <PanelIssueForm
               providers={providers.data?.providers ?? []}
@@ -356,7 +369,7 @@ export function PanelCertSummary({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         {cert.self_signed ? (
-          <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
+          <Badge variant="warning">
             Self-signed
           </Badge>
         ) : (
