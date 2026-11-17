@@ -549,20 +549,24 @@ PID → both restart → `systemctl restart panel` → apps keep their PIDs → 
 
 ### Status (2026-11-17)
 
-M5 is built and its unit, API and browser tests pass. **The exit gate has not been run:**
-`scripts/smoke/5-apps.sh` was written and dry-run, and has never been executed against a VM, so
-nothing here has yet run against a live supervisord.
+M5 is built and its exit gate passes: `scripts/smoke/5-apps.sh` ran 52/52 on Ubuntu 26.04.1
+(`sandbox-u2604`) against the real supervisord v0.7.6, with the `panel install` re-run check
+(`SMOKE_REINSTALL=1`). EL9 has not been run.
+
+The first live run found two bugs the in-memory fake had hidden, both fixed with regression tests:
+the daemon reports process states as `Running`, not `RUNNING` (so a live process read as stopped),
+and it writes `out.log.<timestamp>` and never a plain `out.log` (so the log was always empty).
 
 | Step | State | Evidence |
 |------|-------|----------|
-| 5.1 | done from source, **not run live** | RPC subset recorded in `internal/apps/doc.go`. The Go supervisord serves its XML-RPC on a Unix socket (`[unix_http_server]`, `chmod=`). It has **no `update` call**: `reloadConfig` then `addProcessGroup` / `removeProcessGroup` is what `supervisorctl update` does, and `addProcessGroup` leaves the program stopped. Its `ctl` subcommand does **not** work over a Unix socket (upstream README), so the planned `ctl` fallback does not exist; a missing call is a missing feature. |
+| 5.1 | done, confirmed live (smoke 5) | RPC subset recorded in `internal/apps/doc.go`. The Go supervisord serves its XML-RPC on a Unix socket (`[unix_http_server]`, `chmod=`). It has **no `update` call**: `reloadConfig` then `addProcessGroup` / `removeProcessGroup` is what `supervisorctl update` does, and `addProcessGroup` leaves the program stopped. Its `ctl` subcommand does **not** work over a Unix socket (upstream README), so the planned `ctl` fallback does not exist; a missing call is a missing feature. |
 | 5.2 | done | `internal/install/supervisord.go`. v0.7.6 for amd64 and arm64, pinned by SHA-256 (the release publishes bare binaries and a per-asset digest, no checksums file). Tests: a mismatch aborts and leaves an installed binary untouched; plain http is refused; a re-run issues no mutating command. |
 | 5.3 | done | `internal/runtimes`. nvm at tag `v0.40.3`, run through one allowlisted `bash -c` with the version as a positional argument after a strict pattern check. |
 | 5.4 | done | `internal/apps`. Golden program file, validator, environment rules, rollback of both the files and the row. |
 | 5.5 | done | Manager tests run the real `confedit` editor against a fake supervisord that follows the upstream reload semantics. |
 | 5.6 | done | `?proxy=<url>` on `/sites`; asserted in the Playwright journey. |
 | 5.7 | done | `/api/apps`, `/api/runtimes`; Runtimes and Apps pages; 17 new vitest cases; `web/e2e/apps.spec.ts` against an in-memory supervisord. |
-| 5.8 | written, **not run** | Dry run only. It cross-compiles `scripts/smoke/testdata/apps-hello` for the Go app. |
+| 5.8 | done | 52/52 on the VM. It cross-compiles `scripts/smoke/testdata/apps-hello` for the Go app. The socket check asserts that `www` is refused, because upstream ignores `chmod=0700` and leaves the socket mode 755. |
 
 Deviations from the step text:
 
@@ -573,11 +577,14 @@ Deviations from the step text:
 - **Removing a Node version** removes its directory; it does not call `nvm uninstall`, so removal needs no shell. It refuses while an app uses the version.
 - **nvm is pinned by tag**, not by checksum: git checks the objects it fetches, but a moved tag is not detected.
 
-Not proven until smoke 5 passes: the reply shapes of `getAllProcessInfo`, `reloadConfig` and the
-bool-returning calls (the decoder accepts a bare value and a one-member struct because the source
-does not settle which); that `chmod=0700` on the socket is honoured; that `reloadConfig` reports an
-edited program as *changed* and `addProcessGroup` then picks it up; that `user=` drops privileges;
-`startProcess` with `wait` against a program that crashes inside `startsecs`; and everything on EL9.
+Confirmed live: create, start, stop, delete and restart-after-`kill -9` through the RPC; `user=`
+drops privileges (the Node app runs as `www`); the socket refuses `www`; apps keep their PIDs
+across `systemctl restart panel` and a `panel install` re-run. `chmod=0700` is **not** honoured
+(socket mode 755), which is why the smoke asserts the refusal instead of the mode.
+
+Not proven: that `reloadConfig` reports an *edited* program as changed and `addProcessGroup` then
+replaces it (the smoke never edits an app; only the fake covers it); `startProcess` with `wait`
+against a program that crashes inside `startsecs`; and everything on EL9.
 
 Found while running the suite, not caused by M5: `TestRepairFixesALoosenedMode` fails at `71c35bc`
 (`modeOK` accepts a directory that is looser than required, so a loosened `data/` is never

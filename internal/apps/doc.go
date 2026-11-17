@@ -34,9 +34,12 @@
 // call is a missing feature, not something to shell out for. Process logs are read
 // from the log file the program file names, which needs no RPC at all.
 //
-// Status of the spike: this list comes from reading the upstream source at the
-// pinned release. It has not been run against a live daemon from this repository.
-// scripts/smoke/5-apps.sh is the first run that does that. The decoder in rpc.go
-// accepts both a bare value and a one-member struct as the reply of the
+// Status of the spike: the list comes from the upstream source at the pinned
+// release and was confirmed against a live daemon by scripts/smoke/5-apps.sh.
+// Two things only the live daemon showed: process states come back as "Running",
+// not RUNNING, so they are upper-cased on decode; and the log is written to
+// out.log.<timestamp>, never to the plain name the program file gives. The decoder
+// in rpc.go still accepts both a bare value and a one-member struct for the
 // bool-returning calls, because the source does not settle which the codec emits.
+// Not confirmed live: an edited program being reported as "changed".
 package apps

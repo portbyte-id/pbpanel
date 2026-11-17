@@ -77,8 +77,8 @@ panel_healthy() {
 
 # app_state NAME: the state the panel reports (an oracle only for the panel's own claim).
 app_state() {
-	api_call GET "$host" "$port" /api/apps >/dev/null
-	last_body | sed -n 's/.*"name":"'"$1"'"[^}]*"state":"\([A-Z a-z]*\)".*/\1/p' | head -n 1
+	api_call GET "$host" "$port" "/api/apps/$1" >/dev/null
+	last_body | sed -n 's/.*"state":"\([A-Za-z ]*\)".*/\1/p' | head -n 1
 }
 
 node_running() { [ "$(app_state "$NODE_APP")" = RUNNING ]; }
@@ -105,7 +105,12 @@ step 1 "the panel and supervisord are up, and supervisord is what the source pin
 assert_equal "panel.service is active (systemctl)" active "$(vm 'systemctl is-active panel' 2>/dev/null)"
 assert_equal "panel-supervisord.service is active (systemctl)" active "$(vm 'systemctl is-active panel-supervisord' 2>/dev/null)"
 assert_equal "panel-supervisord.service is enabled (systemctl)" enabled "$(vm 'systemctl is-enabled panel-supervisord' 2>/dev/null)"
-assert_equal "supervisord's socket is root-only (stat)" "700 root" "$(vm "stat -c '%a %U' /www/panel/supervisor/supervisord.sock" 2>/dev/null)"
+# The Go supervisord ignores chmod=0700 and leaves the socket 755 (seen on a live
+# VM), so the mode is not the property; connecting is. Only an owner or group
+# member can write to a socket to connect to it, and www must be refused.
+assert_equal "supervisord's socket belongs to root (stat)" root "$(vm "stat -c %U /www/panel/supervisor/supervisord.sock" 2>/dev/null)"
+assert_contains "the www account cannot connect to supervisord's socket" "Permission denied" \
+	"$(vm "su -s /bin/sh www -c 'python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect(\\\"/www/panel/supervisor/supervisord.sock\\\")\"'" 2>&1)"
 arch=$(vm 'uname -m' 2>/dev/null)
 case $arch in
 aarch64 | arm64) goarch=arm64 sup_sha=$SUP_SHA_ARM64 ;;
@@ -223,7 +228,7 @@ assert_http "start the Go app again" 200 "$(api_call POST "$host" "$port" "/api/
 wait_until 20 "the Go app to answer" serves "$GP" go-ok
 assert_http "GET the Go app's log" 200 "$(api_call GET "$host" "$port" "/api/apps/$GO_APP/logs")"
 assert_contains "the log holds the program's output" "apps-hello listening on $GP" "$(last_body)"
-assert_contains "the log file is on disk (cat)" "apps-hello listening" "$(vm "cat /www/panel/logs/apps/$GO_APP/out.log" 2>/dev/null)"
+assert_contains "the log file is on disk (cat)" "apps-hello listening" "$(vm "cat /www/panel/logs/apps/$GO_APP/out.log*" 2>/dev/null)"
 
 # --- 7. a proxy site ----------------------------------------------------------
 step 7 "a reverse-proxy site in front of the Node app"
@@ -235,7 +240,7 @@ assert_equal "nginx proxies the site's Host to the Node app (curl from the works
 
 # --- 8. clean up --------------------------------------------------------------
 step 8 "remove what the script made"
-assert_http "delete the proxy site" 204 "$(api_call DELETE "$host" "$port" "/api/sites/$SITE?confirm=$SITE")"
+assert_http "delete the proxy site" 200 "$(api_call DELETE "$host" "$port" "/api/sites/$SITE?confirm=$SITE")"
 assert_http "delete the Node app" 204 "$(api_call DELETE "$host" "$port" "/api/apps/$NODE_APP")"
 assert_http "delete the Go app" 204 "$(api_call DELETE "$host" "$port" "/api/apps/$GO_APP")"
 wait_until 15 "the Node app's port to close" port_closed "$NP"

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -634,5 +635,50 @@ func TestLogTailAndFollow(t *testing.T) {
 	c, _ = r.m.Log(ctx, "web", 999, 0)
 	if c.Offset != 18 || !strings.HasSuffix(c.Data, "line3\n") {
 		t.Fatalf("an offset past the end means the log rotated: %+v", c)
+	}
+}
+
+// The Go supervisord reports "Running", not RUNNING: seen on a live daemon.
+func TestProcessStateIsNormalisedToUpperCase(t *testing.T) {
+	c, _ := fakeRPC(t, map[string]string{
+		"supervisor.getAllProcessInfo": wrap(`<array><data><value><struct>
+			<member><name>name</name><value><string>web</string></value></member>
+			<member><name>statename</name><value><string>Running</string></value></member>
+			</struct></value></data></array>`),
+		"supervisor.getState": wrap(`<struct><member><name>statename</name><value><string>RUNNING</string></value></member></struct>`),
+	})
+	procs, err := c.Processes(context.Background())
+	if err != nil || len(procs) != 1 || procs[0].State != "RUNNING" || !procs[0].Running() {
+		t.Fatalf("processes: %+v %v", procs, err)
+	}
+	rel := &reloader{sv: c}
+	if err := rel.Healthy(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The Go supervisord writes out.log.<timestamp> and never the plain name.
+func TestLogFollowsTheNewestTimestampedFile(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, _, err := r.m.Create(ctx, goApp("web")); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.FromSlash(r.p.LogDir("web"))
+	old := filepath.Join(dir, "out.log.2026-11-17T06-57-43")
+	cur := filepath.Join(dir, "out.log.2026-11-17T06-58-10")
+	if err := os.WriteFile(old, []byte("old run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cur, []byte("current run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.m.Log(ctx, "web", -1, 0)
+	if err != nil || c.Data != "current run\n" {
+		t.Fatalf("got %+v %v", c, err)
 	}
 }

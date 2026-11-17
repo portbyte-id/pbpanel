@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -431,6 +432,37 @@ func (m *Manager) UsingNode(ctx context.Context, resolve func(string) (string, b
 	return out, rows.Err()
 }
 
+// currentLog is the log file the app is writing now. The program file names
+// out.log, but the Go supervisord starts each run in out.log.<timestamp> and
+// never creates the plain name (seen on a live daemon, smoke 5), so the newest
+// file whose name starts with out.log is the live one. With none, the plain name
+// is returned and opening it reports the log as not there yet.
+func (m *Manager) currentLog(name string) string {
+	plain := filepath.FromSlash(m.p.LogFile(name))
+	entries, err := os.ReadDir(filepath.Dir(plain))
+	if err != nil {
+		return plain
+	}
+	var best string
+	var bestTime time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), filepath.Base(plain)) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if best == "" || info.ModTime().After(bestTime) {
+			best, bestTime = e.Name(), info.ModTime()
+		}
+	}
+	if best == "" {
+		return plain
+	}
+	return filepath.Join(filepath.Dir(plain), best)
+}
+
 // LogChunk is a slice of an app's log.
 type LogChunk struct {
 	Data string `json:"data"`
@@ -452,7 +484,7 @@ func (m *Manager) Log(ctx context.Context, name string, offset int64, max int) (
 	if max <= 0 || max > MaxLogChunk {
 		max = MaxLogChunk
 	}
-	f, err := os.Open(m.p.LogFile(name))
+	f, err := os.Open(m.currentLog(name))
 	if errors.Is(err, os.ErrNotExist) {
 		return LogChunk{}, nil
 	}
