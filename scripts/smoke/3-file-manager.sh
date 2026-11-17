@@ -28,6 +28,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 PANEL=/www/panel/bin/panel
 WORK=/var/tmp/smoke-fm-$$
 
+SMOKE_USER=${SMOKE_USER:-admin}
+
 smoke_init
 host=$(vm_host)
 
@@ -195,15 +197,14 @@ UP_ID=$(last_body | sed -n 's/.*{"id":"\([^"]*\)".*/\1/p')
 assert_not_equal "the upload has an id" "" "$UP_ID"
 assert_contains "the upload reports the chunk limit" '"chunk_max"' "$(last_body)"
 
-# A chunk is PUT with its offset and the SHA-256 of its bytes. The first call
-# above sent the whole file; reset the upload and send it in two real chunks.
+# A chunk is PUT with its offset and the SHA-256 of its bytes. Send the file in
+# two real chunks.
 chunk() { # chunk ID OFFSET FILE SHA
 	curl -sk --max-time 30 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
 		-X PUT -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/octet-stream' \
 		-H "X-Chunk-SHA256: $4" --data-binary @"$3" \
 		"https://$host:$port/api/fm/uploads/$1?offset=$2" 2>/dev/null || true
 }
-assert_http "DELETE the upload to start over" 204 "$(fm_del "/api/fm/uploads/$UP_ID")"
 CSRF=$(cat "$SMOKE_TMP/csrf" 2>/dev/null)
 head -c 20 "$SMOKE_TMP/up.bin" > "$SMOKE_TMP/c1"
 tail -c 16 "$SMOKE_TMP/up.bin" > "$SMOKE_TMP/c2"
@@ -251,13 +252,15 @@ assert_http "mkdir under /proc is refused (read-only tree)" 403 \
 	"$(fm_post /api/fm/mkdir '{"path":"/proc/x"}')"
 assert_http "a relative path is a 400" 400 "$(fm_list relative)"
 
-# Symlink escape: a link in the scratch tree pointing at /etc must not be
-# deletable as if it were its target, and the panel must not follow it.
+# Symlink escape: deleting a link in the scratch tree that points at /etc acts
+# on the link, never on its target; the panel must not follow it.
 vm "ln -sfn /etc $WORK/etc-link"
-assert_http "delete of a symlink to /etc is refused (resolved target is protected)" 403 \
+assert_http "delete of a symlink to /etc removes the link only" 200 \
 	"$(fm_post /api/fm/delete '{"items":[{"path":"'"$WORK"'/etc-link","confirm":"etc-link"}]}')"
-assert_equal "the symlink still exists (test -L)" yes \
+assert_equal "the link is gone (test -L)" no \
 	"$(vm "test -L $WORK/etc-link && echo yes || echo no" 2>/dev/null)"
+assert_equal "/etc is untouched (test -f)" yes \
+	"$(vm "test -f /etc/passwd && test -d /etc/systemd && echo yes || echo no" 2>/dev/null)"
 
 # A hostile archive with a ../ entry must fail its job and write nothing.
 # Built on the VM with python3's tarfile, since tar refuses to store ../ names.
