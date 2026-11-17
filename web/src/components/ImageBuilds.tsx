@@ -51,8 +51,8 @@ export function describeBuild(state: ImageBuildState): {
 }
 
 /** The extensions a build carries, or the empty text when it carries none. */
-export function ExtensionChips({ names, empty }: { names: string[]; empty: string }) {
-  if (names.length === 0) return <span className="text-muted-foreground text-xs">{empty}</span>
+export function ExtensionChips({ names, empty }: { names?: string[] | null; empty: string }) {
+  if (!names || names.length === 0) return <span className="text-muted-foreground text-xs">{empty}</span>
   return (
     <span className="flex flex-wrap gap-1">
       {names.map((name) => (
@@ -88,7 +88,7 @@ export function BuildHistory({
   error: unknown
   fallback: string
 }) {
-  if (builds.length === 0) {
+  if (!builds || builds.length === 0) {
     return <p className="text-muted-foreground text-sm">{emptyText}</p>
   }
   return (
@@ -171,9 +171,9 @@ export function ExtensionPicker({
   onCancel: () => void
 }) {
   const id = useId()
-  const [checked, setChecked] = useState<string[]>(initial)
+  const [checked, setChecked] = useState<string[]>(initial ?? [])
   const [custom, setCustom] = useState<string[]>(() =>
-    initial.filter((name) => !catalogue.some((e) => e.name === name)),
+    (initial ?? []).filter((name) => !catalogue.some((e) => e.name === name)),
   )
   const [draft, setDraft] = useState("")
   const [peclError, setPeclError] = useState<string | null>(null)
