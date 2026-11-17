@@ -1,0 +1,28 @@
+*filter
+:PANEL-INPUT - [0:0]
+:PANEL-BLOCK - [0:0]
+-F PANEL-INPUT
+-F PANEL-BLOCK
+-A PANEL-BLOCK -s 2001:db8:bad::/48 -j DROP
+-A PANEL-INPUT -i lo -j ACCEPT
+-A PANEL-INPUT -j PANEL-BLOCK
+-A PANEL-INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 1 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 2 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 3 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 4 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 128 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 133 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 134 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 135 -j ACCEPT
+-A PANEL-INPUT -p ipv6-icmp --icmpv6-type 136 -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 22 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 2222 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 8443 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 80 -m comment --comment "http" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 443 -j ACCEPT
+-A PANEL-INPUT -p udp --dport 443 -j ACCEPT
+-A PANEL-INPUT -p tcp -s 2001:db8::/32 --dport 3306 -j ACCEPT
+-A PANEL-INPUT -j DROP
+-I INPUT 1 -j PANEL-INPUT
+COMMIT
