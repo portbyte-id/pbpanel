@@ -15,6 +15,19 @@ const (
 	groupPHP     = "PHP"
 	groupFiles   = "Files"
 	groupTLS     = "TLS"
+	groupCron    = "Cron"
+	groupLogs    = "Logs"
+)
+
+// Cron and log settings (development plan M7).
+const (
+	// KeyCronAllowShell permits cron jobs of kind "shell". It is read on every
+	// create, update and run, so it applies without a restart.
+	KeyCronAllowShell = "cron.allow_shell"
+	// KeyLogsRotateMaxBytes is the size at which a panel-owned log is rotated.
+	KeyLogsRotateMaxBytes = "logs.rotate.max_bytes"
+	// KeyLogsRotateKeep is how many rotated files are kept per log.
+	KeyLogsRotateKeep = "logs.rotate.keep"
 )
 
 // File manager settings (development plan M3). Sizes are bytes.
@@ -216,6 +229,37 @@ func defaultKeys() []key {
 				Group:       groupTLS,
 			},
 			check: rangeInt(1, 60),
+		},
+		{
+			meta: Meta{
+				Name:        KeyCronAllowShell,
+				Type:        TypeBool,
+				Default:     "false",
+				Description: "Allow cron jobs that run a shell script. Off by default: a shell job runs whatever text it holds as the account it names. Argv and script-file jobs are always allowed.",
+				Group:       groupCron,
+			},
+		},
+		{
+			meta: Meta{
+				Name:            KeyLogsRotateMaxBytes,
+				Type:            TypeInt,
+				Default:         "52428800",
+				RestartRequired: true,
+				Description:     "A panel-owned log (site, audit, supervisor) is rotated once it reaches this many bytes. Checked hourly.",
+				Group:           groupLogs,
+			},
+			check: rangeInt(1<<20, 1<<40),
+		},
+		{
+			meta: Meta{
+				Name:            KeyLogsRotateKeep,
+				Type:            TypeInt,
+				Default:         "7",
+				RestartRequired: true,
+				Description:     "Rotated files kept per log; the oldest is deleted when a new one is made.",
+				Group:           groupLogs,
+			},
+			check: rangeInt(1, 365),
 		},
 	}
 }
