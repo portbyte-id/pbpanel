@@ -34,6 +34,8 @@ type hostState struct {
 	enabled    bool
 	active     bool
 	fwEnabled  bool
+	supEnabled bool
+	supActive  bool
 }
 
 // fakeRunner records every command and answers the probes from hostState.
@@ -75,6 +77,14 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) error {
 		if !f.state.fwEnabled {
 			return errors.New("disabled")
 		}
+	case "systemctl is-enabled --quiet panel-supervisord.service":
+		if !f.state.supEnabled {
+			return errors.New("disabled")
+		}
+	case "systemctl is-active --quiet panel-supervisord.service":
+		if !f.state.supActive {
+			return errors.New("inactive")
+		}
 	case "systemctl is-active --quiet panel.service":
 		if !f.state.active {
 			return errors.New("inactive")
@@ -97,6 +107,10 @@ func (f *fakeRunner) apply() {
 			f.state.enabled = true
 		case joined == "systemctl enable panel-firewall.service":
 			f.state.fwEnabled = true
+		case joined == "systemctl enable panel-supervisord.service":
+			f.state.supEnabled = true
+		case joined == "systemctl restart panel-supervisord.service":
+			f.state.supActive = true
 		case joined == "systemctl restart panel.service":
 			f.state.active = true
 		}
@@ -220,8 +234,19 @@ func (h *host) installer() *Installer {
 		Out:        &h.out,
 		Hostname:   "panel.example.test",
 		Executable: func() (string, error) { return h.executable(), nil },
+		Supervisord: &SupervisordRelease{
+			Version: "v0-test", URL: "https://example.test/supervisord", SHA256: sum(fakeSupervisordBinary),
+		},
+		// The download is replaced by a write of the bytes the test pinned, so no
+		// test touches the network; the real download is covered by
+		// supervisord_test.go against an httptest server.
+		Fetch: func(_ context.Context, _ SupervisordRelease, dest string) error {
+			return os.WriteFile(dest, fakeSupervisordBinary, 0o755)
+		},
 	}
 }
+
+var fakeSupervisordBinary = []byte("fake supervisord binary")
 
 // install runs one install and folds the commands it issued into the fake host's
 // state, which is what makes a second run meaningful.
@@ -252,6 +277,11 @@ func TestInstallStepOrder(t *testing.T) {
 		"unit-file",
 		"firewall-unit",
 		"enable-firewall-unit",
+		"supervisord-binary",
+		"supervisord-conf",
+		"supervisord-unit",
+		"enable-supervisord",
+		"start-supervisord",
 		"enable-service",
 		"start-service",
 		"print-url",
@@ -298,6 +328,12 @@ func TestFirstInstallEmitsExpectedArgv(t *testing.T) {
 		"systemctl daemon-reload",
 		"systemctl is-enabled --quiet panel-firewall.service",
 		"systemctl enable panel-firewall.service",
+		// supervisord: the unit is written (reload), enabled and restarted. It is
+		// its own unit so the apps outlive any restart of panel.service.
+		"systemctl daemon-reload",
+		"systemctl is-enabled --quiet panel-supervisord.service",
+		"systemctl enable panel-supervisord.service",
+		"systemctl restart panel-supervisord.service",
 		"systemctl is-enabled --quiet panel.service",
 		"systemctl enable panel.service",
 		"systemctl restart panel.service",

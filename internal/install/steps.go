@@ -68,6 +68,14 @@ type Installer struct {
 	// copies to Layout.BinaryPath(). Nil means os.Executable; tests supply a
 	// temp file.
 	Executable func() (string, error)
+
+	// Supervisord is the release to install. Nil means the pinned release for this
+	// machine's architecture; tests supply their own so no network is needed.
+	Supervisord *SupervisordRelease
+
+	// Fetch downloads the release. Nil means an https download that refuses a
+	// checksum mismatch.
+	Fetch FetchFunc
 }
 
 // step is one entry of the install list.
@@ -91,6 +99,11 @@ type runState struct {
 	// unitChanged records that this run rewrote panel.service, so the service
 	// must be restarted rather than merely started.
 	unitChanged bool
+
+	// supervisordChanged records that this run replaced supervisord's binary,
+	// config or unit, so it must be restarted rather than merely started. A
+	// restart stops every app, so a re-run that changes nothing never does it.
+	supervisordChanged bool
 
 	url string
 }
@@ -154,6 +167,11 @@ func (s *runState) steps() []step {
 		{name: "unit-file", done: s.unitDone, run: s.writeUnit},
 		{name: "firewall-unit", done: s.firewallUnitDone, run: s.writeFirewallUnit},
 		{name: "enable-firewall-unit", done: s.firewallEnabledDone, run: s.enableFirewallUnit},
+		{name: "supervisord-binary", done: s.supervisordBinaryDone, run: s.installSupervisord},
+		{name: "supervisord-conf", done: s.supervisordConfDone, run: s.writeSupervisordConf},
+		{name: "supervisord-unit", done: s.supervisordUnitDone, run: s.writeSupervisordUnit},
+		{name: "enable-supervisord", done: s.supervisordEnabledDone, run: s.enableSupervisord},
+		{name: "start-supervisord", done: s.supervisordActiveDone, run: s.startSupervisord},
 		{name: "enable-service", done: s.enabledDone, run: s.enableService},
 		{name: "start-service", done: s.activeDone, run: s.startService},
 		{name: "print-url", done: always, run: s.printURL},
