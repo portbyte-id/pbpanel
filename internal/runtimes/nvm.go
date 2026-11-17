@@ -27,10 +27,13 @@ import (
 )
 
 const (
-	// NVMTag is the pinned nvm release. A tag, not a checksum: git verifies the
-	// objects it fetches, but a moved tag is not detected. The clone is shallow.
-	NVMTag  = "v0.40.3"
-	NVMRepo = "https://github.com/nvm-sh/nvm.git"
+	// NVMTag is the pinned nvm release and NVMCommit the commit it must resolve to.
+	// The tag names what to clone; the commit is the pin: git verifies the objects it
+	// fetches, and a tag that was moved to another commit is caught by comparing
+	// HEAD with NVMCommit after the clone. The clone is shallow.
+	NVMTag    = "v0.40.3"
+	NVMCommit = "977563e97ddc66facf3a8e31c6cff01d236f09bd"
+	NVMRepo   = "https://github.com/nvm-sh/nvm.git"
 
 	// installScript is the one shell script the panel runs. $1 is NVM_DIR and $2
 	// the version; both arrive as arguments.
@@ -287,6 +290,21 @@ func (m *Manager) Install(ctx context.Context, version string, onLine func(strin
 		clone := []string{"git", "clone", "--depth", "1", "--branch", NVMTag, NVMRepo, m.p.NVMDir()}
 		if err := m.ex.Run(ctx, clone, nil, onLine); err != nil {
 			return fmt.Errorf("fetch nvm (git must be installed): %w", err)
+		}
+		var head string
+		revParse := []string{"git", "-C", m.p.NVMDir(), "rev-parse", "HEAD"}
+		if err := m.ex.Run(ctx, revParse, nil, func(l string) {
+			if t := strings.TrimSpace(l); t != "" {
+				head = t
+			}
+		}); err != nil {
+			return fmt.Errorf("check the nvm checkout: %w", err)
+		}
+		if head != NVMCommit {
+			// Not removed to be tidy: a checkout that is not the pinned commit must
+			// never be sourced, and nvm.sh being absent is what stops that.
+			_ = os.RemoveAll(dir)
+			return fmt.Errorf("nvm %s resolved to commit %s, not the pinned %s; the checkout was removed", NVMTag, head, NVMCommit)
 		}
 	}
 	onLine("installing Node.js " + version)

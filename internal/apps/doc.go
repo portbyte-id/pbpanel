@@ -41,5 +41,6 @@
 // out.log.<timestamp>, never to the plain name the program file gives. The decoder
 // in rpc.go still accepts both a bare value and a one-member struct for the
 // bool-returning calls, because the source does not settle which the codec emits.
-// Not confirmed live: an edited program being reported as "changed".
+// An edited program is reported as "changed" and restarted, and a program that
+// dies inside startsecs makes startProcess fail; both were confirmed live.
 package apps

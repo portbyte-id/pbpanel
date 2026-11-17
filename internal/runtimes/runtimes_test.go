@@ -15,12 +15,22 @@ type fakeExec struct {
 	envs  [][]string
 	onRun func(argv []string) error
 	lines []string
+	// head is what `git rev-parse HEAD` prints; empty means the pinned commit.
+	head string
 }
 
 func (f *fakeExec) Run(_ context.Context, argv []string, env []string, onLine func(string)) error {
 	f.runs = append(f.runs, argv)
 	f.envs = append(f.envs, env)
-	onLine("output of " + argv[0])
+	if argv[0] == "git" && len(argv) > 3 && argv[3] == "rev-parse" {
+		head := f.head
+		if head == "" {
+			head = NVMCommit
+		}
+		onLine(head)
+	} else {
+		onLine("output of " + argv[0])
+	}
 	if f.onRun != nil {
 		return f.onRun(argv)
 	}
@@ -89,7 +99,7 @@ func TestInstallClonesNVMOnceThenInstallsThroughOneBashCall(t *testing.T) {
 	if err := m.Install(context.Background(), "22", func(s string) { lines = append(lines, s) }); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if len(ex.runs) != 2 {
+	if len(ex.runs) != 3 {
 		t.Fatalf("runs: %v", ex.runs)
 	}
 	wantClone := []string{"git", "clone", "--depth", "1", "--branch", NVMTag, NVMRepo, p.NVMDir()}
@@ -97,8 +107,12 @@ func TestInstallClonesNVMOnceThenInstallsThroughOneBashCall(t *testing.T) {
 		t.Errorf("clone argv:\n got %q\nwant %q", ex.runs[0], wantClone)
 	}
 	wantRun := []string{"bash", "-c", installScript, "bash", p.NVMDir(), "22"}
-	if !reflect.DeepEqual(ex.runs[1], wantRun) {
-		t.Errorf("install argv:\n got %q\nwant %q", ex.runs[1], wantRun)
+	wantRev := []string{"git", "-C", p.NVMDir(), "rev-parse", "HEAD"}
+	if !reflect.DeepEqual(ex.runs[1], wantRev) {
+		t.Errorf("the clone must be checked against the pinned commit:\n got %q\nwant %q", ex.runs[1], wantRev)
+	}
+	if !reflect.DeepEqual(ex.runs[2], wantRun) {
+		t.Errorf("install argv:\n got %q\nwant %q", ex.runs[2], wantRun)
 	}
 	if strings.Contains(installScript, "22") {
 		t.Error("the version must reach the script as an argument, never in its text")
@@ -239,5 +253,29 @@ func TestLineWriterSplitsProgressOutput(t *testing.T) {
 	want := []string{"Downloading 10%", "Downloading 50%", "done", "next"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A tag that was moved to another commit is refused, and nothing is sourced.
+func TestInstallRefusesAMovedTag(t *testing.T) {
+	ex := &fakeExec{head: "0000000000000000000000000000000000000000"}
+	m, p := newMgr(t, ex, nil)
+	ex.onRun = func(argv []string) error {
+		if argv[0] == "git" && argv[1] == "clone" {
+			installNVM(t, p)
+		}
+		return nil
+	}
+	err := m.Install(context.Background(), "22", func(string) {})
+	if err == nil || !strings.Contains(err.Error(), "not the pinned") {
+		t.Fatalf("got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.FromSlash(p.NVMDir())); !os.IsNotExist(statErr) {
+		t.Fatal("the unpinned checkout was left in place")
+	}
+	for _, run := range ex.runs {
+		if run[0] == "bash" {
+			t.Fatal("nvm was run from an unpinned checkout")
+		}
 	}
 }

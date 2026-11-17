@@ -92,6 +92,15 @@ func serve(ctx context.Context, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
+	// Undo an apply the last run died in, before anything reads or reloads a file
+	// it wrote. The nginx reconciler does this too, but only on a host where Docker
+	// is up; the program files of the apps must not wait for that. It reloads
+	// nothing and is a no-op the second time.
+	if restored, err := ed.Recover(); err != nil {
+		logger.Error("restoring files from an unfinished apply failed", "error", err)
+	} else if len(restored) > 0 {
+		logger.Warn("restored files from an unfinished apply", "paths", restored)
+	}
 	nginxStack, err := newNginxStack(st, reg, layout, jobsMgr, ed, logger)
 	if err != nil {
 		logger.Error("nginx is not available", "error", err)
