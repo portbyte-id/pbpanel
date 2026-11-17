@@ -220,7 +220,7 @@ func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 		return nil, err
 	}
 	for _, site := range sites {
-		inc, err := r.Sites.includeFiles(site)
+		inc, err := r.Sites.includeFiles(ctx, site)
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", site.Domain, err)
 		}

@@ -61,6 +61,21 @@ func (s Site) nginx() nginx.Site {
 	return nginx.Site{Domain: s.Domain, Aliases: s.Aliases, Kind: s.Kind, Root: s.Root, ProxyTarget: s.ProxyTarget}
 }
 
+// TLSInfo is a site's certificate as the nginx config needs it.
+type TLSInfo struct {
+	// CertFile is the full chain and KeyFile the private key. Both must be
+	// inside nginx.Paths.SiteCertDir for the site.
+	CertFile, KeyFile string
+	// RedirectHTTP sends plain-HTTP requests, except ACME challenges, to HTTPS.
+	RedirectHTTP bool
+}
+
+// TLSState is the certificate store as seen from the sites model. ok is false
+// for a site that has no certificate.
+type TLSState interface {
+	Lookup(ctx context.Context, domain string) (info TLSInfo, ok bool, err error)
+}
+
 // FS is the filesystem the manager touches outside confedit: web roots, and the
 // site file when scanning it. It exists so the model is tested without a root
 // filesystem or the www account.
@@ -104,6 +119,9 @@ type Options struct {
 	Paths   nginx.Paths
 	// PHP is the PHP runtime. Nil leaves the `php` site kind refused.
 	PHP PHPRuntime
+	// TLS says which sites have a certificate. Nil means none do: every site
+	// gets an empty tls.conf, as before TLS existed.
+	TLS TLSState
 	// FS defaults to the real filesystem.
 	FS  FS
 	Now func() time.Time
@@ -117,6 +135,7 @@ type Manager struct {
 	svc confedit.Service
 	p   nginx.Paths
 	php PHPRuntime
+	tls TLSState
 	fs  FS
 	now func() time.Time
 
@@ -128,7 +147,7 @@ func New(o Options) (*Manager, error) {
 	if o.Store == nil || o.Applier == nil || o.Service == nil {
 		return nil, errors.New("sites: store, applier and service are required")
 	}
-	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, fs: o.FS, now: o.Now}
+	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, tls: o.TLS, fs: o.FS, now: o.Now}
 	if m.fs == nil {
 		m.fs = OSFS{}
 	}
@@ -198,7 +217,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		}
 	}
 
-	files, err := m.allFiles(site)
+	files, err := m.allFiles(ctx, site)
 	services := []confedit.Service{m.svc}
 	if err == nil && site.Kind == KindPHP {
 		// FPM first: nginx must not be pointed at a socket nothing listens on.
@@ -332,7 +351,7 @@ func (m *Manager) prepareRoot(s Site, indexName string) (created bool, err error
 }
 
 // includeFiles renders the panel-owned include files of a site.
-func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
+func (m *Manager) includeFiles(ctx context.Context, s Site) ([]confedit.File, error) {
 	listen, err := nginx.RenderListen()
 	if err != nil {
 		return nil, err
@@ -341,7 +360,11 @@ func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	acme, err := nginx.RenderACME()
+	acme, err := m.p.RenderACME()
+	if err != nil {
+		return nil, err
+	}
+	tlsFile, err := m.tlsFile(ctx, s)
 	if err != nil {
 		return nil, err
 	}
@@ -349,6 +372,7 @@ func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
 		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeListen), Content: listen},
 		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeNames), Content: names},
 		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeACME), Content: acme},
+		tlsFile,
 	}
 	if s.Kind == KindProxy {
 		proxy, err := nginx.RenderProxy(s.ProxyTarget)
@@ -367,6 +391,26 @@ func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
 	return files, nil
 }
 
+// tlsFile renders tls.conf: the HTTPS listener when the store has a certificate
+// for the site, an empty managed file when it has none.
+func (m *Manager) tlsFile(ctx context.Context, s Site) (confedit.File, error) {
+	var t *nginx.TLS
+	if m.tls != nil {
+		info, ok, err := m.tls.Lookup(ctx, s.Domain)
+		if err != nil {
+			return confedit.File{}, fmt.Errorf("sites: look up the certificate of %s: %w", s.Domain, err)
+		}
+		if ok {
+			t = &nginx.TLS{CertFile: info.CertFile, KeyFile: info.KeyFile, RedirectHTTP: info.RedirectHTTP}
+		}
+	}
+	b, err := m.p.RenderTLS(s.Domain, t)
+	if err != nil {
+		return confedit.File{}, err
+	}
+	return confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludeTLS), Content: b}, nil
+}
+
 func (m *Manager) siteFile(s Site) (confedit.File, error) {
 	b, err := m.p.RenderSiteFile(s.nginx())
 	if err != nil {
@@ -376,8 +420,8 @@ func (m *Manager) siteFile(s Site) (confedit.File, error) {
 }
 
 // allFiles is every file a site owns: the include files and the site file.
-func (m *Manager) allFiles(s Site) ([]confedit.File, error) {
-	files, err := m.includeFiles(s)
+func (m *Manager) allFiles(ctx context.Context, s Site) ([]confedit.File, error) {
+	files, err := m.includeFiles(ctx, s)
 	if err != nil {
 		return nil, err
 	}

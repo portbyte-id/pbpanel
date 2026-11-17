@@ -118,7 +118,11 @@ func (l Layout) dirs() []struct {
 		{l.PanelDir(), dirMode{tree, "panel internals"}},
 		{l.BinDir(), dirMode{tree, "the binary must be executable by the unit"}},
 		{l.DataDir(), dirMode{secret, "panel.db and secret.key"}},
-		{l.SSLDir(), dirMode{secret, "panel.key and, later, the ACME account key"}},
+		{l.SSLDir(), dirMode{secret, "panel.key and the ACME account key"}},
+		// Only these two are mounted into the nginx container, which reaches
+		// them as root, so 0755 here does not open the 0700 directory above.
+		{filepath.Join(l.SSLDir(), "sites"), dirMode{tree, "one directory of certificate files per site; mounted read-only into nginx"}},
+		{filepath.Join(l.SSLDir(), "acme-webroot"), dirMode{tree, "HTTP-01 challenge tokens; mounted read-only into nginx"}},
 		{l.LogsDir(), dirMode{tree, "read by the log viewer, written by services"}},
 		{filepath.Join(l.LogsDir(), "sites"), dirMode{tree, "one directory per site"}},
 		{filepath.Join(l.LogsDir(), "apps"), dirMode{tree, "one directory per app"}},

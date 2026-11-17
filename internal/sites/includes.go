@@ -19,6 +19,7 @@ const (
 	FeatureListen Feature = "listen"
 	FeatureNames  Feature = "names"
 	FeatureACME   Feature = "acme"
+	FeatureTLS    Feature = "tls"
 	FeatureProxy  Feature = "proxy"
 	FeaturePHP    Feature = "php"
 )
@@ -27,6 +28,7 @@ var featureFile = map[Feature]string{
 	FeatureListen: nginx.IncludeListen,
 	FeatureNames:  nginx.IncludeNames,
 	FeatureACME:   nginx.IncludeACME,
+	FeatureTLS:    nginx.IncludeTLS,
 	FeatureProxy:  nginx.IncludeProxy,
 	FeaturePHP:    nginx.IncludePHP,
 }
@@ -65,7 +67,7 @@ func (e *DetachedError) Error() string {
 func (e *DetachedError) Is(target error) bool { return target == ErrDetached }
 
 func (m *Manager) featuresOf(s Site) []Feature {
-	f := []Feature{FeatureListen, FeatureNames, FeatureACME}
+	f := []Feature{FeatureListen, FeatureNames, FeatureACME, FeatureTLS}
 	if s.Kind == KindProxy {
 		f = append(f, FeatureProxy)
 	}
@@ -227,11 +229,38 @@ func (m *Manager) Regenerate(ctx context.Context, domain string) (confedit.Resul
 	if err != nil {
 		return confedit.Result{}, err
 	}
-	files, err := m.allFiles(s)
+	files, err := m.allFiles(ctx, s)
 	if err != nil {
 		return confedit.Result{}, err
 	}
 	return m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "regenerate site file " + s.Domain})
+}
+
+// RefreshTLS re-renders a site's tls.conf from the certificate store, so a
+// newly issued, renewed or removed certificate reaches nginx. Only that one
+// include file is rewritten, validated and reloaded. A site file that no longer
+// includes it is refused with a DetachedError: writing the file would change
+// nothing nginx reads, and the caller must not report a certificate as live.
+func (m *Manager) RefreshTLS(ctx context.Context, domain string) (confedit.Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, err := m.get(ctx, m.st.DB(), domain)
+	if err != nil {
+		return confedit.Result{}, err
+	}
+	detail, err := m.scan(s)
+	if err != nil {
+		return confedit.Result{}, err
+	}
+	if err := detail.require(FeatureTLS); err != nil {
+		return confedit.Result{}, err
+	}
+	f, err := m.tlsFile(ctx, s)
+	if err != nil {
+		return confedit.Result{}, err
+	}
+	return m.ap.Apply(ctx, confedit.Change{Files: []confedit.File{f}, Services: []confedit.Service{m.svc}, Reason: "refresh TLS " + s.Domain})
 }
 
 func trimPrefix(err error) string {

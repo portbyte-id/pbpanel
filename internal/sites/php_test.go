@@ -156,7 +156,7 @@ func TestCreatePHPSite(t *testing.T) {
 		t.Errorf("Get = %+v, %v", got, err)
 	}
 	d, _ := r.m.Detail(ctx, "a.test")
-	if len(d.Features) != 4 || d.Features[3].Feature != FeaturePHP || !d.Features[3].Attached {
+	if len(d.Features) != 5 || d.Features[4].Feature != FeaturePHP || !d.Features[4].Attached {
 		t.Errorf("features = %+v", d.Features)
 	}
 }

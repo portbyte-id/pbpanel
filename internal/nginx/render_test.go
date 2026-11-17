@@ -61,8 +61,17 @@ func TestGoldenFiles(t *testing.T) {
 	golden(t, "listen.conf", mustRender(t, b, err))
 	b, err = RenderNames("a.test", []string{"www.a.test", "xn--bcher-kva.test"})
 	golden(t, "names.conf", mustRender(t, b, err))
-	b, err = RenderACME()
+	b, err = testPaths.RenderACME()
 	golden(t, "acme.conf", mustRender(t, b, err))
+	b, err = testPaths.RenderTLS("a.test", nil)
+	golden(t, "tls-none.conf", mustRender(t, b, err))
+	tlsA := &TLS{CertFile: "/www/panel/ssl/sites/a.test/fullchain.pem", KeyFile: "/www/panel/ssl/sites/a.test/privkey.pem"}
+	b, err = testPaths.RenderTLS("a.test", tlsA)
+	golden(t, "tls.conf", mustRender(t, b, err))
+	redirect := *tlsA
+	redirect.RedirectHTTP = true
+	b, err = testPaths.RenderTLS("a.test", &redirect)
+	golden(t, "tls-redirect.conf", mustRender(t, b, err))
 	b, err = RenderProxy("http://127.0.0.1:3000")
 	golden(t, "proxy.conf", mustRender(t, b, err))
 
@@ -234,6 +243,59 @@ func TestDockerfileAddsWWWAtTheFixedID(t *testing.T) {
 	for _, want := range []string{"FROM " + BaseImage, "groupadd -g 1500 www", "useradd -u 1500 -g www"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("Dockerfile lacks %q:\n%s", want, d)
+		}
+	}
+}
+
+func TestRenderTLSRefusesFilesOutsideTheSiteCertDir(t *testing.T) {
+	ok := "/www/panel/ssl/sites/a.test/"
+	for _, c := range []TLS{
+		{CertFile: "/www/panel/ssl/panel.crt", KeyFile: ok + "privkey.pem"},
+		{CertFile: ok + "fullchain.pem", KeyFile: "/www/panel/ssl/panel.key"},
+		{CertFile: ok + "../b.test/fullchain.pem", KeyFile: ok + "privkey.pem"},
+		{CertFile: "/www/panel/ssl/sites/a.test.evil/fullchain.pem", KeyFile: ok + "privkey.pem"},
+		{CertFile: ok + "x.pem; include /etc/passwd", KeyFile: ok + "privkey.pem"},
+		{CertFile: "", KeyFile: ok + "privkey.pem"},
+	} {
+		if _, err := testPaths.RenderTLS("a.test", &c); err == nil {
+			t.Errorf("tls.conf was rendered for %+v", c)
+		}
+	}
+}
+
+// The redirect is the one place a mistake locks certificate issuance out, so
+// the ACME path is checked as text against the order nginx evaluates it in:
+// the exemption must come after the flag is set and before it is acted on.
+func TestTLSRedirectExemptsTheChallengePath(t *testing.T) {
+	b, err := testPaths.RenderTLS("a.test", &TLS{
+		CertFile: "/www/panel/ssl/sites/a.test/fullchain.pem", KeyFile: "/www/panel/ssl/sites/a.test/privkey.pem", RedirectHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	set := strings.Index(got, "if ($scheme = http)")
+	exempt := strings.Index(got, `if ($uri ~ ^/\.well-known/acme-challenge/)`)
+	ret := strings.Index(got, "return 301 https://$host$request_uri;")
+	if set < 0 || exempt < 0 || ret < 0 || !(set < exempt && exempt < ret) {
+		t.Errorf("redirect order wrong (scheme=%d exempt=%d return=%d):\n%s", set, exempt, ret, got)
+	}
+	plain, _ := testPaths.RenderTLS("a.test", &TLS{
+		CertFile: "/www/panel/ssl/sites/a.test/fullchain.pem", KeyFile: "/www/panel/ssl/sites/a.test/privkey.pem",
+	})
+	if strings.Contains(string(plain), "return 301") {
+		t.Errorf("tls.conf redirects without being asked:\n%s", plain)
+	}
+}
+
+func TestACMEServesTheWebrootWithTheFullURI(t *testing.T) {
+	b, err := testPaths.RenderACME()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"location ^~ /.well-known/acme-challenge/ {", "root /www/panel/ssl/acme-webroot;", "try_files $uri =404;"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("acme.conf lacks %q:\n%s", want, b)
 		}
 	}
 }

@@ -145,7 +145,9 @@ type rig struct {
 	st  *store.Store
 }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigTLS(t, nil) }
+
+func newRigTLS(t *testing.T, tls TLSState) *rig {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
@@ -157,7 +159,7 @@ func newRig(t *testing.T) *rig {
 	ap := &memApplier{fs: mfs}
 	svc := &fakeSvc{}
 	m, err := New(Options{
-		Store: st, Applier: ap, Service: svc, Paths: nginx.Paths{Root: "/www"}, FS: mfs,
+		Store: st, Applier: ap, Service: svc, Paths: nginx.Paths{Root: "/www"}, FS: mfs, TLS: tls,
 		Now: func() time.Time { return time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
@@ -419,8 +421,8 @@ func TestDetachedWhenAnIncludeLineIsRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Features) != 4 {
-		t.Fatalf("features = %+v, want listen, names, acme, proxy", d.Features)
+	if len(d.Features) != 5 {
+		t.Fatalf("features = %+v, want listen, names, acme, tls, proxy", d.Features)
 	}
 	for _, f := range d.Features {
 		if !f.Attached {

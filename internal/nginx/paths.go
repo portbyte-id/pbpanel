@@ -52,6 +52,22 @@ func (p Paths) ErrorLog(domain string) string { return path.Join(p.SiteLogDir(),
 // RunDir holds the PHP-FPM sockets, shared with the PHP containers.
 func (p Paths) RunDir() string { return path.Join(p.Root, "panel", "run") }
 
+// SSLDir holds the panel's own certificate, the ACME account key and the site
+// certificates. It is never mounted into a container as a whole.
+func (p Paths) SSLDir() string { return path.Join(p.Root, "panel", "ssl") }
+
+// SiteCertsDir holds one directory of certificate files per site. It is the
+// only part of SSLDir that holds site keys, and the nginx container mounts it
+// read-only.
+func (p Paths) SiteCertsDir() string { return path.Join(p.SSLDir(), "sites") }
+
+// SiteCertDir is the directory of one site's certificate files.
+func (p Paths) SiteCertDir(domain string) string { return path.Join(p.SiteCertsDir(), domain) }
+
+// ACMEWebroot is where HTTP-01 challenge tokens are written and nginx serves
+// them from.
+func (p Paths) ACMEWebroot() string { return path.Join(p.SSLDir(), "acme-webroot") }
+
 // SitesRoot is the directory whose subdirectories are web roots.
 func (p Paths) SitesRoot() string { return path.Join(p.Root, "services", "sites") }
 

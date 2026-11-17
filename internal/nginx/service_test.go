@@ -308,3 +308,49 @@ func TestConfLinksNamesWhatStoppedWorking(t *testing.T) {
 		t.Errorf("missing = %v, want the common settings only", m)
 	}
 }
+
+// The ssl directory holds the panel's key and the ACME account key, so the
+// container may see the site certificates and the challenge webroot and
+// nothing above them.
+func TestSpecMountsCertificatesAndWebrootButNotTheSSLDir(t *testing.T) {
+	spec := Spec(testPaths)
+	mounts := map[string]bool{}
+	for _, m := range spec.Mounts {
+		mounts[m.Path] = m.ReadOnly
+		if m.Path == testPaths.SSLDir() || strings.HasPrefix(testPaths.SSLDir()+"/", m.Path+"/") {
+			t.Errorf("mount %s exposes the whole ssl directory", m.Path)
+		}
+	}
+	for _, p := range []string{testPaths.SiteCertsDir(), testPaths.ACMEWebroot()} {
+		if ro, ok := mounts[p]; !ok || !ro {
+			t.Errorf("mount %s present=%v readOnly=%v, want a read-only mount", p, ok, ro)
+		}
+	}
+	if err := spec.Validate(testPaths.Root); err != nil {
+		t.Errorf("Spec does not validate: %v", err)
+	}
+}
+
+// A container created before the TLS mounts existed must be recreated, not
+// taken for current, or nginx would read certificates it cannot see.
+func TestSpecHashChangesWithTheTLSMounts(t *testing.T) {
+	spec := Spec(testPaths)
+	old := spec
+	old.Mounts = nil
+	for _, m := range spec.Mounts {
+		if m.Path != testPaths.SiteCertsDir() && m.Path != testPaths.ACMEWebroot() {
+			old.Mounts = append(old.Mounts, m)
+		}
+	}
+	if len(old.Mounts) != len(spec.Mounts)-2 {
+		t.Fatalf("mounts = %v", spec.Mounts)
+	}
+	if old.Hash() == spec.Hash() {
+		t.Error("the spec hash ignores the TLS mounts")
+	}
+	cur := &docker.Container{ImageID: "sha256:x", Labels: old.Config().Labels, State: docker.ContainerState{Running: true}}
+	act, _, err := docker.Decide(spec, "sha256:x", cur)
+	if err != nil || act != docker.ActionRecreate {
+		t.Errorf("Decide = %v, %v; want recreate", act, err)
+	}
+}
