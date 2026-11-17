@@ -373,3 +373,29 @@ func TestMirrorIsNotWrittenWhenTheInsertFails(t *testing.T) {
 		t.Fatalf("mirror exists although the row was never stored: %v", err)
 	}
 }
+
+func TestWriteRedactsTLSSecrets(t *testing.T) {
+	w, s, mirror := newWriter(t)
+	if err := w.Write(context.Background(), Entry{
+		Actor: "admin", Action: "PUT /api/tls/providers/cf", Result: Success,
+		Detail: map[string]any{
+			"private_key": "-----BEGIN PRIVATE KEY-----abc",
+			"credentials": map[string]any{"api_token": "cf-token-1", "zone": "z1"},
+			"api_token":   "cf-token-2",
+			"private":     "p-1",
+			"domain":      "a.test",
+		},
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	rows := readRows(t, s)
+	file := readMirror(t, mirror)
+	for _, secret := range []string{"BEGIN PRIVATE KEY", "cf-token-1", "cf-token-2", "p-1", "z1"} {
+		if strings.Contains(rows[0].detail, secret) || strings.Contains(file, secret) {
+			t.Errorf("secret %q reached the audit log: %s", secret, rows[0].detail)
+		}
+	}
+	if !strings.Contains(rows[0].detail, "a.test") {
+		t.Errorf("the domain was redacted too: %s", rows[0].detail)
+	}
+}

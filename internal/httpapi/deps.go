@@ -58,6 +58,10 @@ type Deps struct {
 	// Runtimes installs Node.js versions. Nil leaves /api/runtimes answering 503.
 	Runtimes RuntimesService
 
+	// TLS carries certificates for sites and the panel. Nil leaves the TLS
+	// routes answering 503.
+	TLS *TLSDeps
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

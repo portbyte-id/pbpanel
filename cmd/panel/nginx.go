@@ -37,7 +37,7 @@ type nginxStack struct {
 // newNginxStack wires the Docker client, the config editor, the nginx service
 // and the sites model. Nothing here touches Docker or the disk: a daemon on a
 // host without Docker still starts, and the reconcile reports what is missing.
-func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layout, jobsMgr *jobs.Manager, ed *confedit.Editor, logger *slog.Logger) (*nginxStack, error) {
+func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layout, jobsMgr *jobs.Manager, ed *confedit.Editor, tlsState sites.TLSState, logger *slog.Logger) (*nginxStack, error) {
 	paths := nginx.Paths{Root: filepath.ToSlash(layout.Root)}
 	phpPaths := php.Paths{Root: paths.Root}
 
@@ -60,7 +60,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := sites.New(sites.Options{Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr})
+	mgr, err := sites.New(sites.Options{Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState})
 	if err != nil {
 		return nil, err
 	}
