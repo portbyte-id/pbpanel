@@ -62,16 +62,16 @@ export function SitesPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-2 font-medium">Domain</th>
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium">Serves</th>
-                <th className="px-3 py-2 font-medium">Other domains</th>
+                <th className="px-3 py-1.5 font-medium">Domain</th>
+                <th className="px-3 py-1.5 font-medium">Type</th>
+                <th className="px-3 py-1.5 font-medium">Serves</th>
+                <th className="px-3 py-1.5 font-medium">Other domains</th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
               {sites.map((site) => (
                 <tr key={site.domain}>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <Link
                       to="/sites/$domain"
                       params={{ domain: site.domain }}
@@ -80,13 +80,13 @@ export function SitesPage() {
                       {site.domain}
                     </Link>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <Badge variant="secondary">{kindLabel(site.kind)}</Badge>
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs break-all">
+                  <td className="px-3 py-1.5 font-mono text-xs break-all">
                     {site.kind === "proxy" ? site.proxy_target : site.root}
                   </td>
-                  <td className="text-muted-foreground px-3 py-2">
+                  <td className="text-muted-foreground px-3 py-1.5">
                     {site.aliases.length === 0 ? "—" : site.aliases.join(", ")}
                   </td>
                 </tr>

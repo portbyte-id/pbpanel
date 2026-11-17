@@ -172,10 +172,10 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
                 <tr>
-                  <th className="px-3 py-2 font-medium">Version</th>
-                  <th className="px-3 py-2 font-medium">Saved</th>
-                  <th className="px-3 py-2 font-medium">Change</th>
-                  <th className="px-3 py-2 font-medium">
+                  <th className="px-3 py-1.5 font-medium">Version</th>
+                  <th className="px-3 py-1.5 font-medium">Saved</th>
+                  <th className="px-3 py-1.5 font-medium">Change</th>
+                  <th className="px-3 py-1.5 font-medium">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -183,12 +183,12 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
               <tbody className="divide-border divide-y">
                 {(history.data ?? []).map((v) => (
                   <tr key={v.version}>
-                    <td className="px-3 py-2 font-mono text-xs">v{v.version}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className="px-3 py-1.5 font-mono text-xs">v{v.version}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
                       {new Date(v.created_at).toLocaleString()}
                     </td>
-                    <td className="px-3 py-2">{v.reason || "—"}</td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-1.5">{v.reason || "—"}</td>
+                    <td className="px-3 py-1.5">
                       <div className="flex justify-end gap-2">
                         <Button
                           size="sm"

@@ -4,8 +4,12 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { api } from "@/lib/api"
+import { applyTheme } from "@/lib/theme"
 import { createAppRouter } from "@/router"
 import "@/index.css"
+
+// Before the first paint, so a dark-mode operator never sees a white flash.
+applyTheme()
 
 const rootElement = document.getElementById("root")
 if (!rootElement) {

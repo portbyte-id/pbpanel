@@ -28,7 +28,7 @@ import { formatDate, renewalStatus, sortCertsBySoonest, sourceLabel } from "@/li
 /** Every certificate, the one that needs attention first; DNS providers; the panel's own certificate. */
 export function TLSPage() {
   return (
-    <div className="flex max-w-4xl flex-col gap-6">
+    <div className="flex max-w-4xl flex-col gap-4">
       <CertificatesCard />
       <ProvidersCard />
       <PanelCertCard />
@@ -238,7 +238,7 @@ export function ProviderList({
   return (
     <ul className="divide-border divide-y rounded-lg border" aria-label="Saved DNS providers">
       {providers.map((p) => (
-        <li key={p.name} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+        <li key={p.name} className="flex flex-wrap items-center justify-between gap-3 px-3 py-1.5">
           <div className="flex flex-col">
             <span className="text-sm font-medium">{p.name}</span>
             <span className="text-muted-foreground text-xs">

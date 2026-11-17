@@ -52,12 +52,12 @@ export function AuditPage() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-2 font-medium">Time</th>
-              <th className="px-3 py-2 font-medium">Actor</th>
-              <th className="px-3 py-2 font-medium">Action</th>
-              <th className="px-3 py-2 font-medium">Target</th>
-              <th className="px-3 py-2 font-medium">Result</th>
-              <th className="px-3 py-2 font-medium">Detail</th>
+              <th className="px-3 py-1.5 font-medium">Time</th>
+              <th className="px-3 py-1.5 font-medium">Actor</th>
+              <th className="px-3 py-1.5 font-medium">Action</th>
+              <th className="px-3 py-1.5 font-medium">Target</th>
+              <th className="px-3 py-1.5 font-medium">Result</th>
+              <th className="px-3 py-1.5 font-medium">Detail</th>
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
@@ -84,18 +84,18 @@ function AuditRow({
 
   return (
     <tr className="align-top">
-      <td className="text-muted-foreground px-3 py-2 whitespace-nowrap">
+      <td className="text-muted-foreground px-3 py-1.5 whitespace-nowrap">
         <time dateTime={entry.at}>{formatTime(entry.at)}</time>
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">{entry.actor}</td>
-      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{entry.action}</td>
-      <td className="px-3 py-2 font-mono text-xs">{entry.target}</td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1.5 whitespace-nowrap">{entry.actor}</td>
+      <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{entry.action}</td>
+      <td className="px-3 py-1.5 font-mono text-xs">{entry.target}</td>
+      <td className="px-3 py-1.5">
         <Badge variant={entry.result === "success" ? "secondary" : "destructive"}>
           {entry.result}
         </Badge>
       </td>
-      <td className="px-3 py-2 text-xs">
+      <td className="px-3 py-1.5 text-xs">
         <div className="flex flex-col gap-1">
           <code className="text-muted-foreground break-all">{summarize(entry.detail)}</code>
           {jobId && (

@@ -13,6 +13,7 @@ import { logsRoute } from "@/routes/_app/logs"
 import { nginxRoute } from "@/routes/_app/nginx"
 import { phpRoute } from "@/routes/_app/php"
 import { runtimesRoute } from "@/routes/_app/runtimes"
+import { servicesRoute } from "@/routes/_app/services"
 import { settingsRoute } from "@/routes/_app/settings"
 import { tlsRoute } from "@/routes/_app/tls"
 import { siteRoute } from "@/routes/_app/site"
@@ -31,6 +32,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     appIndexRoute,
     dashboardRoute,
+    servicesRoute,
     sitesRoute,
     siteRoute,
     filesRoute,

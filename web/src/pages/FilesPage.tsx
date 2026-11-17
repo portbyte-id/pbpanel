@@ -269,7 +269,7 @@ export function FilesPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
                   <tr>
-                    <th className="w-8 px-3 py-2">
+                    <th className="w-8 px-3 py-1.5">
                       <input
                         type="checkbox"
                         checked={selection.all}
@@ -277,12 +277,12 @@ export function FilesPage() {
                         aria-label="Select all"
                       />
                     </th>
-                    <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">Size</th>
-                    <th className="px-3 py-2 font-medium">Mode</th>
-                    <th className="px-3 py-2 font-medium">Owner</th>
-                    <th className="px-3 py-2 font-medium">Modified</th>
-                    <th className="px-3 py-2 font-medium">
+                    <th className="px-3 py-1.5 font-medium">Name</th>
+                    <th className="px-3 py-1.5 font-medium">Size</th>
+                    <th className="px-3 py-1.5 font-medium">Mode</th>
+                    <th className="px-3 py-1.5 font-medium">Owner</th>
+                    <th className="px-3 py-1.5 font-medium">Modified</th>
+                    <th className="px-3 py-1.5 font-medium">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
@@ -428,7 +428,7 @@ function FileRow({
 
   return (
     <tr className={cn(selected && "bg-accent/50")} data-path={entry.path}>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1.5">
         <input
           type="checkbox"
           checked={selected}
@@ -436,7 +436,7 @@ function FileRow({
           aria-label={`Select ${entry.name}`}
         />
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1.5">
         <button
           type="button"
           className="text-left font-medium underline-offset-4 hover:underline"
@@ -453,19 +453,19 @@ function FileRow({
           </Badge>
         )}
       </td>
-      <td className="text-muted-foreground px-3 py-2 whitespace-nowrap">
+      <td className="text-muted-foreground px-3 py-1.5 whitespace-nowrap">
         {formatSize(entry.size, dirLike)}
       </td>
-      <td className="text-muted-foreground px-3 py-2 font-mono text-xs">
+      <td className="text-muted-foreground px-3 py-1.5 font-mono text-xs">
         {formatMode(entry.mode)}
       </td>
-      <td className="text-muted-foreground px-3 py-2 whitespace-nowrap">
+      <td className="text-muted-foreground px-3 py-1.5 whitespace-nowrap">
         {entry.owner || entry.uid}
       </td>
-      <td className="text-muted-foreground px-3 py-2 whitespace-nowrap">
+      <td className="text-muted-foreground px-3 py-1.5 whitespace-nowrap">
         {formatMtime(entry.mtime)}
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-1.5 text-right">
         <div className="relative flex justify-end">
           <Button
             size="sm"

@@ -119,12 +119,12 @@ export function CronPage() {
             <caption className="sr-only">Cron jobs</caption>
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Schedule</th>
-                <th className="px-3 py-2 font-medium">User</th>
-                <th className="px-3 py-2 font-medium">Next run</th>
-                <th className="px-3 py-2 font-medium">Last run</th>
-                <th className="px-3 py-2 font-medium">
+                <th className="px-3 py-1.5 font-medium">Name</th>
+                <th className="px-3 py-1.5 font-medium">Schedule</th>
+                <th className="px-3 py-1.5 font-medium">User</th>
+                <th className="px-3 py-1.5 font-medium">Next run</th>
+                <th className="px-3 py-1.5 font-medium">Last run</th>
+                <th className="px-3 py-1.5 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
@@ -132,22 +132,22 @@ export function CronPage() {
             <tbody className="divide-border divide-y">
               {list.map((job) => (
                 <tr key={job.id} data-testid="cron-row" data-job={job.name}>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <p className="font-medium">{job.name}</p>
                     <p className="text-muted-foreground max-w-xs truncate font-mono text-xs" title={commandSummary(job)}>
                       {commandSummary(job)}
                     </p>
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{job.schedule}</td>
-                  <td className="px-3 py-2">{job.user}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">
+                  <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{job.schedule}</td>
+                  <td className="px-3 py-1.5">{job.user}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">
                     {job.enabled ? (
                       formatWhen(job.next_run)
                     ) : (
                       <Badge variant="outline">Disabled</Badge>
                     )}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     {job.last_run ? (
                       <div className="flex flex-col gap-1">
                         <Badge variant={statusVariant(job.last_run.status)} className="w-fit">
@@ -161,7 +161,7 @@ export function CronPage() {
                       <span className="text-muted-foreground">Never run</span>
                     )}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <div className="flex flex-wrap justify-end gap-1.5">
                       <Button
                         size="sm"
@@ -294,12 +294,12 @@ export function RunHistory({ job }: { job: CronJob }) {
           <caption className="sr-only">Runs of {job.name}</caption>
           <thead className="bg-muted text-muted-foreground text-left text-xs">
             <tr>
-              <th className="px-3 py-2 font-medium">Started</th>
-              <th className="px-3 py-2 font-medium">Trigger</th>
-              <th className="px-3 py-2 font-medium">Result</th>
-              <th className="px-3 py-2 font-medium">Exit</th>
-              <th className="px-3 py-2 font-medium">Took</th>
-              <th className="px-3 py-2 font-medium">
+              <th className="px-3 py-1.5 font-medium">Started</th>
+              <th className="px-3 py-1.5 font-medium">Trigger</th>
+              <th className="px-3 py-1.5 font-medium">Result</th>
+              <th className="px-3 py-1.5 font-medium">Exit</th>
+              <th className="px-3 py-1.5 font-medium">Took</th>
+              <th className="px-3 py-1.5 font-medium">
                 <span className="sr-only">Output</span>
               </th>
             </tr>
@@ -307,14 +307,14 @@ export function RunHistory({ job }: { job: CronJob }) {
           <tbody className="divide-border divide-y">
             {runs.data.map((r) => (
               <tr key={r.id} data-testid="run-row">
-                <td className="px-3 py-2 whitespace-nowrap">{formatWhen(r.started_at)}</td>
-                <td className="px-3 py-2">{r.source === "manual" ? "Run now" : "Schedule"}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-1.5 whitespace-nowrap">{formatWhen(r.started_at)}</td>
+                <td className="px-3 py-1.5">{r.source === "manual" ? "Run now" : "Schedule"}</td>
+                <td className="px-3 py-1.5">
                   <Badge variant={statusVariant(r.status)}>{STATUS_LABELS[r.status]}</Badge>
                 </td>
-                <td className="px-3 py-2 tabular-nums">{r.status === "running" ? "–" : r.exit_code}</td>
-                <td className="px-3 py-2">{runDuration(r) || "–"}</td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-3 py-1.5 tabular-nums">{r.status === "running" ? "–" : r.exit_code}</td>
+                <td className="px-3 py-1.5">{runDuration(r) || "–"}</td>
+                <td className="px-3 py-1.5 text-right">
                   <Button
                     size="sm"
                     variant="outline"
