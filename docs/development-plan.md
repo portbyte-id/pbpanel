@@ -547,6 +547,44 @@ Install a Node LTS version → create a Node app and a Go binary app → both re
 PID → both restart → `systemctl restart panel` → apps keep their PIDs → create a proxy site for one
 → reachable by domain.
 
+### Status (2026-11-17)
+
+M5 is built and its unit, API and browser tests pass. **The exit gate has not been run:**
+`scripts/smoke/5-apps.sh` was written and dry-run, and has never been executed against a VM, so
+nothing here has yet run against a live supervisord.
+
+| Step | State | Evidence |
+|------|-------|----------|
+| 5.1 | done from source, **not run live** | RPC subset recorded in `internal/apps/doc.go`. The Go supervisord serves its XML-RPC on a Unix socket (`[unix_http_server]`, `chmod=`). It has **no `update` call**: `reloadConfig` then `addProcessGroup` / `removeProcessGroup` is what `supervisorctl update` does, and `addProcessGroup` leaves the program stopped. Its `ctl` subcommand does **not** work over a Unix socket (upstream README), so the planned `ctl` fallback does not exist; a missing call is a missing feature. |
+| 5.2 | done | `internal/install/supervisord.go`. v0.7.6 for amd64 and arm64, pinned by SHA-256 (the release publishes bare binaries and a per-asset digest, no checksums file). Tests: a mismatch aborts and leaves an installed binary untouched; plain http is refused; a re-run issues no mutating command. |
+| 5.3 | done | `internal/runtimes`. nvm at tag `v0.40.3`, run through one allowlisted `bash -c` with the version as a positional argument after a strict pattern check. |
+| 5.4 | done | `internal/apps`. Golden program file, validator, environment rules, rollback of both the files and the row. |
+| 5.5 | done | Manager tests run the real `confedit` editor against a fake supervisord that follows the upstream reload semantics. |
+| 5.6 | done | `?proxy=<url>` on `/sites`; asserted in the Playwright journey. |
+| 5.7 | done | `/api/apps`, `/api/runtimes`; Runtimes and Apps pages; 17 new vitest cases; `web/e2e/apps.spec.ts` against an in-memory supervisord. |
+| 5.8 | written, **not run** | Dry run only. It cross-compiles `scripts/smoke/testdata/apps-hello` for the Go app. |
+
+Deviations from the step text:
+
+- **Log tail** reads the log file the program file names, not `readProcessStdoutLog`. It needs no RPC, and the SSE follower resumes from a byte offset.
+- **One config editor** now serves nginx, PHP and the supervisor program files (`cmd/panel/apps.go`), so one journal under `history/` covers all three and a replay can write any of them. The journal is replayed by the nginx reconciler, so on a host without Docker an unfinished apps apply is not replayed at boot.
+- **Command and environment values are validated, not escaped.** `%` (supervisord interpolates it), newlines and NUL are refused everywhere, and `"` in an environment value, because no escape for them has been verified against the Go daemon.
+- **A program that will not stay up is a warning, not a failed apply.** The configuration is correct and the operator needs it saved to fix the program.
+- **Removing a Node version** removes its directory; it does not call `nvm uninstall`, so removal needs no shell. It refuses while an app uses the version.
+- **nvm is pinned by tag**, not by checksum: git checks the objects it fetches, but a moved tag is not detected.
+
+Not proven until smoke 5 passes: the reply shapes of `getAllProcessInfo`, `reloadConfig` and the
+bool-returning calls (the decoder accepts a bare value and a one-member struct because the source
+does not settle which); that `chmod=0700` on the socket is honoured; that `reloadConfig` reports an
+edited program as *changed* and `addProcessGroup` then picks it up; that `user=` drops privileges;
+`startProcess` with `wait` against a program that crashes inside `startsecs`; and everything on EL9.
+
+Found while running the suite, not caused by M5: `TestRepairFixesALoosenedMode` fails at `71c35bc`
+(`modeOK` accepts a directory that is looser than required, so a loosened `data/` is never
+tightened), and `scripts/lint-conventions.sh` flags two M4 lines (`cmd/panel/firewall.go:81` and
+`internal/firewall/service_test.go:99`) for the word `ufw`. The login journey asserted that Files is
+a disabled placeholder, which stopped being true in M3; it now checks TLS.
+
 ---
 
 ## 8. M6 — TLS
