@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -8,27 +9,30 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
-	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/waf"
 )
 
-func guardRig(t *testing.T) *rig {
+// panelKeys are the Turnstile keys the panel's Settings hold in a test. The
+// firewall reads them on each use, so a test changes them between calls.
+type panelKeys struct{ site, secret string }
+
+func (k *panelKeys) source(context.Context) (string, string, error) {
+	return k.site, k.secret, nil
+}
+
+func guardRig(t *testing.T) (*rig, *panelKeys) {
 	t.Helper()
 	r := wafRig(t, true)
-	master := []byte("0123456789abcdef0123456789abcdef")
-	keys, err := guard.NewKeyring(master)
+	keys, err := guard.NewKeyring([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := secretbox.New(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.m.waf.WithGuard(keys, box)
+	pk := &panelKeys{}
+	r.m.waf.WithGuard(keys).WithTurnstile(pk.source)
 	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindStatic}); err != nil {
 		t.Fatal(err)
 	}
-	return r
+	return r, pk
 }
 
 func storedJSON(t *testing.T, r *rig) string {
@@ -41,7 +45,7 @@ func storedJSON(t *testing.T, r *rig) string {
 }
 
 func TestSetWAFChallengePoW(t *testing.T) {
-	r := guardRig(t)
+	r, _ := guardRig(t)
 	c := waf.Default()
 	c.Challenge.Enabled = true
 	res, err := r.m.SetWAF(ctx, "a.test", c)
@@ -76,56 +80,54 @@ func TestSetWAFChallengePoW(t *testing.T) {
 	}
 }
 
-// TestSetWAFTurnstileSecret: the secret is sealed in the database, never sent
-// back, kept when a later save leaves it empty, and required to switch on.
-func TestSetWAFTurnstileSecret(t *testing.T) {
-	r := guardRig(t)
+// TestSetWAFTurnstileGlobalKeys: a site uses the panel's Turnstile keys, which
+// are read live, are never stored with the site, and must both be set first.
+func TestSetWAFTurnstileGlobalKeys(t *testing.T) {
+	r, keys := guardRig(t)
 	c := waf.Default()
-	c.Challenge = waf.Challenge{Enabled: true, Provider: guard.ProviderTurnstile, TurnstileSiteKey: "0x4AAAAAAAkey"}
+	c.Challenge = waf.Challenge{Enabled: true, Provider: guard.ProviderTurnstile}
 
 	_, err := r.m.SetWAF(ctx, "a.test", c)
 	var ve *ValidationError
-	if !errors.As(err, &ve) || ve.Field != "challenge.turnstile_secret" {
-		t.Fatalf("Turnstile without a secret: %v", err)
+	if !errors.As(err, &ve) || ve.Field != "challenge.enabled" {
+		t.Fatalf("Turnstile without panel keys: %v", err)
 	}
 
-	c.Challenge.TurnstileSecret = "bad secret!"
-	if _, err := r.m.SetWAF(ctx, "a.test", c); !errors.As(err, &ve) || ve.Field != "challenge.turnstile_secret" {
-		t.Fatalf("malformed secret: %v", err)
-	}
-
-	c.Challenge.TurnstileSecret = "0x4AAAAAAAsecret"
+	keys.site = "0x4AAAAAAAkey"
+	keys.secret = "0x4AAAAAAAsecret"
 	res, err := r.m.SetWAF(ctx, "a.test", c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Config.Challenge.TurnstileSecret != "" || !res.Config.Challenge.TurnstileSecretSet {
-		t.Fatalf("the response carries the secret or hides that one is set: %+v", res.Config.Challenge)
+	if !res.Status.TurnstileReady {
+		t.Fatalf("the status does not report the panel keys: %+v", res.Status)
 	}
-	if strings.Contains(storedJSON(t, r), "0x4AAAAAAAsecret") {
-		t.Fatal("the secret is stored in the clear")
+	if out, _ := json.Marshal(res.Config); strings.Contains(string(out), "turnstile_") {
+		t.Fatalf("the site's settings carry Turnstile key fields: %s", out)
 	}
-	out, _ := json.Marshal(res.Config)
-	if strings.Contains(string(out), `"turnstile_secret"`) {
-		t.Fatalf("the JSON response has the secret field: %s", out)
+	if strings.Contains(storedJSON(t, r), "turnstile_") {
+		t.Fatal("the site's stored settings carry Turnstile fields")
 	}
 
-	// A save from the form, which never has the secret, keeps it.
-	got, _, err := r.m.WAFConfig(ctx, "a.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got.Challenge.ClearanceMinutes = 30
-	if _, err := r.m.SetWAF(ctx, "a.test", got); err != nil {
-		t.Fatalf("a save without the secret: %v", err)
-	}
 	s, ok, err := r.m.waf.GuardSettings(ctx, "a.test")
-	if err != nil || !ok || s.TurnstileSecret != "0x4AAAAAAAsecret" || s.Clearance.Minutes() != 30 {
+	if err != nil || !ok || s.TurnstileSiteKey != "0x4AAAAAAAkey" || s.TurnstileSecret != "0x4AAAAAAAsecret" {
 		t.Fatalf("GuardSettings = %+v %v %v", s, ok, err)
 	}
 	page := string(r.fs.files["/www/panel/nginx/waf/guard/a.test.html"])
-	if !strings.Contains(page, `data-sitekey="0x4AAAAAAAkey"`) || strings.Contains(page, "0x4AAAAAAAsecret") {
-		t.Fatal("the page must carry the site key and never the secret")
+	if !strings.Contains(page, `data-provider="turnstile"`) || strings.Contains(page, "0x4AAAAAAAkey") || strings.Contains(page, "0x4AAAAAAAsecret") {
+		t.Fatal("the page must name its provider and carry neither Turnstile key")
+	}
+
+	// A new site key reaches the next visitor without a save or a reload.
+	keys.site = "0x4AAAAAAAnew"
+	if s, _, _ := r.m.waf.GuardSettings(ctx, "a.test"); s.TurnstileSiteKey != "0x4AAAAAAAnew" {
+		t.Fatalf("the site key is not read live: %q", s.TurnstileSiteKey)
+	}
+
+	// Removing the secret takes the site's Turnstile off until it is set again.
+	keys.secret = ""
+	if _, status, err := r.m.WAFConfig(ctx, "a.test"); err != nil || status.TurnstileReady {
+		t.Fatalf("status without the secret: %+v %v", status, err)
 	}
 }
 

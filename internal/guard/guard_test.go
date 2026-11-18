@@ -214,12 +214,18 @@ func TestHandlerProofOfWork(t *testing.T) {
 }
 
 func TestHandlerTurnstile(t *testing.T) {
-	s := Settings{Provider: ProviderTurnstile, Clearance: 10 * time.Minute, CookieName: "pbg_w1", TurnstileSecret: "0xSECRET"}
+	s := Settings{Provider: ProviderTurnstile, Clearance: 10 * time.Minute, CookieName: "pbg_w1", TurnstileSiteKey: "0xSITE", TurnstileSecret: "0xSECRET"}
 	v := &fakeVerifier{ok: true}
 	h := newTestHandler(t, s, v)
 
 	if w := do(h, http.MethodGet, NewPath, "", nil); w.Code != http.StatusNotFound {
 		t.Fatalf("a Turnstile site handed out a puzzle: %d", w.Code)
+	}
+	if w := do(h, http.MethodGet, ConfigPath, "", nil); w.Code != http.StatusOK || w.Body.String() != `{"sitekey":"0xSITE"}`+"\n" {
+		t.Fatalf("config: %d %q", w.Code, w.Body.String())
+	}
+	if w := do(h, http.MethodPost, ConfigPath, "", nil); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST config: %d", w.Code)
 	}
 	w := do(h, http.MethodPost, VerifyPath, `{"token":"tok"}`, nil)
 	if w.Code != http.StatusNoContent || !strings.HasPrefix(w.Header().Get("Set-Cookie"), "pbg_w1=") {
@@ -237,8 +243,28 @@ func TestHandlerTurnstile(t *testing.T) {
 	}
 }
 
+// TestHandlerTurnstileKeysUnset: a Turnstile site whose panel lacks a key answers
+// 503 with the reason, and never calls siteverify with an empty secret.
+func TestHandlerTurnstileKeysUnset(t *testing.T) {
+	v := &fakeVerifier{ok: true}
+	noSite := newTestHandler(t, Settings{Provider: ProviderTurnstile, Clearance: time.Minute, CookieName: "c", TurnstileSecret: "0xSECRET"}, v)
+	if w := do(noSite, http.MethodGet, ConfigPath, "", nil); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "site key") {
+		t.Fatalf("config without a site key: %d %s", w.Code, w.Body)
+	}
+	noSecret := newTestHandler(t, Settings{Provider: ProviderTurnstile, Clearance: time.Minute, CookieName: "c", TurnstileSiteKey: "0xSITE"}, v)
+	if w := do(noSecret, http.MethodPost, VerifyPath, `{"token":"tok"}`, nil); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "secret key") {
+		t.Fatalf("verify without a secret: %d %s", w.Code, w.Body)
+	}
+	if v.gotSecret != "" {
+		t.Fatalf("siteverify was called with secret %q", v.gotSecret)
+	}
+}
+
 func TestHandlerRefusals(t *testing.T) {
 	h := newTestHandler(t, Settings{Provider: ProviderPoW, Difficulty: 8, Clearance: time.Hour, CookieName: "c"}, nil)
+	if w := do(h, http.MethodGet, ConfigPath, "", nil); w.Code != http.StatusNotFound {
+		t.Errorf("config of a PoW site: %d", w.Code)
+	}
 	if w := do(h, http.MethodGet, NewPath, "", map[string]string{HeaderSite: "other.test"}); w.Code != http.StatusNotFound {
 		t.Errorf("site without a challenge: %d", w.Code)
 	}
@@ -287,7 +313,7 @@ func TestCloudflareVerifier(t *testing.T) {
 // style that is not reflected in the CSP would leave a blank, broken page.
 func TestPageCSPMatchesInlineCode(t *testing.T) {
 	for _, p := range []Provider{ProviderPoW, ProviderTurnstile} {
-		page := string(Page("a.test", p, "0xKEY"))
+		page := string(Page("a.test", p))
 		script := between(t, page, "<script>", "</script>")
 		style := between(t, page, "<style>", "</style>")
 		csp := CSP(p)
@@ -302,7 +328,7 @@ func TestPageCSPMatchesInlineCode(t *testing.T) {
 			t.Fatalf("%s: Cloudflare in the CSP = %v", p, hasCF)
 		}
 	}
-	if page := string(Page(`x"><script>`, ProviderTurnstile, `k"onx`)); strings.Contains(page, `"><script>`) || strings.Contains(page, `k"onx`) {
+	if page := string(Page(`x"><script>`, ProviderTurnstile)); strings.Contains(page, `"><script>`) {
 		t.Fatal("values are not escaped")
 	}
 }

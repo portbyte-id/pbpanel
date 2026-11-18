@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/portbyte-id/server-panel/internal/waf"
 )
 
 // validate runs the type check, then the key's own validator. The returned
@@ -104,6 +106,22 @@ func validatePath(value string) error {
 		return fmt.Errorf("must be a clean path, without '.' or '..' or a trailing separator")
 	}
 	return nil
+}
+
+// validateOptionalTurnstileSiteKey and validateOptionalTurnstileSecret accept an
+// empty value, which means Turnstile is not configured.
+func validateOptionalTurnstileSiteKey(value string) error {
+	if value == "" || waf.ValidTurnstileSiteKey(value) {
+		return nil
+	}
+	return fmt.Errorf("must be letters, digits, _ or - (up to %d characters)", waf.MaxTurnstileKey)
+}
+
+func validateOptionalTurnstileSecret(value string) error {
+	if value == "" || waf.ValidTurnstileSecret(value) {
+		return nil
+	}
+	return fmt.Errorf("must be the secret key from the Cloudflare dashboard: letters, digits, _ and -")
 }
 
 func validateAddr(value string) error {

@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useSites } from "@/lib/queries"
 import { formatBytes } from "@/lib/sysinfo"
 import {
@@ -74,7 +75,7 @@ export function TrafficPage() {
   )
 
   return (
-    <div className="flex max-w-7xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-site`}>Site</Label>
@@ -118,18 +119,31 @@ export function TrafficPage() {
           onRetry={() => void traffic.refetch()}
         />
       ) : (
-        <Summary
-          data={traffic.data}
-          site={site}
-          modes={modes}
-          onPickSite={setSite}
-          events={events.data}
-          eventsFailed={events.isError}
-          eventsPending={events.isPending}
-        />
+        <Totals data={traffic.data} events={events.data} />
       )}
 
-      <RequestFeed site={site} />
+      <Tabs defaultValue="overview">
+        <TabsList aria-label="Traffic views">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="top">Top lists</TabsTrigger>
+          <TabsTrigger value="firewall">Firewall</TabsTrigger>
+          <TabsTrigger value="live">Live requests</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview" className="pt-2">
+          {traffic.data && !traffic.error && (
+            <Overview data={traffic.data} site={site} modes={modes} onPickSite={setSite} />
+          )}
+        </TabsContent>
+        <TabsContent value="top" className="pt-2">
+          {traffic.data && !traffic.error && <TopLists data={traffic.data} />}
+        </TabsContent>
+        <TabsContent value="firewall" className="pt-2">
+          <FirewallActivity summary={events.data} failed={events.isError} pending={events.isPending} />
+        </TabsContent>
+        <TabsContent value="live" className="pt-2">
+          <RequestFeed site={site} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -168,29 +182,13 @@ function Tile({
   )
 }
 
-function Summary({
-  data,
-  site,
-  modes,
-  onPickSite,
-  events,
-  eventsFailed,
-  eventsPending,
-}: {
-  data: TrafficSummary
-  site: string
-  modes: Map<string, WafOverviewSite>
-  onPickSite: (domain: string) => void
-  events: WafEventSummary | undefined
-  eventsFailed: boolean
-  eventsPending: boolean
-}) {
+/** The headline numbers, shown above the tabs for every view. */
+function Totals({ data, events }: { data: TrafficSummary; events: WafEventSummary | undefined }) {
   const t = data.totals
   const series = data.series
   const errors = t.s4xx + t.s5xx
   return (
-    <div className="flex flex-col gap-6">
-      <dl className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <dl className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Tile label="Requests per second now" value={data.rps_now.toFixed(1)} />
         <Tile
           label="Requests"
@@ -223,17 +221,32 @@ function Summary({
           hint={`slowest ${Math.round(t.max_ms)} ms`}
           spark={series.map((p) => p.avg_ms)}
         />
-      </dl>
+    </dl>
+  )
+}
 
+/** The chart, the response mix and the per-site table: how the traffic moved and where it went. */
+function Overview({
+  data,
+  site,
+  modes,
+  onPickSite,
+}: {
+  data: TrafficSummary
+  site: string
+  modes: Map<string, WafOverviewSite>
+  onPickSite: (domain: string) => void
+}) {
+  const t = data.totals
+  const series = data.series
+  return (
+    <div className="flex flex-col gap-6">
       <section aria-label="Requests over time" className="bg-card rounded-lg border p-3">
         <h2 className="mb-2 text-sm font-semibold">Requests over time</h2>
         <TrafficChart series={series} stepSeconds={data.step_seconds} />
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <FirewallActivity summary={events} failed={eventsFailed} pending={eventsPending} />
-        <ResponseMix totals={t} />
-      </div>
+      <ResponseMix totals={t} />
 
       {site === "" && (
         <section aria-label="Sites" className="flex flex-col gap-2">
@@ -301,8 +314,14 @@ function Summary({
           )}
         </section>
       )}
+    </div>
+  )
+}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+/** The busiest clients, paths, status codes and user agents for the period. */
+function TopLists({ data }: { data: TrafficSummary }) {
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
         <TopTable
           title="Top client IPs"
           head={["IP", "Requests", "Errors", "Sent"]}
@@ -326,7 +345,6 @@ function Summary({
           head={["Agent", "Requests"]}
           rows={data.top_agents.map((r) => [r.agent || "(none)", r.requests])}
         />
-      </div>
     </div>
   )
 }

@@ -30,10 +30,6 @@ export interface WafChallenge {
   /** Leading zero bits the proof of work needs. */
   difficulty: number
   clearance_minutes: number
-  turnstile_site_key: string
-  /** Write-only: sent to set a new key, never returned. Empty keeps the stored one. */
-  turnstile_secret?: string
-  turnstile_secret_set: boolean
   exempt_paths: string[]
   exempt_ips: string[]
 }
@@ -56,6 +52,8 @@ export interface WafSiteStatus {
   crs_version: string
   /** The challenge needs the panel's secret key. */
   challenge_available?: boolean
+  /** Settings holds both the Turnstile site key and secret key. */
+  turnstile_ready?: boolean
 }
 
 export interface WafSiteResponse {
@@ -226,8 +224,6 @@ export const DEFAULT_WAF_CONFIG: WafConfig = {
     provider: "pow",
     difficulty: 16,
     clearance_minutes: 60,
-    turnstile_site_key: "",
-    turnstile_secret_set: false,
     exempt_paths: [],
     exempt_ips: [],
   },
@@ -243,12 +239,6 @@ export const WAF_LIMITS = {
   minDifficulty: 8,
   maxDifficulty: 24,
 } as const
-
-const TURNSTILE_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/
-
-export function isValidTurnstileKey(k: string): boolean {
-  return TURNSTILE_KEY_RE.test(k)
-}
 
 /** The proof-of-work levels offered, with a rough time on a phone. */
 export const DIFFICULTY_OPTIONS: { value: number; label: string }[] = [
@@ -327,17 +317,6 @@ export function configProblems(c: WafConfig): Record<string, string> {
   }
   if (c.exclusions.length > WAF_LIMITS.exclusions) out.exclusions = `At most ${WAF_LIMITS.exclusions} exclusions.`
   const ch = c.challenge
-  if (ch.enabled && ch.provider === "turnstile") {
-    if (!isValidTurnstileKey(ch.turnstile_site_key)) {
-      out.turnstile_site_key = "Enter the site key from the Cloudflare dashboard."
-    }
-    const secret = ch.turnstile_secret ?? ""
-    if (secret === "" && !ch.turnstile_secret_set) {
-      out.turnstile_secret = "Enter the secret key from the Cloudflare dashboard."
-    } else if (secret !== "" && !isValidTurnstileKey(secret)) {
-      out.turnstile_secret = "The secret key may use only letters, digits, _ and -."
-    }
-  }
   if (ch.exempt_paths.length > WAF_LIMITS.paths) out.exempt_paths = `At most ${WAF_LIMITS.paths} paths.`
   if (ch.exempt_ips.length > WAF_LIMITS.ips) out.exempt_ips = `At most ${WAF_LIMITS.ips} entries.`
   return out

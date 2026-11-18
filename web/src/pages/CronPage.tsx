@@ -18,6 +18,7 @@ import { ApiError } from "@/lib/api"
 import {
   commandSummary,
   formatWhen,
+  isBuiltin,
   outcomeMessage,
   runDuration,
   statusVariant,
@@ -81,7 +82,7 @@ export function CronPage() {
   }
 
   return (
-    <div className="flex max-w-6xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-4">
         <p className="text-muted-foreground max-w-2xl text-sm">
           Jobs the panel runs on a schedule, as the user you choose. Each run&apos;s output is kept
@@ -131,8 +132,14 @@ export function CronPage() {
               {list.map((job) => (
                 <tr key={job.id} data-testid="cron-row" data-job={job.name}>
                   <td className="px-3 py-1.5">
-                    <p className="font-medium">{job.name}</p>
-                    <p className="text-muted-foreground max-w-xs truncate font-mono text-xs" title={commandSummary(job)}>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">{job.name}</p>
+                      {isBuiltin(job) && <Badge variant="secondary">Built-in</Badge>}
+                    </div>
+                    <p
+                      className={`text-muted-foreground max-w-xs truncate text-xs ${isBuiltin(job) ? "" : "font-mono"}`}
+                      title={commandSummary(job)}
+                    >
                       {commandSummary(job)}
                     </p>
                   </td>
@@ -195,14 +202,16 @@ export function CronPage() {
                       >
                         Edit
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Delete ${job.name}`}
-                        onClick={() => setDeleting(job)}
-                      >
-                        Delete
-                      </Button>
+                      {!isBuiltin(job) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Delete ${job.name}`}
+                          onClick={() => setDeleting(job)}
+                        >
+                          Delete
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>

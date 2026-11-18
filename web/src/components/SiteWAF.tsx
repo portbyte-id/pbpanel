@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError } from "@/lib/api"
 import {
   CLEARANCE_OPTIONS,
@@ -41,6 +42,18 @@ import { useSaveSiteWaf, useSiteWaf } from "@/lib/wafQueries"
 export interface WafPrefill {
   rule?: number
   path?: string
+}
+
+/** The tab each whole-config problem is shown on, so Save can say where to look. */
+const PROBLEM_TAB: Record<string, string> = {
+  requests_per_second: "Rate limit and paths",
+  burst: "Rate limit and paths",
+  path_blocklist: "Rate limit and paths",
+  ip_allow: "IP rules",
+  ip_deny: "IP rules",
+  exclusions: "Exclusions",
+  exempt_paths: "Challenge",
+  exempt_ips: "Challenge",
 }
 
 /**
@@ -97,19 +110,14 @@ function WafForm({
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
   const problems = configProblems(draft)
   const problemList = Object.values(problems)
+  const problemTabs = [...new Set(Object.keys(problems).map((k) => PROBLEM_TAB[k]).filter(Boolean))]
   const set = (patch: Partial<WafConfig>) => {
     save.reset()
     setDraft((d) => ({ ...d, ...patch }))
   }
 
   const submit = () => {
-    // The secret goes out only when one was typed; an empty one keeps the stored key.
-    const { turnstile_secret, ...challenge } = draft.challenge
-    const body: WafConfig = {
-      ...draft,
-      challenge: turnstile_secret ? { ...challenge, turnstile_secret } : challenge,
-    }
-    save.mutate(body, { onSuccess: () => setConfirming(false) })
+    save.mutate(draft, { onSuccess: () => setConfirming(false) })
   }
   const onSave = () => {
     if (draft.mode === "block" && saved.mode !== "block") setConfirming(true)
@@ -128,235 +136,271 @@ function WafForm({
       }}
       aria-label={`Firewall for ${domain}`}
     >
-      {/* --- ModSecurity ---------------------------------------------------- */}
-      <section aria-labelledby={`${id}-modsec`} className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 id={`${id}-modsec`} className="text-sm font-semibold">
-            ModSecurity
-          </h3>
-          {status.available && <Badge variant="secondary">OWASP CRS{status.crs_version ? ` ${status.crs_version}` : ""}</Badge>}
-        </div>
+      <Tabs defaultValue={prefill?.rule !== undefined ? "exclusions" : "mode"}>
+        <TabsList aria-label={`Firewall sections for ${domain}`} className="flex-wrap">
+          <TabsTrigger value="mode">Mode and rules</TabsTrigger>
+          <TabsTrigger value="rate">Rate limit and paths</TabsTrigger>
+          <TabsTrigger value="ip">IP rules</TabsTrigger>
+          <TabsTrigger value="exclusions">Exclusions</TabsTrigger>
+          <TabsTrigger value="challenge">Challenge</TabsTrigger>
+        </TabsList>
 
-        {modsecOff && (
-          <Callout tone="warning" role="status" className="text-sm">
-            <p className="font-medium">ModSecurity is not available on this server.</p>
-            <p className="text-muted-foreground mt-1">
-              {status.reason ||
-                "It is built into the post-quantum nginx flavor, together with the OWASP Core Rule Set."}{" "}
-              Switch the web server to that flavor on the{" "}
-              <Link to="/nginx" className="underline underline-offset-4">
-                Nginx page
-              </Link>{" "}
-              to turn it on. The native protections below work with any flavor.
-            </p>
-          </Callout>
-        )}
+        {/* Panels stay mounted while another tab is shown, so an entry typed in one
+            tab is still there when the operator comes back to it. */}
 
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="text-sm font-medium">Mode</legend>
-          <div role="radiogroup" aria-label="ModSecurity mode" className="inline-flex flex-wrap gap-1">
-            {(["off", "detect", "block"] as WafMode[]).map((m) => {
-              const unavailable = modsecOff && m !== "off"
-              return (
-                <label
-                  key={m}
-                  className="has-[:checked]:bg-primary has-[:checked]:text-primary-foreground has-[:focus-visible]:ring-ring/50 has-[:disabled]:opacity-50 border-input cursor-pointer rounded-md border px-3 py-1.5 text-sm has-[:disabled]:cursor-not-allowed has-[:focus-visible]:ring-[3px]"
-                >
-                  <input
-                    type="radio"
-                    name={`${id}-mode`}
-                    value={m}
-                    checked={draft.mode === m}
-                    disabled={unavailable}
-                    onChange={() => set({ mode: m })}
-                    className="sr-only"
+        {/* --- ModSecurity ---------------------------------------------------- */}
+        <TabsContent value="mode" forceMount className="pt-2">
+          <section aria-labelledby={`${id}-modsec`} className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 id={`${id}-modsec`} className="text-sm font-semibold">
+                ModSecurity
+              </h3>
+              {status.available && <Badge variant="secondary">OWASP CRS{status.crs_version ? ` ${status.crs_version}` : ""}</Badge>}
+            </div>
+
+            {modsecOff && (
+              <Callout tone="warning" role="status" className="text-sm">
+                <p className="font-medium">ModSecurity is not available on this server.</p>
+                <p className="text-muted-foreground mt-1">
+                  {status.reason ||
+                    "It is built into the post-quantum nginx flavor, together with the OWASP Core Rule Set."}{" "}
+                  Switch the web server to that flavor on the{" "}
+                  <Link to="/nginx" className="underline underline-offset-4">
+                    Nginx page
+                  </Link>{" "}
+                  to turn it on. The native protections below work with any flavor.
+                </p>
+              </Callout>
+            )}
+
+            <fieldset className="flex flex-col gap-1.5">
+              <legend className="text-sm font-medium">Mode</legend>
+              <div role="radiogroup" aria-label="ModSecurity mode" className="inline-flex flex-wrap gap-1">
+                {(["off", "detect", "block"] as WafMode[]).map((m) => {
+                  const unavailable = modsecOff && m !== "off"
+                  return (
+                    <label
+                      key={m}
+                      className="has-[:checked]:bg-primary has-[:checked]:text-primary-foreground has-[:focus-visible]:ring-ring/50 has-[:disabled]:opacity-50 border-input cursor-pointer rounded-md border px-3 py-1.5 text-sm has-[:disabled]:cursor-not-allowed has-[:focus-visible]:ring-[3px]"
+                    >
+                      <input
+                        type="radio"
+                        name={`${id}-mode`}
+                        value={m}
+                        checked={draft.mode === m}
+                        disabled={unavailable}
+                        onChange={() => set({ mode: m })}
+                        className="sr-only"
+                      />
+                      {MODE_LABEL[m]}
+                    </label>
+                  )
+                })}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                {draft.mode === "off" && "Requests are not inspected by ModSecurity."}
+                {draft.mode === "detect" &&
+                  "Requests are inspected and matches are logged to the audit log, but nothing is blocked. Use this first to find false positives."}
+                {draft.mode === "block" &&
+                  "Requests that score over the threshold are refused with 403, and logged."}
+              </p>
+            </fieldset>
+
+            <div className="flex max-w-md flex-col gap-1.5">
+              <Label htmlFor={`${id}-paranoia`}>Paranoia level</Label>
+              <Select
+                id={`${id}-paranoia`}
+                value={draft.paranoia}
+                disabled={draft.mode === "off" || modsecOff}
+                onChange={(e) => set({ paranoia: Number(e.target.value) as WafConfig["paranoia"] })}
+                aria-describedby={`${id}-paranoia-help`}
+              >
+                {([1, 2, 3, 4] as const).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+              <p id={`${id}-paranoia-help`} className="text-muted-foreground text-xs">
+                {PARANOIA_HELP[draft.paranoia]}
+              </p>
+            </div>
+
+            {!status.attached && (
+              <p className="text-muted-foreground text-xs">
+                The site file has no firewall block yet. Saving adds one; the previous version of the file
+                stays in its history.
+              </p>
+            )}
+          </section>
+        </TabsContent>
+
+        {/* --- Challenge page ------------------------------------------------- */}
+        <TabsContent value="challenge" forceMount className="pt-2">
+          <ChallengeSection
+            domain={domain}
+            challenge={draft.challenge}
+            available={status.challenge_available !== false}
+            turnstileReady={status.turnstile_ready}
+            onChange={(challenge) => set({ challenge })}
+          />
+        </TabsContent>
+
+        {/* --- Native protections: rate limit and paths ----------------------- */}
+        <TabsContent value="rate" forceMount className="pt-2">
+          <section aria-labelledby={`${id}-native`} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-0.5">
+              <h3 id={`${id}-native`} className="text-sm font-semibold">
+                Native nginx protections
+              </h3>
+              <p className="text-muted-foreground text-xs">
+                Evaluated by nginx itself, before the request reaches your site. They work without ModSecurity.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={rl.enabled}
+                  onChange={(e) => set({ rate_limit: { ...rl, enabled: e.target.checked } })}
+                />
+                Rate limit each client IP
+              </label>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={`${id}-rps`}>Requests per second</Label>
+                  <Input
+                    id={`${id}-rps`}
+                    type="number"
+                    min={1}
+                    max={10000}
+                    inputMode="numeric"
+                    className="w-36"
+                    disabled={!rl.enabled}
+                    value={Number.isNaN(rl.requests_per_second) ? "" : rl.requests_per_second}
+                    aria-invalid={rl.enabled && problems.requests_per_second !== undefined}
+                    onChange={(e) =>
+                      set({
+                        rate_limit: {
+                          ...rl,
+                          requests_per_second: e.target.value === "" ? NaN : Number(e.target.value),
+                        },
+                      })
+                    }
                   />
-                  {MODE_LABEL[m]}
-                </label>
-              )
-            })}
-          </div>
-          <p className="text-muted-foreground text-xs">
-            {draft.mode === "off" && "Requests are not inspected by ModSecurity."}
-            {draft.mode === "detect" &&
-              "Requests are inspected and matches are logged to the audit log, but nothing is blocked. Use this first to find false positives."}
-            {draft.mode === "block" &&
-              "Requests that score over the threshold are refused with 403, and logged."}
-          </p>
-        </fieldset>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={`${id}-burst`}>Burst</Label>
+                  <Input
+                    id={`${id}-burst`}
+                    type="number"
+                    min={0}
+                    max={100000}
+                    inputMode="numeric"
+                    className="w-36"
+                    disabled={!rl.enabled}
+                    value={Number.isNaN(rl.burst) ? "" : rl.burst}
+                    aria-invalid={rl.enabled && problems.burst !== undefined}
+                    onChange={(e) =>
+                      set({
+                        rate_limit: { ...rl, burst: e.target.value === "" ? NaN : Number(e.target.value) },
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Requests above the rate, beyond the burst, are refused with 429. A burst lets a page load
+                its images in one go.
+              </p>
+              {rl.enabled && problems.requests_per_second && (
+                <p role="alert" className="text-destructive text-xs">
+                  {problems.requests_per_second}
+                </p>
+              )}
+              {rl.enabled && problems.burst && (
+                <p role="alert" className="text-destructive text-xs">
+                  {problems.burst}
+                </p>
+              )}
+            </div>
 
-        <div className="flex max-w-md flex-col gap-1.5">
-          <Label htmlFor={`${id}-paranoia`}>Paranoia level</Label>
-          <Select
-            id={`${id}-paranoia`}
-            value={draft.paranoia}
-            disabled={draft.mode === "off" || modsecOff}
-            onChange={(e) => set({ paranoia: Number(e.target.value) as WafConfig["paranoia"] })}
-            aria-describedby={`${id}-paranoia-help`}
-          >
-            {([1, 2, 3, 4] as const).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </Select>
-          <p id={`${id}-paranoia-help`} className="text-muted-foreground text-xs">
-            {PARANOIA_HELP[draft.paranoia]}
-          </p>
-        </div>
-
-        {!status.attached && (
-          <p className="text-muted-foreground text-xs">
-            The site file has no firewall block yet. Saving adds one; the previous version of the file
-            stays in its history.
-          </p>
-        )}
-      </section>
-
-      {/* --- Challenge page ------------------------------------------------- */}
-      <ChallengeSection
-        domain={domain}
-        challenge={draft.challenge}
-        available={status.challenge_available !== false}
-        problems={problems}
-        onChange={(challenge) => set({ challenge })}
-      />
-
-      {/* --- Native protections --------------------------------------------- */}
-      <section aria-labelledby={`${id}-native`} className="flex flex-col gap-5">
-        <div className="flex flex-col gap-0.5">
-          <h3 id={`${id}-native`} className="text-sm font-semibold">
-            Native nginx protections
-          </h3>
-          <p className="text-muted-foreground text-xs">
-            Evaluated by nginx itself, before the request reaches your site. They work without ModSecurity.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={rl.enabled}
-              onChange={(e) => set({ rate_limit: { ...rl, enabled: e.target.checked } })}
+            <ListEditor
+              label="Blocked paths"
+              help="A request whose path starts with one of these gets 403. For example /wp-admin or /.git."
+              placeholder="/wp-admin"
+              items={draft.path_blocklist}
+              max={WAF_LIMITS.paths}
+              validate={(p) =>
+                isValidPath(p)
+                  ? null
+                  : "Start with / and use only letters, digits and / _ . ~ % -."
+              }
+              onChange={(items) => set({ path_blocklist: items })}
             />
-            Rate limit each client IP
-          </label>
-          <div className="flex flex-wrap gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${id}-rps`}>Requests per second</Label>
-              <Input
-                id={`${id}-rps`}
-                type="number"
-                min={1}
-                max={10000}
-                inputMode="numeric"
-                className="w-36"
-                disabled={!rl.enabled}
-                value={Number.isNaN(rl.requests_per_second) ? "" : rl.requests_per_second}
-                aria-invalid={rl.enabled && problems.requests_per_second !== undefined}
-                onChange={(e) =>
-                  set({
-                    rate_limit: {
-                      ...rl,
-                      requests_per_second: e.target.value === "" ? NaN : Number(e.target.value),
-                    },
-                  })
-                }
+          </section>
+        </TabsContent>
+
+        {/* --- Native protections: IP rules ----------------------------------- */}
+        <TabsContent value="ip" forceMount className="pt-2">
+          <section aria-labelledby={`${id}-ip`} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-0.5">
+              <h3 id={`${id}-ip`} className="text-sm font-semibold">
+                IP rules
+              </h3>
+              <p className="text-muted-foreground text-xs">
+                Addresses and networks nginx always admits or always refuses, before ModSecurity looks at the request.
+              </p>
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              <ListEditor
+                label="Always allow these IPs"
+                help="Addresses or CIDR ranges. When this list is not empty, every other address gets 403."
+                placeholder="203.0.113.0/24"
+                items={draft.ip_rules.allow}
+                max={WAF_LIMITS.ips}
+                validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
+                onChange={(items) => set({ ip_rules: { ...draft.ip_rules, allow: items } })}
+              />
+              <ListEditor
+                label="Always block these IPs"
+                help="Addresses or CIDR ranges that get 403. A block wins over an allow."
+                placeholder="198.51.100.7"
+                items={draft.ip_rules.deny}
+                max={WAF_LIMITS.ips}
+                validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
+                onChange={(items) => set({ ip_rules: { ...draft.ip_rules, deny: items } })}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${id}-burst`}>Burst</Label>
-              <Input
-                id={`${id}-burst`}
-                type="number"
-                min={0}
-                max={100000}
-                inputMode="numeric"
-                className="w-36"
-                disabled={!rl.enabled}
-                value={Number.isNaN(rl.burst) ? "" : rl.burst}
-                aria-invalid={rl.enabled && problems.burst !== undefined}
-                onChange={(e) =>
-                  set({
-                    rate_limit: { ...rl, burst: e.target.value === "" ? NaN : Number(e.target.value) },
-                  })
-                }
-              />
-            </div>
-          </div>
-          <p className="text-muted-foreground text-xs">
-            Requests above the rate, beyond the burst, are refused with 429. A burst lets a page load
-            its images in one go.
-          </p>
-          {rl.enabled && problems.requests_per_second && (
-            <p role="alert" className="text-destructive text-xs">
-              {problems.requests_per_second}
-            </p>
-          )}
-          {rl.enabled && problems.burst && (
-            <p role="alert" className="text-destructive text-xs">
-              {problems.burst}
-            </p>
-          )}
-        </div>
+            {draft.ip_rules.allow.length > 0 && (
+              <Callout tone="warning" role="status" className="text-sm">
+                With an allow list, only those addresses can reach this site, certificate challenges for HTTPS
+                excepted. Make sure your own address is on it.
+              </Callout>
+            )}
+          </section>
+        </TabsContent>
 
-        <ListEditor
-          label="Blocked paths"
-          help="A request whose path starts with one of these gets 403. For example /wp-admin or /.git."
-          placeholder="/wp-admin"
-          items={draft.path_blocklist}
-          max={WAF_LIMITS.paths}
-          validate={(p) =>
-            isValidPath(p)
-              ? null
-              : "Start with / and use only letters, digits and / _ . ~ % -."
-          }
-          onChange={(items) => set({ path_blocklist: items })}
-        />
-
-        <div className="grid gap-5 md:grid-cols-2">
-          <ListEditor
-            label="Always allow these IPs"
-            help="Addresses or CIDR ranges. When this list is not empty, every other address gets 403."
-            placeholder="203.0.113.0/24"
-            items={draft.ip_rules.allow}
-            max={WAF_LIMITS.ips}
-            validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
-            onChange={(items) => set({ ip_rules: { ...draft.ip_rules, allow: items } })}
+        {/* --- Exclusions ----------------------------------------------------- */}
+        <TabsContent value="exclusions" forceMount className="pt-2">
+          <ExclusionEditor
+            exclusions={draft.exclusions}
+            disabled={modsecOff && draft.exclusions.length === 0}
+            prefill={prefill}
+            onChange={(exclusions) => set({ exclusions })}
           />
-          <ListEditor
-            label="Always block these IPs"
-            help="Addresses or CIDR ranges that get 403. A block wins over an allow."
-            placeholder="198.51.100.7"
-            items={draft.ip_rules.deny}
-            max={WAF_LIMITS.ips}
-            validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
-            onChange={(items) => set({ ip_rules: { ...draft.ip_rules, deny: items } })}
-          />
-        </div>
-        {draft.ip_rules.allow.length > 0 && (
-          <Callout tone="warning" role="status" className="text-sm">
-            With an allow list, only those addresses can reach this site, certificate challenges for HTTPS
-            excepted. Make sure your own address is on it.
-          </Callout>
-        )}
-      </section>
-
-      {/* --- Exclusions ----------------------------------------------------- */}
-      <ExclusionEditor
-        exclusions={draft.exclusions}
-        disabled={modsecOff && draft.exclusions.length === 0}
-        prefill={prefill}
-        onChange={(exclusions) => set({ exclusions })}
-      />
+        </TabsContent>
+      </Tabs>
 
       {/* --- Save ------------------------------------------------------------ */}
       <div className="bg-background/95 sticky bottom-0 -mx-4 flex flex-col gap-3 border-t px-4 py-3 backdrop-blur-sm">
         <ApplyError error={save.error} fallback="The firewall settings could not be saved." />
         {problemList.length > 0 && (
           <p role="alert" className="text-destructive text-xs">
-            Fix the highlighted values to save.
+            Fix the highlighted values to save
+            {problemTabs.length > 0 ? `. They are on: ${problemTabs.join(", ")}.` : "."}
           </p>
         )}
         <div className="flex flex-wrap items-center gap-3">
@@ -417,13 +461,14 @@ function ChallengeSection({
   domain,
   challenge: ch,
   available,
-  problems,
+  turnstileReady,
   onChange,
 }: {
   domain: string
   challenge: WafChallenge
   available: boolean
-  problems: Record<string, string>
+  /** Whether Settings holds both Turnstile keys; undefined from an older panel. */
+  turnstileReady?: boolean
   onChange: (next: WafChallenge) => void
 }) {
   const id = useId()
@@ -484,9 +529,27 @@ function ChallengeSection({
         <p className="text-muted-foreground text-xs">
           {ch.provider === "pow"
             ? "The browser solves a small puzzle in JavaScript, with no interaction. Nothing leaves this server. It slows bots down; it does not tell a person from a headless browser."
-            : "Cloudflare Turnstile decides whether the visitor is a person, usually without a click. The visitor's browser talks to Cloudflare. Get a site key and secret key from the Turnstile section of the Cloudflare dashboard; the site does not have to be on Cloudflare."}
+            : "Cloudflare Turnstile decides whether the visitor is a person, usually without a click. The visitor's browser talks to Cloudflare; the site does not have to be on Cloudflare."}
         </p>
       </fieldset>
+
+      {ch.provider === "turnstile" && (
+        <div className="flex flex-col gap-3">
+          <p className="text-muted-foreground text-xs">
+            The Turnstile site key and secret key are shared by every site. Set them under{" "}
+            <Link to="/settings" className="underline underline-offset-4">
+              Settings
+            </Link>
+            , in the Firewall group.
+          </p>
+          {turnstileReady === false && (
+            <Callout tone="warning" role="status" className="text-sm">
+              Turnstile is not set up on this panel yet. Until the site key and secret key are both set under
+              Settings, every visitor to {domain} is stopped at a check that cannot load.
+            </Callout>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-4">
         {ch.provider === "pow" && (
@@ -524,57 +587,6 @@ function ChallengeSection({
           </Select>
         </div>
       </div>
-
-      {ch.provider === "turnstile" && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <Label htmlFor={`${id}-sitekey`}>Turnstile site key</Label>
-            <Input
-              id={`${id}-sitekey`}
-              value={ch.turnstile_site_key}
-              placeholder="0x4AAAAAAA…"
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-              disabled={off}
-              aria-invalid={!off && problems.turnstile_site_key !== undefined}
-              onChange={(e) => set({ turnstile_site_key: e.target.value.trim() })}
-            />
-            {!off && problems.turnstile_site_key && (
-              <p role="alert" className="text-destructive text-xs">
-                {problems.turnstile_site_key}
-              </p>
-            )}
-          </div>
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <Label htmlFor={`${id}-secret`}>Turnstile secret key</Label>
-            <Input
-              id={`${id}-secret`}
-              type="password"
-              value={ch.turnstile_secret ?? ""}
-              placeholder={ch.turnstile_secret_set ? "Stored. Leave blank to keep it." : "0x4AAAAAAA…"}
-              autoComplete="new-password"
-              spellCheck={false}
-              className="font-mono"
-              disabled={off}
-              aria-invalid={!off && problems.turnstile_secret !== undefined}
-              aria-describedby={`${id}-secret-help`}
-              onChange={(e) => {
-                const v = e.target.value.trim()
-                set({ turnstile_secret: v === "" ? undefined : v })
-              }}
-            />
-            <p id={`${id}-secret-help`} className="text-muted-foreground text-xs">
-              Stored encrypted. The panel never shows it again.
-            </p>
-            {!off && problems.turnstile_secret && (
-              <p role="alert" className="text-destructive text-xs">
-                {problems.turnstile_secret}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="grid gap-5 md:grid-cols-2">
         <ListEditor

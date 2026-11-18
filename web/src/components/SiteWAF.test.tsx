@@ -35,6 +35,11 @@ function renderTab(prefill?: { rule?: number; path?: string }) {
   )
 }
 
+/** Opens one of the firewall's tabs, as an operator does. */
+async function openTab(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("tab", { name }))
+}
+
 beforeEach(() => {
   vi.mocked(api.siteWaf).mockReset()
   vi.mocked(api.saveSiteWaf).mockReset()
@@ -54,6 +59,7 @@ describe("SiteWAF", () => {
     await user.click(screen.getByRole("radio", { name: "Detection only" }))
     await user.selectOptions(screen.getByLabelText("Paranoia level"), "2")
 
+    await openTab(user, "Rate limit and paths")
     await user.click(screen.getByRole("checkbox", { name: /Rate limit each client IP/ }))
     const rps = screen.getByLabelText("Requests per second")
     await user.clear(rps)
@@ -61,11 +67,13 @@ describe("SiteWAF", () => {
     const burst = screen.getByLabelText("Burst")
     await user.clear(burst)
     await user.type(burst, "50")
-
     await user.type(screen.getByLabelText("Blocked paths"), "/wp-admin /.git{Enter}")
+
+    await openTab(user, "IP rules")
     await user.type(screen.getByLabelText("Always block these IPs"), "198.51.100.0/24{Enter}")
     await user.type(screen.getByLabelText("Always allow these IPs"), "203.0.113.7{Enter}")
 
+    await openTab(user, "Exclusions")
     await user.selectOptions(screen.getByLabelText("Exclusion type"), "rule_arg")
     await user.type(screen.getByLabelText("Rule id"), "942100")
     await user.type(screen.getByLabelText("Path prefix"), "/comment")
@@ -91,12 +99,25 @@ describe("SiteWAF", () => {
     ])
   }, 30_000)
 
+  it("keeps an entry typed in one tab when another tab is shown", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.siteWaf).mockResolvedValue(respond())
+    renderTab()
+
+    await openTab(user, "IP rules")
+    await user.type(screen.getByLabelText("Always block these IPs"), "198.51.100.7")
+    await openTab(user, "Challenge")
+    await openTab(user, "IP rules")
+    expect(screen.getByLabelText("Always block these IPs")).toHaveValue("198.51.100.7")
+  })
+
   it("switches on the proof-of-work challenge with an exempt path", async () => {
     const user = userEvent.setup()
     vi.mocked(api.siteWaf).mockResolvedValue(respond())
     vi.mocked(api.saveSiteWaf).mockResolvedValue(respond())
     renderTab()
 
+    await openTab(user, "Challenge")
     await user.click(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ }))
     expect(screen.getByRole("radio", { name: "Proof of work" })).toBeChecked()
     await user.selectOptions(screen.getByLabelText("Puzzle difficulty"), "20")
@@ -117,58 +138,45 @@ describe("SiteWAF", () => {
     })
   }, 30_000)
 
-  it("needs both Turnstile keys, and sends the secret only when one is typed", async () => {
+  it("points Turnstile at the panel's Settings, and warns while the keys are missing", async () => {
     const user = userEvent.setup()
-    vi.mocked(api.siteWaf).mockResolvedValue(respond())
+    vi.mocked(api.siteWaf).mockResolvedValue(respond({}, { ...available, turnstile_ready: false }))
     vi.mocked(api.saveSiteWaf).mockResolvedValue(respond())
     renderTab()
 
+    await openTab(user, "Challenge")
     await user.click(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ }))
     await user.click(screen.getByRole("radio", { name: "Cloudflare Turnstile" }))
-    const save = screen.getByRole("button", { name: "Save and apply" })
-    expect(save).toBeDisabled()
-    expect(screen.getByText("Enter the site key from the Cloudflare dashboard.")).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText("Turnstile site key"), "0x4AAAAAAAsite")
-    await user.type(screen.getByLabelText("Turnstile secret key"), "0x4AAAAAAAsecret")
-    expect(save).toBeEnabled()
-    await user.click(save)
-    await waitFor(() => expect(api.saveSiteWaf).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(api.saveSiteWaf).mock.calls[0][1].challenge).toMatchObject({
-      enabled: true,
-      provider: "turnstile",
-      turnstile_site_key: "0x4AAAAAAAsite",
-      turnstile_secret: "0x4AAAAAAAsecret",
-    })
-  }, 30_000)
+    expect(screen.queryByLabelText("Turnstile site key")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Turnstile secret key")).not.toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings")
+    expect(screen.getByText(/Turnstile is not set up on this panel yet/)).toBeInTheDocument()
 
-  it("keeps a stored Turnstile secret when the box is left blank", async () => {
-    const user = userEvent.setup()
-    const stored = {
-      ...DEFAULT_WAF_CONFIG.challenge,
-      enabled: true,
-      provider: "turnstile" as const,
-      turnstile_site_key: "0x4AAAAAAAsite",
-      turnstile_secret_set: true,
-    }
-    vi.mocked(api.siteWaf).mockResolvedValue(respond({ challenge: stored }))
-    vi.mocked(api.saveSiteWaf).mockResolvedValue(respond({ challenge: stored }))
-    renderTab()
-
-    const secret = await screen.findByLabelText("Turnstile secret key")
-    expect(secret).toHaveAttribute("placeholder", "Stored. Leave blank to keep it.")
-    expect(secret).toHaveValue("")
-    await user.selectOptions(screen.getByLabelText("Let a visitor through for"), "240")
     await user.click(screen.getByRole("button", { name: "Save and apply" }))
     await waitFor(() => expect(api.saveSiteWaf).toHaveBeenCalledTimes(1))
     const sent = vi.mocked(api.saveSiteWaf).mock.calls[0][1].challenge
-    expect(sent.clearance_minutes).toBe(240)
+    expect(sent).toMatchObject({ enabled: true, provider: "turnstile" })
+    expect(sent).not.toHaveProperty("turnstile_site_key")
     expect(sent).not.toHaveProperty("turnstile_secret")
   }, 30_000)
 
+  it("shows no Turnstile warning once the panel holds both keys", async () => {
+    const user = userEvent.setup()
+    const stored = { ...DEFAULT_WAF_CONFIG.challenge, enabled: true, provider: "turnstile" as const }
+    vi.mocked(api.siteWaf).mockResolvedValue(respond({ challenge: stored }, { ...available, turnstile_ready: true }))
+    renderTab()
+
+    await openTab(user, "Challenge")
+    expect(await screen.findByText(/shared by every site/)).toBeInTheDocument()
+    expect(screen.queryByText(/Turnstile is not set up on this panel yet/)).not.toBeInTheDocument()
+  })
+
   it("says why the challenge cannot be switched on without the panel's key", async () => {
+    const user = userEvent.setup()
     vi.mocked(api.siteWaf).mockResolvedValue(respond({}, { ...available, challenge_available: false }))
     renderTab()
+    await openTab(user, "Challenge")
     expect(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ })).toBeDisabled()
     expect(screen.getByText(/needs the panel's secret key/)).toBeInTheDocument()
   })
@@ -178,14 +186,17 @@ describe("SiteWAF", () => {
     vi.mocked(api.siteWaf).mockResolvedValue(respond())
     renderTab()
 
+    await openTab(user, "Rate limit and paths")
     await user.type(await screen.findByLabelText("Blocked paths"), "admin{Enter}")
     expect(screen.getByRole("alert")).toHaveTextContent(/admin: Start with \//)
     expect(screen.queryByRole("list", { name: "Blocked paths" })).not.toBeInTheDocument()
 
     await user.clear(screen.getByLabelText("Blocked paths"))
+    await openTab(user, "IP rules")
     await user.type(screen.getByLabelText("Always block these IPs"), "999.1.1.1{Enter}")
     expect(screen.getByText(/Not an IP address or CIDR range/)).toBeInTheDocument()
 
+    await openTab(user, "Exclusions")
     await user.type(screen.getByLabelText("Rule id"), "0")
     await user.click(screen.getByRole("button", { name: "Add exclusion" }))
     expect(screen.getByText(/Rule id must be a whole number/)).toBeInTheDocument()
@@ -202,8 +213,10 @@ describe("SiteWAF", () => {
     )
     renderTab()
 
+    await openTab(user, "Rate limit and paths")
     await user.click(await screen.findByRole("button", { name: "Remove /a" }))
     expect(within(screen.getByRole("list", { name: "Blocked paths" })).getAllByRole("listitem")).toHaveLength(1)
+    await openTab(user, "Exclusions")
     await user.click(screen.getByRole("button", { name: /Remove exclusion of rule 920350/ }))
     expect(screen.getByText("No exclusions.")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Save and apply" })).toBeEnabled()
@@ -212,6 +225,7 @@ describe("SiteWAF", () => {
   })
 
   it("explains why ModSecurity is off and keeps the native protections usable", async () => {
+    const user = userEvent.setup()
     vi.mocked(api.siteWaf).mockResolvedValue(
       respond({}, { available: false, flavor: "standard", reason: "", attached: true, crs_version: "" }),
     )
@@ -222,6 +236,7 @@ describe("SiteWAF", () => {
     expect(screen.getByRole("radio", { name: "Detection only" })).toBeDisabled()
     expect(screen.getByRole("radio", { name: "Blocking" })).toBeDisabled()
     expect(screen.getByRole("radio", { name: "Off" })).toBeEnabled()
+    await openTab(user, "Rate limit and paths")
     expect(screen.getByRole("checkbox", { name: /Rate limit each client IP/ })).toBeEnabled()
   })
 
@@ -267,6 +282,7 @@ describe("SiteWAF", () => {
     renderTab({ rule: 942100, path: "/search" })
 
     expect(await screen.findByText(/Rule 942100 on \/search is filled in below/)).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Exclusions" })).toHaveAttribute("data-state", "active")
     expect(screen.getByLabelText("Exclusion type")).toHaveValue("rule_path")
     expect(screen.getByLabelText("Rule id")).toHaveValue(942100)
     expect(screen.getByLabelText("Path prefix")).toHaveValue("/search")

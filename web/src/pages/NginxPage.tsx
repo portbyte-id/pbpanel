@@ -34,7 +34,7 @@ import {
 /** nginx as a whole: whether it is running, the common settings, and nginx.conf. */
 export function NginxPage() {
   return (
-    <Tabs defaultValue="settings" className="max-w-4xl">
+    <Tabs defaultValue="settings">
       <TabsList>
         <TabsTrigger value="settings">Status</TabsTrigger>
         <TabsTrigger value="build">Build</TabsTrigger>

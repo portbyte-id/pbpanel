@@ -29,6 +29,14 @@ p{margin:0}
 #pbg-widget{margin-top:16px;min-height:0}
 button{margin-top:16px;font:inherit;font-size:14px;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bar{margin-top:16px}
+progress{display:block;width:100%;height:8px;appearance:none;-webkit-appearance:none;border:0;border-radius:999px;background:var(--line);box-shadow:inset 0 0 0 1px var(--muted);color:var(--accent)}
+progress::-webkit-progress-bar{background:var(--line);border-radius:999px}
+progress::-webkit-progress-value{background:var(--accent);border-radius:999px;transition:width 0.3s ease}
+progress::-moz-progress-bar{background:var(--accent);border-radius:999px}
+@media (prefers-reduced-motion:reduce){progress::-webkit-progress-value{transition:none}}
+.pct{margin:6px 0 0;text-align:right;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar[hidden]{display:none}
 footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 `
 
@@ -38,10 +46,12 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 // responsive and the spinner keeps turning.
 const pageScript = `
 (function(){"use strict";
-var B=document.body,P=B.getAttribute("data-provider"),K=B.getAttribute("data-sitekey");
+var B=document.body,P=B.getAttribute("data-provider");
 var S=document.getElementById("pbg-status"),T=document.getElementById("pbg-text"),R=document.getElementById("pbg-retry");
+var PB=document.getElementById("pbg-bar"),PG=document.getElementById("pbg-progress"),PP=document.getElementById("pbg-pct");
 function say(t){T.textContent=t}
-function fail(t){S.className="status done";say(t);R.hidden=false;R.focus()}
+function fail(t){S.className="status done";PB.hidden=true;say(t);R.hidden=false;R.focus()}
+function progress(p){PG.value=p;PP.textContent=p+"%"}
 function reload(){location.replace(location.href)}
 R.addEventListener("click",reload);
 function post(body){
@@ -82,26 +92,40 @@ function pow(){
   fetch("/.pb-challenge/new",{credentials:"same-origin",cache:"no-store"}).then(function(r){
     if(!r.ok)throw new Error();return r.json();
   }).then(function(j){
-    var ch=j.challenge+":",d=j.difficulty,nonce=0;
+    var ch=j.challenge+":",d=Number(j.difficulty),nonce=0;
+    if(!(d>0))d=0;
+    // The expected number of tries is 2^d, so the bar follows 1-e^(-tries/2^d):
+    // it climbs quickly at first and never reaches 100 until the answer is found.
+    var expect=Math.pow(2,Math.min(d,52));
+    PB.hidden=false;progress(0);
     (function step(){
       for(var k=0;k<4000;k++,nonce++){
-        if(zeros(sha(ch+nonce),d)){say("Checking the answer…");post({challenge:j.challenge,nonce:String(nonce)});return}
+        if(zeros(sha(ch+nonce),d)){progress(100);say("Checking the answer…");post({challenge:j.challenge,nonce:String(nonce)});return}
       }
+      progress(Math.min(99,Math.floor(100*(1-Math.exp(-nonce/expect)))));
       setTimeout(step,0);
     })();
   }).catch(function(){fail("The check could not start. Try again.")});
 }
 function turnstile(){
-  say("Complete the check below.");
-  window.pbgTurnstile=function(){
-    window.turnstile.render("#pbg-widget",{sitekey:K,callback:function(t){say("Checking…");post({token:t})},
-      "error-callback":function(){fail("The check could not load. Try again.")},
-      "expired-callback":function(){fail("The check expired. Try again.")}});
-  };
-  var s=document.createElement("script");
-  s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=pbgTurnstile&render=explicit";
-  s.async=true;s.onerror=function(){fail("The check could not load. Check your connection and try again.")};
-  document.head.appendChild(s);
+  say("Loading the check…");
+  // The site key is not in the page: the panel serves it, so the static page on
+  // disk never carries a key that changes in Settings.
+  fetch("/.pb-challenge/config",{credentials:"same-origin",cache:"no-store"}).then(function(r){
+    if(!r.ok)return r.json().then(function(j){throw new Error(j.detail)},function(){throw new Error()});
+    return r.json();
+  }).then(function(j){
+    window.pbgTurnstile=function(){
+      window.turnstile.render("#pbg-widget",{sitekey:j.sitekey,callback:function(t){say("Checking…");post({token:t})},
+        "error-callback":function(){fail("The check could not load. Try again.")},
+        "expired-callback":function(){fail("The check expired. Try again.")}});
+    };
+    say("Complete the check below.");
+    var s=document.createElement("script");
+    s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=pbgTurnstile&render=explicit";
+    s.async=true;s.onerror=function(){fail("The check could not load. Check your connection and try again.")};
+    document.head.appendChild(s);
+  }).catch(function(e){fail(e.message||"The check could not start. Try again.")});
 }
 if(P==="turnstile")turnstile();else pow();
 })();
@@ -116,10 +140,11 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 <title>Checking your browser · {{.Domain}}</title>
 <style>{{.Style}}</style>
 </head>
-<body data-provider="{{.Provider}}" data-sitekey="{{.SiteKey}}">
+<body data-provider="{{.Provider}}">
 <main>
 <h1>{{.Domain}}</h1>
 <p class="muted">This site checks that visitors are people before letting them in. It takes a moment and happens once.</p>
+<div id="pbg-bar" class="bar" hidden><progress id="pbg-progress" max="100" value="0" aria-label="Check progress">0%</progress><p id="pbg-pct" class="pct" aria-hidden="true">0%</p></div>
 <div id="pbg-status" class="status" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span><span id="pbg-text">Checking your browser…</span></div>
 <noscript><p>Turn on JavaScript and reload the page to continue.</p></noscript>
 <div id="pbg-widget"></div>
@@ -131,15 +156,16 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </html>
 `))
 
-// Page renders a site's challenge page. siteKey is used by Turnstile only.
-func Page(domain string, provider Provider, siteKey string) []byte {
+// Page renders a site's challenge page. It holds no key: a Turnstile page asks
+// ConfigPath for its site key, so the file nginx serves never goes stale.
+func Page(domain string, provider Provider) []byte {
 	var b bytes.Buffer
 	err := pageTmpl.Execute(&b, struct {
-		Domain, SiteKey string
-		Provider        Provider
-		Style           template.CSS
-		Script          template.JS
-	}{domain, siteKey, provider, template.CSS(pageStyle), template.JS(pageScript)})
+		Domain   string
+		Provider Provider
+		Style    template.CSS
+		Script   template.JS
+	}{domain, provider, template.CSS(pageStyle), template.JS(pageScript)})
 	if err != nil {
 		// The template and its inputs are fixed shapes; a failure is a bug.
 		panic(err)

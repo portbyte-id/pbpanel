@@ -17,6 +17,9 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { ApiError, type SettingsResponse } from "@/lib/api"
 import {
+  BUILTIN_LABELS,
+  BUILTIN_NOTE,
+  isBuiltin,
   KIND_LABELS,
   OVERLAP_LABELS,
   type CronJob,
@@ -105,6 +108,8 @@ export function CronJobForm({
   const [retention, setRetention] = useState(job ? String(job.retention) : "")
   const [enabled, setEnabled] = useState(true)
   const [local, setLocal] = useState<{ field: string; text: string } | null>(null)
+  // A built-in keeps its account and command; only its timing and policy are edited.
+  const builtinJob = job !== null && isBuiltin(job)
 
   const apiField = error instanceof ApiError && error.field ? error.field.replace(/\[\d+\]$/, "") : null
   const fieldName =
@@ -215,43 +220,51 @@ export function CronJobForm({
         </p>
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-user`}>Runs as</Label>
-        <Input
-          id={`${id}-user`}
-          value={user}
-          onChange={(e) => setUser(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          required
-          aria-invalid={invalid("user")}
-          aria-describedby={describedBy("user")}
-        />
-        {fieldError("user")}
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-kind`}>What it runs</Label>
-        <Select
-          id={`${id}-kind`}
-          value={kind}
-          onChange={(e) => setKind(e.target.value as CronKind)}
-          aria-describedby={kind === "shell" || shellDisabled ? `${id}-shell-note` : undefined}
-        >
-          <option value="argv">{KIND_LABELS.argv}</option>
-          <option value="script">{KIND_LABELS.script}</option>
-          <option value="shell" disabled={shellDisabled}>
-            {KIND_LABELS.shell}
-            {shellDisabled ? " (turned off in Settings)" : ""}
-          </option>
-        </Select>
-        {(kind === "shell" || shellDisabled || shellRefused) && (
-          <div id={`${id}-shell-note`}>
-            {/* A refusal from the server is the better witness than a setting read earlier. */}
-            <ShellNote allowed={shellRefused ? false : shellOn} />
+      {builtinJob ? (
+        <p className="text-muted-foreground text-sm" data-testid="builtin-note">
+          {`${BUILTIN_LABELS[job?.builtin ?? ""] ?? "Runs inside the panel."} ${BUILTIN_NOTE}`}
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-user`}>Runs as</Label>
+            <Input
+              id={`${id}-user`}
+              value={user}
+              onChange={(e) => setUser(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              required
+              aria-invalid={invalid("user")}
+              aria-describedby={describedBy("user")}
+            />
+            {fieldError("user")}
           </div>
-        )}
-      </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-kind`}>What it runs</Label>
+            <Select
+              id={`${id}-kind`}
+              value={kind}
+              onChange={(e) => setKind(e.target.value as CronKind)}
+              aria-describedby={kind === "shell" || shellDisabled ? `${id}-shell-note` : undefined}
+            >
+              <option value="argv">{KIND_LABELS.argv}</option>
+              <option value="script">{KIND_LABELS.script}</option>
+              <option value="shell" disabled={shellDisabled}>
+                {KIND_LABELS.shell}
+                {shellDisabled ? " (turned off in Settings)" : ""}
+              </option>
+            </Select>
+            {(kind === "shell" || shellDisabled || shellRefused) && (
+              <div id={`${id}-shell-note`}>
+                {/* A refusal from the server is the better witness than a setting read earlier. */}
+                <ShellNote allowed={shellRefused ? false : shellOn} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {kind === "argv" && (
         <div className="flex flex-col gap-1.5">
@@ -311,21 +324,23 @@ export function CronJobForm({
         </div>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-workdir`}>Working directory</Label>
-        <Input
-          id={`${id}-workdir`}
-          value={workdir}
-          onChange={(e) => setWorkdir(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          className="font-mono"
-          placeholder="optional"
-          aria-invalid={invalid("workdir")}
-          aria-describedby={describedBy("workdir")}
-        />
-        {fieldError("workdir")}
-      </div>
+      {!builtinJob && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-workdir`}>Working directory</Label>
+          <Input
+            id={`${id}-workdir`}
+            value={workdir}
+            onChange={(e) => setWorkdir(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="font-mono"
+            placeholder="optional"
+            aria-invalid={invalid("workdir")}
+            aria-describedby={describedBy("workdir")}
+          />
+          {fieldError("workdir")}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div className="flex flex-col gap-1.5">
@@ -420,7 +435,9 @@ export function CronJobDialog({
         <DialogHeader>
           <DialogTitle>{job ? `Edit ${job.name}` : "Add a cron job"}</DialogTitle>
           <DialogDescription>
-            The job runs as the user you name, with the output kept in its run history.
+            {job && isBuiltin(job)
+              ? "A built-in job runs inside the panel. Its output is kept in its run history."
+              : "The job runs as the user you name, with the output kept in its run history."}
           </DialogDescription>
         </DialogHeader>
         {open && (

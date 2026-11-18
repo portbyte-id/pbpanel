@@ -396,52 +396,26 @@ func TestRenewRunsAreSerialised(t *testing.T) {
 	}
 }
 
-func TestStartRecoversPanicAndRunsAgain(t *testing.T) {
+// A panic inside a scan must not leave the run lock held: the cron built-in
+// recovers the panic, and the next run (or a manual renewal) must still get in.
+func TestRunOnceReleasesLockAfterPanic(t *testing.T) {
 	rr := newRenewRig(t)
 	rr.put(t, "a.example.com", SourceHTTP01, 10*day)
 	rr.iss.panic = true
-	rr.rn.firstDelay = time.Millisecond
-	rr.rn.interval = 5 * time.Millisecond
 
-	ctx, cancel := context.WithCancel(context.Background())
-	stopped := make(chan struct{})
-	go func() { rr.rn.Start(ctx); close(stopped) }()
-	deadline := time.After(5 * time.Second)
-	for len(rr.iss.callList()) < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("Start did not run again after a panic; calls = %d", len(rr.iss.callList()))
-		case <-time.After(time.Millisecond):
-		}
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = rr.rn.RunOnce(context.Background())
+	}()
+	if len(rr.iss.callList()) != 1 {
+		t.Fatalf("calls = %d, want the one that panicked", len(rr.iss.callList()))
 	}
-	cancel()
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return after cancel")
-	}
-	// The run lock was released despite the panic.
-	if err := rr.rn.lock(context.Background()); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rr.rn.lock(ctx); err != nil {
+		t.Fatalf("run lock still held after a panic: %v", err)
 	}
 	rr.rn.unlock()
-}
-
-func TestStartCancelsBeforeFirstRun(t *testing.T) {
-	rr := newRenewRig(t)
-	rr.put(t, "a.example.com", SourceHTTP01, 10*day)
-	ctx, cancel := context.WithCancel(context.Background())
-	stopped := make(chan struct{})
-	go func() { rr.rn.Start(ctx); close(stopped) }()
-	cancel()
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return")
-	}
-	if len(rr.iss.callList()) != 0 {
-		t.Fatal("ran after cancel")
-	}
 }
 
 func TestNewRenewerRequiresStoreAndIssuer(t *testing.T) {

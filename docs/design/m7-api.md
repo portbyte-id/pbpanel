@@ -195,6 +195,13 @@ no output (fetch a run for that). `kind`: `argv` (argv[0] absolute, no shell) | 
 (an existing executable at `script_path`) | `shell` (`script_body`, refused unless the
 `cron.allow_shell` setting is on). `overlap`: `skip` | `queue` | `allow`.
 
+`kind: "builtin"` is a job the panel runs itself: `builtin` names the function (`tls.renew`,
+the certificate renewal, seeded as `ssl-renew` at 03:17 daily as root, enabled, timeout 2 h).
+The panel creates these on start when they are missing and the API refuses `kind: "builtin"`
+on create. A built-in cannot be deleted and its kind, account, argv, script and working
+directory cannot change (409 `conflict`); its schedule, enabled state, overlap, timeout and
+retention can. Its run output is the renewal's per-certificate report.
+
 Run:
 
 ```json
@@ -211,8 +218,8 @@ Run:
 | `GET /api/cron` | | 200 `{"jobs":[Job]}` | ordered by name |
 | `POST /api/cron` | job input | 201 Job | audit target `cron:<name>` |
 | `GET /api/cron/{id}` | | 200 Job | |
-| `PUT /api/cron/{id}` | job input | 200 Job | name cannot change; may be omitted |
-| `DELETE /api/cron/{id}` | | 204 | also removes history and logs, cancels runs |
+| `PUT /api/cron/{id}` | job input | 200 Job | name cannot change; may be omitted; a built-in's command cannot change (409) |
+| `DELETE /api/cron/{id}` | | 204 | also removes history and logs, cancels runs; a built-in is refused (409) |
 | `POST /api/cron/{id}/enable` | `{}` | 200 Job | |
 | `POST /api/cron/{id}/disable` | `{}` | 200 Job | a disabled job can still be run by hand |
 | `POST /api/cron/{id}/run` | `{}` | see below | |

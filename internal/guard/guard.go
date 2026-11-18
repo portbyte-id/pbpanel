@@ -52,6 +52,8 @@ const (
 	Prefix     = "/.pb-challenge/"
 	NewPath    = Prefix + "new"
 	VerifyPath = Prefix + "verify"
+	// ConfigPath returns the Turnstile site key the page renders the widget with.
+	ConfigPath = Prefix + "config"
 	PagePath   = "/.pb-guard.html"
 )
 

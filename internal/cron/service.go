@@ -43,6 +43,9 @@ type Options struct {
 	OutputTailBytes int
 	// MaxLogBytes caps one run's log file; 0 means 10 MiB.
 	MaxLogBytes int64
+	// Builtins are the functions built-in jobs run, by name. A built-in job whose
+	// name is not here fails each run with that reason.
+	Builtins map[string]BuiltinFunc
 }
 
 // Service owns the cron jobs, their schedule and their run history.
@@ -58,6 +61,7 @@ type Service struct {
 	loc        *time.Location
 	tailBytes  int
 	maxLog     int64
+	builtins   map[string]BuiltinFunc
 
 	base   context.Context
 	cancel context.CancelFunc
@@ -84,6 +88,10 @@ func New(o Options) (*Service, error) {
 		allowShell: o.AllowShell, logRoot: o.LogRoot, scriptDir: o.ScriptDir,
 		defRetain: o.DefaultRetention, loc: o.Location, tailBytes: o.OutputTailBytes,
 		maxLog: o.MaxLogBytes, states: make(map[int64]*jobState),
+		builtins: make(map[string]BuiltinFunc, len(o.Builtins)),
+	}
+	for name, fn := range o.Builtins {
+		s.builtins[name] = fn
 	}
 	if s.clock == nil {
 		s.clock = RealClock
@@ -125,7 +133,7 @@ func (s *Service) Wait() { s.wg.Wait() }
 func (s *Service) stamp() string { return s.clock.Now().UTC().Format(time.RFC3339Nano) }
 
 const selectJob = `SELECT id, name, schedule, kind, run_user, argv, script_path, script_body, workdir,
-	timeout_seconds, overlap, retention, enabled, created_at, updated_at FROM cron_jobs`
+	timeout_seconds, overlap, retention, enabled, created_at, updated_at, builtin FROM cron_jobs`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -137,7 +145,7 @@ func scanJob(r scanner) (Job, error) {
 		created, updated string
 	)
 	if err := r.Scan(&j.ID, &j.Name, &j.Schedule, &j.Kind, &j.User, &argv, &j.ScriptPath, &j.ScriptBody,
-		&j.Workdir, &j.TimeoutSeconds, &j.Overlap, &j.Retention, &enabled, &created, &updated); err != nil {
+		&j.Workdir, &j.TimeoutSeconds, &j.Overlap, &j.Retention, &enabled, &created, &updated, &j.Builtin); err != nil {
 		return Job{}, err
 	}
 	if err := json.Unmarshal([]byte(argv), &j.Argv); err != nil {
@@ -219,6 +227,9 @@ func (s *Service) Update(ctx context.Context, id int64, spec JobSpec) (Job, erro
 		return Job{}, invalid("name cannot be changed (%q to %q)", cur.Name, spec.Name)
 	}
 	spec.Name = cur.Name
+	if cur.Kind == KindBuiltin {
+		return s.updateBuiltin(ctx, cur, spec)
+	}
 	spec, err = s.prepare(spec)
 	if err != nil {
 		return Job{}, err
@@ -258,6 +269,9 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	job, err := s.Get(ctx, id)
 	if err != nil {
 		return err
+	}
+	if job.Kind == KindBuiltin {
+		return fmt.Errorf("%w: %s is part of the panel and cannot be deleted; turn it off instead", ErrBuiltin, job.Name)
 	}
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id); err != nil {

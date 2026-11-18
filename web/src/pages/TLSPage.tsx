@@ -25,7 +25,7 @@ export { PanelCertSummary } from "@/components/PanelCert"
 /** Every site certificate, the one that needs attention first; DNS providers. */
 export function TLSPage() {
   return (
-    <Tabs defaultValue="certificates" className="max-w-4xl">
+    <Tabs defaultValue="certificates">
       <TabsList>
         <TabsTrigger value="certificates">Site certificates</TabsTrigger>
         <TabsTrigger value="providers">DNS providers</TabsTrigger>

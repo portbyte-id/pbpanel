@@ -29,7 +29,7 @@ export function JobsPage() {
   const jobs = useJobs({ active: scope === "running" })
 
   return (
-    <div className="flex max-w-6xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-muted-foreground max-w-2xl text-sm">
           Background work the panel runs, such as installs, builds, file operations and renewals.

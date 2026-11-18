@@ -11,7 +11,6 @@ import (
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
-	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -35,6 +34,14 @@ type AvailabilityFunc func(ctx context.Context) (Availability, error)
 // panel that has no secret key to sign clearance cookies with.
 var ErrNoChallenge = errors.New("waf: the challenge page needs the panel's secret key (data/secret.key), which this panel does not have")
 
+// ErrNoTurnstile is returned when a site's challenge uses Turnstile and the panel
+// has no Turnstile site key or secret key set.
+var ErrNoTurnstile = errors.New("waf: Turnstile needs a site key and a secret key; set both under Settings > Firewall first")
+
+// TurnstileSource returns the panel's Turnstile keys. It is read on every use, so
+// a change in Settings applies without a reload.
+type TurnstileSource func(ctx context.Context) (siteKey, secret string, err error)
+
 // Engine keeps the per-site settings and renders them.
 type Engine struct {
 	st    *store.Store
@@ -42,10 +49,10 @@ type Engine struct {
 	avail AvailabilityFunc
 	now   func() time.Time
 
-	// keys and box are set by WithGuard; without them the challenge cannot be
-	// switched on.
+	// keys is set by WithGuard; without it the challenge cannot be switched on.
 	keys *guard.Keyring
-	box  *secretbox.Box
+	// turnstile is set by WithTurnstile; without it no site can use Turnstile.
+	turnstile TurnstileSource
 }
 
 // New returns the engine. avail may be nil, which reports ModSecurity as
@@ -54,28 +61,38 @@ func New(st *store.Store, p nginx.Paths, avail AvailabilityFunc) *Engine {
 	return &Engine{st: st, p: p, avail: avail, now: time.Now}
 }
 
-// WithGuard gives the engine what the challenge page needs: the keys that sign
-// clearance cookies and the box that seals Turnstile secrets.
-func (e *Engine) WithGuard(keys *guard.Keyring, box *secretbox.Box) *Engine {
-	e.keys, e.box = keys, box
+// WithGuard gives the engine the keys that sign the clearance cookies.
+func (e *Engine) WithGuard(keys *guard.Keyring) *Engine {
+	e.keys = keys
 	return e
 }
 
-// ChallengeAvailable reports whether the challenge page can be switched on.
-func (e *Engine) ChallengeAvailable() bool { return e.keys != nil && e.box != nil }
+// WithTurnstile gives the engine the panel's Turnstile keys.
+func (e *Engine) WithTurnstile(src TurnstileSource) *Engine {
+	e.turnstile = src
+	return e
+}
 
-func turnstileAAD(domain string) string { return "waf.turnstile:" + domain }
+// ChallengeAvailable reports whether the challenge page can be switched on. The
+// proof of work needs only the keyring; Turnstile also needs its keys, which
+// TurnstileReady reports.
+func (e *Engine) ChallengeAvailable() bool { return e.keys != nil }
 
-// SealTurnstileSecret seals a plain secret key for storage.
-func (e *Engine) SealTurnstileSecret(domain, plain string) (string, error) {
-	if e.box == nil {
-		return "", ErrNoChallenge
+// TurnstileReady reports whether the panel has both Turnstile keys set.
+func (e *Engine) TurnstileReady(ctx context.Context) (bool, error) {
+	if e.turnstile == nil {
+		return false, nil
 	}
-	return e.box.Seal([]byte(plain), turnstileAAD(domain))
+	siteKey, secret, err := e.turnstile(ctx)
+	if err != nil {
+		return false, fmt.Errorf("waf: read the Turnstile keys: %w", err)
+	}
+	return siteKey != "" && secret != "", nil
 }
 
 // GuardSettings is the lookup the challenge handler uses: a site's challenge,
-// with the Turnstile secret opened, or false when the site has none.
+// with the panel's Turnstile keys read now, or false when the site has none. The
+// keys may be empty; the handler refuses a Turnstile site that lacks one.
 func (e *Engine) GuardSettings(ctx context.Context, domain string) (guard.Settings, bool, error) {
 	c, err := e.Get(ctx, domain)
 	if err != nil {
@@ -91,15 +108,12 @@ func (e *Engine) GuardSettings(ctx context.Context, domain string) (guard.Settin
 		Clearance:  time.Duration(ch.ClearanceMinutes) * time.Minute,
 		CookieName: CookieName(domain),
 	}
-	if ch.Provider == guard.ProviderTurnstile {
-		if e.box == nil || ch.TurnstileSecret == "" {
-			return guard.Settings{}, false, fmt.Errorf("waf: %s has no usable Turnstile secret key", domain)
-		}
-		plain, err := e.box.Open(ch.TurnstileSecret, turnstileAAD(domain))
+	if ch.Provider == guard.ProviderTurnstile && e.turnstile != nil {
+		siteKey, secret, err := e.turnstile(ctx)
 		if err != nil {
-			return guard.Settings{}, false, fmt.Errorf("waf: open the Turnstile secret of %s: %w", domain, err)
+			return guard.Settings{}, false, fmt.Errorf("waf: read the Turnstile keys for %s: %w", domain, err)
 		}
-		s.TurnstileSecret = string(plain)
+		s.TurnstileSiteKey, s.TurnstileSecret = siteKey, secret
 	}
 	return s, true, nil
 }
@@ -118,8 +132,19 @@ func (e *Engine) Availability(ctx context.Context) Availability {
 
 // Check refuses a config that needs a module the build lacks.
 func (e *Engine) Check(ctx context.Context, c Config) error {
-	if c.Challenge.Enabled && !e.ChallengeAvailable() {
-		return ErrNoChallenge
+	if c.Challenge.Enabled {
+		if !e.ChallengeAvailable() {
+			return ErrNoChallenge
+		}
+		if c.Challenge.Provider == guard.ProviderTurnstile {
+			ready, err := e.TurnstileReady(ctx)
+			if err != nil {
+				return err
+			}
+			if !ready {
+				return ErrNoTurnstile
+			}
+		}
 	}
 	if !c.UsesModSecurity() {
 		return nil
@@ -265,7 +290,7 @@ func (e *Engine) RenderConfig(domain string, c Config) Rendered {
 		r.Files = append(r.Files, confedit.File{Path: e.p.WAFRulesFile(domain), Delete: true})
 	}
 	if c.Challenge.Enabled {
-		r.Files = append(r.Files, confedit.File{Path: e.p.GuardPage(domain), Content: guard.Page(domain, c.Challenge.Provider, c.Challenge.TurnstileSiteKey)})
+		r.Files = append(r.Files, confedit.File{Path: e.p.GuardPage(domain), Content: guard.Page(domain, c.Challenge.Provider)})
 	} else {
 		r.Files = append(r.Files, confedit.File{Path: e.p.GuardPage(domain), Delete: true})
 	}

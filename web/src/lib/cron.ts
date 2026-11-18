@@ -1,6 +1,7 @@
 /** Cron jobs and their runs, as `GET /api/cron` returns them (docs/design/m7-api.md). */
 
-export type CronKind = "argv" | "script" | "shell"
+/** `builtin` is a job the panel runs itself. The API never creates one from a request. */
+export type CronKind = "argv" | "script" | "shell" | "builtin"
 export type CronOverlap = "skip" | "queue" | "allow"
 export type RunStatus =
   | "running"
@@ -26,6 +27,8 @@ export interface CronJob {
   name: string
   schedule: string
   kind: CronKind
+  /** The built-in a `builtin` job runs, such as `tls.renew`; empty otherwise. */
+  builtin?: string
   user: string
   argv?: string[]
   script_path?: string
@@ -86,6 +89,19 @@ export const KIND_LABELS: Record<CronKind, string> = {
   argv: "Program with arguments",
   script: "Script file",
   shell: "Shell script",
+  builtin: "Built-in",
+}
+
+/** What each built-in does, by its id. */
+export const BUILTIN_LABELS: Record<string, string> = {
+  "tls.renew": "Renews SSL certificates.",
+}
+
+/** What a built-in job still lets the operator do. */
+export const BUILTIN_NOTE = "You can change when it runs or turn it off, but it cannot be deleted."
+
+export function isBuiltin(job: Pick<CronJob, "kind">): boolean {
+  return job.kind === "builtin"
 }
 
 export const OVERLAP_LABELS: Record<CronOverlap, string> = {
@@ -131,9 +147,10 @@ export function outcomeMessage(res: RunResponse, jobName: string): string {
 }
 
 /** The command a job runs, one line, for the table. */
-export function commandSummary(job: Pick<CronJob, "kind" | "argv" | "script_path">): string {
+export function commandSummary(job: Pick<CronJob, "kind" | "argv" | "script_path" | "builtin">): string {
   if (job.kind === "argv") return (job.argv ?? []).join(" ")
   if (job.kind === "script") return job.script_path ?? ""
+  if (job.kind === "builtin") return BUILTIN_LABELS[job.builtin ?? ""] ?? "Built-in job"
   return "Shell script"
 }
 

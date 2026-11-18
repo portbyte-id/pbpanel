@@ -284,4 +284,81 @@ describe("CronPage", () => {
     expect(within(dialog).getByText(/Only the last 8 KiB is shown/)).toHaveTextContent("/logs/backup/12.log")
     expect(api.cronRuns).toHaveBeenCalledWith(1, 30)
   })
+
+  describe("built-in jobs", () => {
+    const sslRenew = (over: Partial<CronJob> = {}): CronJob =>
+      job({
+        id: 4,
+        name: "ssl-renew",
+        kind: "builtin",
+        builtin: "tls.renew",
+        argv: undefined,
+        schedule: "17 3 * * *",
+        timeout_seconds: 7200,
+        ...over,
+      })
+
+    it("marks the renewal job and offers no delete", async () => {
+      setup([sslRenew()])
+      const r = await row("ssl-renew")
+      expect(r.getByText("Built-in")).toBeInTheDocument()
+      expect(r.getByText("Renews SSL certificates.")).toBeInTheDocument()
+      expect(r.queryByRole("button", { name: "Delete ssl-renew" })).not.toBeInTheDocument()
+      expect(r.getByRole("button", { name: "Edit ssl-renew" })).toBeInTheDocument()
+      expect(r.getByRole("button", { name: "Disable ssl-renew" })).toBeInTheDocument()
+      expect(r.getByRole("button", { name: "Run ssl-renew now" })).toBeInTheDocument()
+    })
+
+    it("keeps a user job's delete action", async () => {
+      setup([job()])
+      expect((await row("backup")).getByRole("button", { name: "Delete backup" })).toBeInTheDocument()
+      expect(screen.queryByText("Built-in")).not.toBeInTheDocument()
+    })
+
+    it("edits the schedule and policy but not the command", async () => {
+      setup([sslRenew()])
+      const user = userEvent.setup()
+      vi.mocked(api.updateCronJob).mockResolvedValue(sslRenew({ schedule: "5 4 * * *" }))
+      await user.click(await screen.findByRole("button", { name: "Edit ssl-renew" }))
+      const dialog = await screen.findByRole("dialog")
+
+      expect(within(dialog).getByTestId("builtin-note")).toHaveTextContent(
+        "Renews SSL certificates. You can change when it runs or turn it off, but it cannot be deleted.",
+      )
+      expect(within(dialog).queryByLabelText("Runs as")).not.toBeInTheDocument()
+      expect(within(dialog).queryByLabelText("What it runs")).not.toBeInTheDocument()
+      expect(within(dialog).queryByLabelText("Command and arguments")).not.toBeInTheDocument()
+      expect(within(dialog).queryByLabelText("Working directory")).not.toBeInTheDocument()
+      expect(within(dialog).getByLabelText("Name")).toBeDisabled()
+      expect(within(dialog).getByLabelText("Schedule")).toHaveValue("17 3 * * *")
+
+      await user.clear(within(dialog).getByLabelText("Schedule"))
+      await user.type(within(dialog).getByLabelText("Schedule"), "5 4 * * *")
+      await user.click(within(dialog).getByRole("button", { name: "Save changes" }))
+      await waitFor(() => expect(api.updateCronJob).toHaveBeenCalled())
+      const [id, input] = vi.mocked(api.updateCronJob).mock.calls[0] ?? []
+      expect(id).toBe(4)
+      expect(input).toEqual({
+        schedule: "5 4 * * *",
+        kind: "builtin",
+        user: "root",
+        overlap: "skip",
+        timeout_seconds: 7200,
+        retention: 50,
+      })
+    })
+
+    it("does not offer the built-in kind when adding a job", async () => {
+      setup([], true)
+      const user = userEvent.setup()
+      await user.click(await screen.findByRole("button", { name: "Add job" }))
+      const dialog = await screen.findByRole("dialog")
+      const kind = within(dialog).getByLabelText("What it runs")
+      expect(within(kind).getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Program with arguments",
+        "Script file",
+        "Shell script",
+      ])
+    })
+  })
 })

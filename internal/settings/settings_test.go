@@ -519,7 +519,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
 	groups := r.Groups()
-	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Cron", "Logs"}
+	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Firewall", "Cron", "Logs"}
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("got %d groups, want %d: %+v", len(groups), len(wantGroups), groups)
 	}
@@ -539,8 +539,9 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
 		"TLS": {"tls.acme.directory", "tls.acme.email", "tls.acme.eab_kid", "tls.acme.eab_hmac_key",
 			"tls.renew.days_before", "tls.panel.auto_ip"},
-		"Cron": {"cron.allow_shell"},
-		"Logs": {"logs.rotate.max_bytes", "logs.rotate.keep"},
+		"Firewall": {"waf.turnstile.site_key", "waf.turnstile.secret"},
+		"Cron":     {"cron.allow_shell"},
+		"Logs":     {"logs.rotate.max_bytes", "logs.rotate.keep"},
 	}
 	seen := 0
 	for _, g := range groups {
@@ -555,6 +556,27 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	}
 	if seen != len(defaultKeys()) {
 		t.Fatalf("groups expose %d keys, want %d", seen, len(defaultKeys()))
+	}
+}
+
+// The Turnstile keys are optional, but a value that is not shaped like a key is
+// refused by the same rules the firewall applies.
+func TestTurnstileKeyValidators(t *testing.T) {
+	for _, v := range []string{"", "0x4AAAAAAAkey_-1"} {
+		if err := validateOptionalTurnstileSiteKey(v); err != nil {
+			t.Errorf("site key %q refused: %v", v, err)
+		}
+	}
+	for _, v := range []string{"bad key!", `0x"; return 200;`, strings.Repeat("a", 129)} {
+		if err := validateOptionalTurnstileSiteKey(v); err == nil {
+			t.Errorf("site key %q accepted", v)
+		}
+	}
+	if err := validateOptionalTurnstileSecret("0x4AAAAAAAsecret"); err != nil {
+		t.Errorf("secret refused: %v", err)
+	}
+	if err := validateOptionalTurnstileSecret("bad secret!"); err == nil {
+		t.Error("a secret with a space was accepted")
 	}
 }
 

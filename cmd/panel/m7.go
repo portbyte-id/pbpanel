@@ -68,7 +68,7 @@ type siteLister interface {
 
 // newM7 wires the three features. Building touches neither Docker nor the host's
 // /proc: a daemon on an odd host still starts, and the failing part says why.
-func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsSvc httpapi.AppsService, siteList siteLister, logger *slog.Logger) *m7Stack {
+func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsSvc httpapi.AppsService, siteList siteLister, builtins map[string]cron.BuiltinFunc, logger *slog.Logger) *m7Stack {
 	m := &m7Stack{}
 
 	// One Docker client for the three features. docker.New does not dial, so a
@@ -121,6 +121,7 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 		AllowShell: allowShell,
 		LogRoot:    cronLogs,
 		ScriptDir:  filepath.Join(layout.DataDir(), "cron"),
+		Builtins:   builtins,
 	}); err != nil {
 		logger.Error("scheduled jobs are not available", "error", err)
 	} else {
@@ -161,6 +162,11 @@ func (m *m7Stack) start(ctx context.Context, logger *slog.Logger) (wait func(gra
 		go func() { defer wg.Done(); m.sampler.Run(ctx) }()
 	}
 	if m.cron != nil {
+		// The default built-in jobs (certificate renewal) are created on the first
+		// start only; later starts leave the operator's settings alone.
+		if err := m.cron.EnsureDefaults(ctx); err != nil {
+			logger.Error("default scheduled jobs", "error", err)
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
