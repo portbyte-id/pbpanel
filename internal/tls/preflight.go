@@ -103,7 +103,7 @@ func (i *Issuer) probe(ctx context.Context, dir, name string) error {
 		}
 		return classifyProbeError(name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	got, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if err != nil {
 		return &PreflightError{Name: name, Reason: "the connection broke while reading the answer from port 80", Err: err}

@@ -266,7 +266,9 @@ func appendTo(t *testing.T, path, s string) {
 	if _, err := f.WriteString(s); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func recv(t *testing.T, ch <-chan string, want string) {

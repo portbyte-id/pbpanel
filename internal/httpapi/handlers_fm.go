@@ -751,7 +751,7 @@ func (s *server) fmDownload(f FileManager, w http.ResponseWriter, r *http.Reques
 	}
 	file, info, err := f.OpenDownload(clean)
 	if err == nil {
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		// Always an attachment with an opaque type: a stored HTML or SVG file
 		// must download, never render in the panel's origin.
 		w.Header().Set("Content-Type", "application/octet-stream")

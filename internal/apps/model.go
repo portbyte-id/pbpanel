@@ -232,10 +232,10 @@ func checkText(field, s string) error {
 		return invalid(field, "is longer than %d bytes", maxTextLen)
 	}
 	for _, r := range s {
-		switch {
-		case r == '%':
+		switch r {
+		case '%':
 			return invalid(field, "must not contain %%; supervisord would read it as a substitution")
-		case r == 0, r == '\n', r == '\r':
+		case 0, '\n', '\r':
 			return invalid(field, "must not contain a newline or NUL")
 		}
 	}

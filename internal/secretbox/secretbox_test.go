@@ -113,7 +113,8 @@ func TestWrongKeyIsReportedAsUnknownKey(t *testing.T) {
 }
 
 func TestKeyIDIsStable(t *testing.T) {
-	if newBox(t, 7).KeyID() != newBox(t, 7).KeyID() {
+	first, second := newBox(t, 7).KeyID(), newBox(t, 7).KeyID()
+	if first != second {
 		t.Fatal("the same master key gave two key IDs")
 	}
 }

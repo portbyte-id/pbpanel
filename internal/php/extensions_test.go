@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/portbyte-id/server-panel/internal/osdep"
 )
 
 func TestParseExtensionsAcceptsCatalogueAndPECLNames(t *testing.T) {
@@ -55,7 +57,7 @@ func TestDockerfileForBundledAndPECLExtensions(t *testing.T) {
 	want := strings.Join([]string{
 		"FROM php:8.3-fpm",
 		"RUN groupadd -g 1500 www && useradd -u 1500 -g www -M -d /nonexistent -s /usr/sbin/nologin www",
-		"RUN apt-get update && apt-get install -y --no-install-recommends libicu-dev ${PHPIZE_DEPS} && rm -rf /var/lib/apt/lists/*",
+		"RUN " + osdep.ImageInstallCommand([]string{"libicu-dev"}, "${PHPIZE_DEPS}"),
 		"RUN docker-php-ext-install -j$(nproc) intl",
 		"RUN pecl install redis && docker-php-ext-enable redis",
 		"",
@@ -69,7 +71,7 @@ func TestDockerfileConfiguresGDAndSortsPackages(t *testing.T) {
 	exts, _ := ParseExtensions([]string{"intl", "gd"})
 	got := string(Dockerfile("8.4", exts))
 	for _, line := range []string{
-		"RUN apt-get update && apt-get install -y --no-install-recommends libfreetype-dev libicu-dev libjpeg-dev libpng-dev libwebp-dev && rm -rf /var/lib/apt/lists/*",
+		"RUN " + osdep.ImageInstallCommand([]string{"libfreetype-dev", "libicu-dev", "libjpeg-dev", "libpng-dev", "libwebp-dev"}),
 		"RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp",
 		"RUN docker-php-ext-install -j$(nproc) gd intl",
 	} {

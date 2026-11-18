@@ -167,8 +167,8 @@ func (r *Registry) Search(ctx context.Context, id string, q Query, opts SearchOp
 		if err != nil {
 			return stats, fmt.Errorf("%w: %v", ErrUnavailable, err)
 		}
-		defer rc.Close()
-		stop := context.AfterFunc(ctx, func() { rc.Close() })
+		defer func() { _ = rc.Close() }()
+		stop := context.AfterFunc(ctx, func() { _ = rc.Close() })
 		defer stop()
 		cr := &countReader{r: io.LimitReader(rc, opts.budget()), n: &stats.BytesScanned}
 		stats.Files = 1
@@ -302,7 +302,7 @@ func uncompressedSize(f logFile) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 	var tail [4]byte
 	if _, err := fh.ReadAt(tail[:], st.Size()-4); err != nil {
 		return 0, err
@@ -348,7 +348,7 @@ func scanFile(w windowFile, scanned *int64, scan func(name string, r io.Reader, 
 		}
 		return err
 	}
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 	var rd io.Reader = fh
 	var skipTo func(n int64) error
 	skipTo = func(n int64) error { _, err := fh.Seek(n, io.SeekStart); return err }
@@ -357,7 +357,7 @@ func scanFile(w windowFile, scanned *int64, scan func(name string, r io.Reader, 
 		if err != nil {
 			return nil // truncated or half-written archive: nothing to read
 		}
-		defer zr.Close()
+		defer func() { _ = zr.Close() }()
 		rd = zr
 		skipTo = func(n int64) error { _, err := io.CopyN(io.Discard, zr, n); return err }
 	}

@@ -217,7 +217,7 @@ func (s *Service) Rules(ctx context.Context) ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Rule{}
 	for rows.Next() {
 		var r Rule
@@ -289,7 +289,7 @@ func (s *Service) Blocklist(ctx context.Context) ([]BlockEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []BlockEntry{}
 	for rows.Next() {
 		var e BlockEntry
@@ -330,7 +330,7 @@ func (s *Service) Allowlist(ctx context.Context) ([]AllowEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []AllowEntry{}
 	for rows.Next() {
 		var e AllowEntry

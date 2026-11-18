@@ -219,7 +219,7 @@ func (f *FS) List(clean string, opt ListOptions) (Listing, error) {
 		return Listing{}, err
 	}
 	dir := os.NewFile(uintptr(fd), real)
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 
 	names, err := dir.Readdirnames(-1)
 	if err != nil {
@@ -540,9 +540,9 @@ func copyAt(ctx context.Context, sfd int, sname string, dfd int, dname string, p
 			_ = unix.Close(src)
 			return mapErr(err)
 		}
-		defer unix.Close(dst)
+		defer func() { _ = unix.Close(dst) }()
 		dir := os.NewFile(uintptr(src), display)
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 		names, err := dir.Readdirnames(-1)
 		if err != nil {
 			return mapErr(err)
@@ -568,13 +568,13 @@ func copyAt(ctx context.Context, sfd int, sname string, dfd int, dname string, p
 			return mapErr(err)
 		}
 		src := os.NewFile(uintptr(in), display)
-		defer src.Close()
+		defer func() { _ = src.Close() }()
 		out, err := unix.Openat(dfd, dname, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 		if err != nil {
 			return mapErr(err)
 		}
 		dst := os.NewFile(uintptr(out), dname)
-		defer dst.Close()
+		defer func() { _ = dst.Close() }()
 		if _, err := io.Copy(dst, &ctxReader{ctx, src}); err != nil {
 			return mapErr(err)
 		}
@@ -705,7 +705,7 @@ func chmodAt(dirfd int, name string, mode uint32) error {
 	if err != nil {
 		return mapErr(err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		return mapErr(err)
@@ -774,7 +774,7 @@ func walkAttr(ctx context.Context, fd int, name string, st unix.Stat_t, dev uint
 		return mapErr(err)
 	}
 	dir := os.NewFile(uintptr(dfd), name)
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	names, err := dir.Readdirnames(-1)
 	if err != nil {
 		return mapErr(err)
@@ -807,7 +807,7 @@ func treeSize(ctx context.Context, fd int, name string, st unix.Stat_t) (int64, 
 		return 0, mapErr(err)
 	}
 	dir := os.NewFile(uintptr(dfd), name)
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	names, err := dir.Readdirnames(-1)
 	if err != nil {
 		return 0, mapErr(err)

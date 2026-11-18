@@ -57,7 +57,7 @@ func dialSerial(t *testing.T, port int) int64 {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	return conn.ConnectionState().PeerCertificates[0].SerialNumber.Int64()
 }
 
