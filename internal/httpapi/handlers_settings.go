@@ -20,6 +20,10 @@ type settingJSON struct {
 	Description     string   `json:"description"`
 	Group           string   `json:"group"`
 	Allowed         []string `json:"allowed,omitempty"`
+	// Labels is the display text for each Allowed value; omitted when none.
+	Labels   map[string]string `json:"labels,omitempty"`
+	Optional bool              `json:"optional,omitempty"`
+	Secret   bool              `json:"secret,omitempty"`
 }
 
 // settingsResponse is the GET /api/settings body. Groups are emitted in registry
@@ -45,6 +49,9 @@ func toSettingJSON(s settings.Setting) settingJSON {
 		Description:     s.Description,
 		Group:           s.Group,
 		Allowed:         s.Allowed,
+		Labels:          s.Labels,
+		Optional:        s.Optional,
+		Secret:          s.Secret,
 	}
 }
 

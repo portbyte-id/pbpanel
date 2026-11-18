@@ -86,7 +86,7 @@ func TestEveryRegisteredKeyHasAValidDefault(t *testing.T) {
 
 	for _, k := range keys {
 		t.Run(k.meta.Name, func(t *testing.T) {
-			if k.meta.Default == "" {
+			if k.meta.Default == "" && !k.meta.Optional {
 				t.Fatalf("%s has no default", k.meta.Name)
 			}
 			if err := validate(k, k.meta.Default); err != nil {
@@ -204,13 +204,28 @@ func TestTLSKeysValidate(t *testing.T) {
 		t.Fatalf("renew days = %d, %v; want 30", n, err)
 	}
 
-	for _, v := range []string{"http://acme.example/dir", "ftp://x/y", "acme.example", "https://", "https://u:p@acme.example/d"} {
+	// The directory is a fixed list of CAs, not free text.
+	for _, v := range []string{"http://acme.example/dir", "https://acme.example/dir", "acme.example", ""} {
 		if err := r.Set(ctx, KeyTLSACMEDirectory, v); err == nil {
 			t.Errorf("directory %q accepted", v)
 		}
 	}
-	if err := r.Set(ctx, KeyTLSACMEDirectory, "https://acme-v02.api.letsencrypt.org/directory"); err != nil {
-		t.Errorf("production directory rejected: %v", err)
+	for _, v := range []string{DefaultACMEDirectory, ACMEDirectoryLetsEncrypt, ACMEDirectoryGoogle, ACMEDirectoryGoogleStaging} {
+		if err := r.Set(ctx, KeyTLSACMEDirectory, v); err != nil {
+			t.Errorf("directory %q rejected: %v", v, err)
+		}
+		if _, ok := acmeDirectoryLabels[v]; !ok {
+			t.Errorf("directory %q has no label", v)
+		}
+	}
+	// EAB credentials may be empty (Let's Encrypt) and are set for Google.
+	for _, k := range []string{KeyTLSACMEEABKid, KeyTLSACMEEABHMACKey} {
+		if err := r.Set(ctx, k, "abc"); err != nil {
+			t.Errorf("%s rejected: %v", k, err)
+		}
+		if err := r.Set(ctx, k, ""); err != nil {
+			t.Errorf("%s cannot be cleared: %v", k, err)
+		}
 	}
 	for _, v := range []string{"0", "61", "x", ""} {
 		if err := r.Set(ctx, KeyTLSRenewDaysBefore, v); err == nil {
@@ -510,7 +525,8 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"PHP":     {"php.versions"},
 		"Files": {"fm.editor.max_bytes", "fm.upload.chunk_max_bytes", "fm.upload.sweep_age",
 			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
-		"TLS":  {"tls.acme.directory", "tls.renew.days_before", "tls.panel.auto_ip"},
+		"TLS": {"tls.acme.directory", "tls.acme.eab_kid", "tls.acme.eab_hmac_key",
+			"tls.renew.days_before", "tls.panel.auto_ip"},
 		"Cron": {"cron.allow_shell"},
 		"Logs": {"logs.rotate.max_bytes", "logs.rotate.keep"},
 	}

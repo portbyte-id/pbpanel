@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -63,6 +64,13 @@ type Meta struct {
 	Description     string
 	Group           string
 	Allowed         []string // enum keys only; nil for every other type
+	// Labels maps an Allowed value to the text the Settings page shows for it.
+	// A value without a label is shown as itself.
+	Labels map[string]string
+	// Optional lets a string key be empty. An optional key's default is "".
+	Optional bool
+	// Secret marks a key whose value the Settings page masks while typing.
+	Secret bool
 }
 
 // Group is an ordered block of keys. Groups and keys both keep registry order.
@@ -386,6 +394,9 @@ func typeMismatch(name string, have, want Type) error {
 func metaCopy(m Meta) Meta {
 	if m.Allowed != nil {
 		m.Allowed = slices.Clone(m.Allowed)
+	}
+	if m.Labels != nil {
+		m.Labels = maps.Clone(m.Labels)
 	}
 	return m
 }

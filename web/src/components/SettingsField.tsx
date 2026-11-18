@@ -121,11 +121,16 @@ function SettingControl({
           {...shared}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="max-w-72"
+          className="max-w-md"
         >
+          {/* A value saved before the list was fixed (a custom CA URL) stays
+              selectable, so opening the page never silently changes it. */}
+          {value !== "" && !(setting.allowed ?? []).includes(value) && (
+            <option value={value}>{`Custom: ${value}`}</option>
+          )}
           {(setting.allowed ?? []).map((option) => (
             <option key={option} value={option}>
-              {option}
+              {setting.labels?.[option] ?? option}
             </option>
           ))}
         </Select>
@@ -178,6 +183,8 @@ function SettingControl({
       return (
         <Input
           {...shared}
+          type={setting.secret ? "password" : undefined}
+          autoComplete={setting.secret ? "off" : undefined}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           spellCheck={false}

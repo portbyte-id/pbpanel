@@ -257,7 +257,7 @@ func TestGetSettingsReturnsEveryKeyGrouped(t *testing.T) {
 			if key.Group != group.Name {
 				t.Errorf("key %s is in group %q but says %q", key.Name, group.Name, key.Group)
 			}
-			if key.Value == "" || key.Description == "" || key.Type == "" {
+			if (key.Value == "" && !key.Optional) || key.Description == "" || key.Type == "" {
 				t.Errorf("key %s is missing value, type or description: %+v", key.Name, key)
 			}
 		}
