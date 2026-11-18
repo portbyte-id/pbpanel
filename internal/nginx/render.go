@@ -195,8 +195,11 @@ const tlsEmptyTemplate = `# Managed by PB panel (TLS). This site has no certific
 // because nginx has no "and". The scheme test makes it a no-op on :443.
 const tlsIncludeTemplate = `# Managed by PB panel (TLS). Rewritten when the certificate changes.
 listen 443 ssl;
+listen 443 quic reuseport;
 listen [::]:443 ssl;
+listen [::]:443 quic reuseport;
 http2 on;
+http3 on;
 
 ssl_certificate {{.Cert}};
 ssl_certificate_key {{.Key}};

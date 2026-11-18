@@ -22,7 +22,7 @@ p{margin:0;color:#555}
 </style>
 <main>
 <h1>No website is configured for this address</h1>
-<p>Served by PB Panel</p>
+<p>Served by PB Panel | Copyright &copy; <script>document.write(new Date().getFullYear());</script> <a href="https://portbyte.id">PortByte Technologies</a></p>
 </main>
 ';
         }`
