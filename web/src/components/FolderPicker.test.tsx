@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CreateSiteForm } from "@/components/CreateSiteDialog"
 import { SITES_ROOT } from "@/components/FolderPicker"
@@ -45,9 +45,97 @@ const renderForm = () => {
 
 const picker = () => screen.queryByRole("dialog", { name: "Choose a folder" })
 
+/** The settings page as the picker reads it: the allowlist key with its value. */
+const settingsWithRoots = (value: string) => ({
+  groups: [
+    {
+      name: "Sites",
+      keys: [
+        {
+          name: "sites.web_roots",
+          type: "string" as const,
+          value,
+          default: "",
+          is_default: value === "",
+          restart_required: false,
+          description: "",
+          group: "Sites",
+        },
+      ],
+    },
+  ],
+})
+
+beforeEach(() => {
+  vi.spyOn(api, "settings").mockResolvedValue(settingsWithRoots(""))
+})
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("folder picker dialog", () => {
+  it("also offers the folders the Settings page allows, and browses them", async () => {
+    vi.spyOn(api, "settings").mockResolvedValue(settingsWithRoots("/www/wwwroot"))
+    const wwwroot = "/www/wwwroot"
+    const fm = vi.spyOn(api, "fmList").mockImplementation(async ({ path }) =>
+      listing(path, path === wwwroot ? [dir(wwwroot, "shop2")] : tree[path] ?? []),
+    )
+    const user = userEvent.setup()
+    renderForm()
+
+    await user.click(screen.getByRole("button", { name: "Browse…" }))
+    const dialog = await screen.findByRole("dialog", { name: "Choose a folder" })
+    expect(dialog).toHaveTextContent(`${SITES_ROOT} or /www/wwwroot`)
+
+    await user.click(within(dialog).getByRole("button", { name: wwwroot }))
+    await user.click(await screen.findByRole("button", { name: /shop2/ }))
+    expect(fm).toHaveBeenCalledWith({ path: `${wwwroot}/shop2`, sort: "name" })
+    await user.click(screen.getByRole("button", { name: "Use this folder" }))
+
+    await waitFor(() => expect(picker()).not.toBeInTheDocument())
+    expect(screen.getByLabelText("Folder")).toHaveValue(`${wwwroot}/shop2`)
+  })
+
+  it("cannot go above an allowed root", async () => {
+    vi.spyOn(api, "settings").mockResolvedValue(settingsWithRoots("/www/wwwroot"))
+    const wwwroot = "/www/wwwroot"
+    vi.spyOn(api, "fmList").mockImplementation(async ({ path }) =>
+      listing(path, path === wwwroot ? [dir(wwwroot, "shop2")] : tree[path] ?? []),
+    )
+    const user = userEvent.setup()
+    renderForm()
+
+    await user.type(screen.getByLabelText("Folder"), wwwroot)
+    await user.click(screen.getByRole("button", { name: "Browse…" }))
+
+    expect(await screen.findByRole("button", { name: /shop2/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Up one folder" })).toBeDisabled()
+  })
+
+  it("starts at the sites root when the typed folder is in no allowed root", async () => {
+    vi.spyOn(api, "settings").mockResolvedValue(settingsWithRoots("/www/wwwroot"))
+    const fm = mockTree()
+    const user = userEvent.setup()
+    renderForm()
+
+    await user.type(screen.getByLabelText("Folder"), "/www/other")
+    await user.click(screen.getByRole("button", { name: "Browse…" }))
+
+    await screen.findByRole("button", { name: /blog/ })
+    expect(fm).toHaveBeenCalledWith({ path: SITES_ROOT, sort: "name" })
+  })
+
+  it("falls back to the sites tree alone when the Settings page cannot be read", async () => {
+    vi.spyOn(api, "settings").mockRejectedValue(new Error("offline"))
+    mockTree()
+    const user = userEvent.setup()
+    renderForm()
+
+    await user.click(screen.getByRole("button", { name: "Browse…" }))
+    const dialog = await screen.findByRole("dialog", { name: "Choose a folder" })
+    expect(dialog).toHaveTextContent(`must be inside ${SITES_ROOT}.`)
+    expect(within(dialog).queryByRole("group", { name: "Roots" })).not.toBeInTheDocument()
+  })
+
   it("is closed until Browse is pressed, then opens as a dialog at the sites root", async () => {
     const fm = mockTree()
     const user = userEvent.setup()

@@ -41,7 +41,7 @@ func scanDirEnv(p Paths, ver string) string { return "PHP_INI_SCAN_DIR=:" + p.Co
 // pool that listens on TCP 9000) is never read, and nothing is mounted over it.
 // The master runs as root, as the image intends, and each pool drops to `www`.
 func Spec(p Paths, ver, image string) docker.Spec {
-	return docker.Spec{
+	spec := docker.Spec{
 		Name:       ContainerName(ver),
 		Image:      image,
 		Role:       "php-" + ver,
@@ -56,6 +56,12 @@ func Spec(p Paths, ver, image string) docker.Spec {
 			{Path: p.SitesRoot()},
 		},
 	}
+	// Folders the operator allowed as web roots. Read-write, as the sites tree
+	// is: an application under PHP writes its uploads and caches into its root.
+	for _, root := range p.Roots.List() {
+		spec.Mounts = append(spec.Mounts, docker.Mount{Path: root})
+	}
+	return spec
 }
 
 // Service is one PHP version as a confedit.Service: it validates with

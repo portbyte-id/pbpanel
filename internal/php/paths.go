@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+
+	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
 // The shared account pools run as and sockets belong to. These repeat
@@ -58,6 +60,9 @@ func ServiceName(ver string) string { return "php-" + ver }
 type Paths struct {
 	// Root is the install root, `/www` in production.
 	Root string
+	// Roots is the allowlist of folders outside the sites tree that sites may
+	// use as web roots; see nginx.Paths.Roots. Nil allows none.
+	Roots *webroots.Holder
 }
 
 // Base holds one directory per version.
@@ -103,3 +108,9 @@ func (p Paths) ErrorLog(domain string) string {
 
 // SitesRoot is the directory whose subdirectories are web roots.
 func (p Paths) SitesRoot() string { return path.Join(p.Root, "services", "sites") }
+
+// ServesRoot reports whether a pool's web root is one the PHP container can see:
+// inside the sites tree or inside an allowed folder; see nginx.Paths.ServesRoot.
+func (p Paths) ServesRoot(root string) bool {
+	return webroots.Servable(root, p.SitesRoot(), p.Roots)
+}

@@ -1,6 +1,10 @@
 package nginx
 
-import "path"
+import (
+	"path"
+
+	"github.com/portbyte-id/server-panel/internal/webroots"
+)
 
 // Paths is where nginx's files live. Every path is a Linux path inside the
 // install root and is built with package path, never filepath: the same string
@@ -9,6 +13,16 @@ import "path"
 type Paths struct {
 	// Root is the install root, `/www` in production.
 	Root string
+	// Roots is the allowlist of folders outside the sites tree that sites may
+	// use as web roots. It is read on every spec and render, so a change on the
+	// Settings page applies without rebuilding the service. Nil allows none.
+	Roots *webroots.Holder
+}
+
+// ServesRoot reports whether a site's web root is one nginx can see: inside the
+// sites tree or inside an allowed folder.
+func (p Paths) ServesRoot(root string) bool {
+	return webroots.Servable(root, p.SitesRoot(), p.Roots)
 }
 
 // Dir is the generated nginx config tree.

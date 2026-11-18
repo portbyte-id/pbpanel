@@ -58,7 +58,7 @@ type Engine interface {
 // identical on the host and in the container. Nothing is mounted over a
 // directory the image owns.
 func Spec(p Paths, image string) docker.Spec {
-	return docker.Spec{
+	spec := docker.Spec{
 		Name:       ContainerName,
 		Image:      image,
 		Role:       "nginx",
@@ -77,6 +77,11 @@ func Spec(p Paths, image string) docker.Spec {
 			{Path: p.ACMEWebroot(), ReadOnly: true},
 		},
 	}
+	// Folders the operator allowed as web roots, read-only at the same path.
+	for _, root := range p.Roots.List() {
+		spec.Mounts = append(spec.Mounts, docker.Mount{Path: root, ReadOnly: true})
+	}
+	return spec
 }
 
 // Dockerfile is the derived image: the official one plus the `www` group and
@@ -292,6 +297,25 @@ func (r *Runtime) EnsureContainer(ctx context.Context) (docker.EnsureResult, err
 		return docker.EnsureResult{}, err
 	}
 	return docker.Ensure(ctx, r.eng, Spec(r.p, img), r.p.Root)
+}
+
+// ApplyMounts brings a running container up to its spec. The allowed web roots
+// are mounts, so a change to them needs this. A stopped container is left alone:
+// its next start builds it from the current spec. Without a container it does
+// nothing.
+func (r *Runtime) ApplyMounts(ctx context.Context) error {
+	c, err := r.eng.ContainerInspect(ctx, ContainerName)
+	if errors.Is(err, docker.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !c.State.Running {
+		return nil
+	}
+	_, err = r.EnsureContainer(ctx)
+	return err
 }
 
 // State is the nginx container as Docker reports it. The bool is false when

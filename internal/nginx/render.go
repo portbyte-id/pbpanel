@@ -454,8 +454,8 @@ func checkSite(p Paths, s Site) error {
 		if !path.IsAbs(s.Root) || path.Clean(s.Root) != s.Root {
 			return fmt.Errorf("nginx: web root %q must be a clean absolute path", s.Root)
 		}
-		if !strings.HasPrefix(s.Root, p.SitesRoot()+"/") {
-			return fmt.Errorf("nginx: web root %q is outside %s, where the container cannot see it", s.Root, p.SitesRoot())
+		if !p.ServesRoot(s.Root) {
+			return fmt.Errorf("nginx: web root %q is outside %s and the allowed web roots, where the container cannot see it", s.Root, p.SitesRoot())
 		}
 	case KindProxy:
 	default:

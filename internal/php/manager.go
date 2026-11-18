@@ -747,6 +747,31 @@ func (m *Manager) EnsureContainer(ctx context.Context, ver string) (docker.Ensur
 	return docker.Ensure(ctx, m.eng, Spec(m.p, ver, img), m.p.Root)
 }
 
+// ApplyMounts brings every running version's container up to its spec, as
+// nginx.Runtime.ApplyMounts does for nginx. Stopped and absent containers are
+// left alone.
+func (m *Manager) ApplyMounts(ctx context.Context) error {
+	vs, err := m.List(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, v := range vs {
+		c, ok, err := m.ContainerState(ctx, v.Version)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("php %s: %w", v.Version, err))
+			continue
+		}
+		if !ok || !c.State.Running {
+			continue
+		}
+		if _, err := m.EnsureContainer(ctx, v.Version); err != nil {
+			errs = append(errs, fmt.Errorf("php %s: %w", v.Version, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // BaseFiles returns the files a version's FPM starts on that are missing or
 // out of date: php-fpm.conf and the form's ini (both panel-owned, rendered),
 // and php.ini when it does not exist yet (copied from the image once; after

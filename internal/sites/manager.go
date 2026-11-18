@@ -313,8 +313,8 @@ func (m *Manager) checkRoot(root string) error {
 	if !path.IsAbs(root) || path.Clean(root) != root || strings.ContainsAny(root, " \t\r\n;{}$\"'\\#\x00") {
 		return invalid("root", "%q must be a clean absolute path without spaces or special characters", root)
 	}
-	if !strings.HasPrefix(root, m.p.SitesRoot()+"/") {
-		return invalid("root", "must be inside %s: nginx cannot see other directories", m.p.SitesRoot())
+	if !m.p.ServesRoot(root) {
+		return invalid("root", "must be inside %s or an allowed web root: nginx cannot see other directories", m.p.SitesRoot())
 	}
 	return nil
 }
