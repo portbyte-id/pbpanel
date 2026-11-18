@@ -2,14 +2,19 @@ package settings
 
 import (
 	"errors"
+	"fmt"
 	"net/mail"
+	"os"
 	"regexp"
 	"strings"
+
+	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
 // Groups shown on the Settings page, in this order.
 const (
 	groupPanel   = "Panel"
+	groupSites   = "Sites"
 	groupLogin   = "Login"
 	groupSession = "Session"
 	groupPHP     = "PHP"
@@ -102,6 +107,32 @@ func validatePHPVersions(value string) error {
 	return nil
 }
 
+// KeySitesWebRoots is the folders outside the sites tree that a site may use as
+// its web root. Changing it recreates the running nginx and PHP containers, which
+// is why the registry's subscribers apply it (see cmd/panel).
+const KeySitesWebRoots = "sites.web_roots"
+
+// webRootsInstallRoot is the install root the allowlist is checked against. The
+// settings package cannot import install (install imports it), so it is written
+// out here; install.DefaultRoot is the same value. The apply path checks again
+// against the root the panel was installed with.
+const webRootsInstallRoot = "/www"
+
+func validateWebRoots(value string) error {
+	roots, err := webroots.Parse(value, webRootsInstallRoot)
+	if err != nil {
+		return err
+	}
+	// Docker creates a missing bind-mount source, as root, so a typo would leave
+	// an empty folder behind the moment the containers are recreated.
+	for _, r := range roots {
+		if fi, err := os.Stat(r); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%q is not an existing folder; create it first", r)
+		}
+	}
+	return nil
+}
+
 // defaultKeys is the panel's key table. Every key here is a setting the panel
 // actually reads; a key nobody reads is a dead setting on the Settings page.
 func defaultKeys() []key {
@@ -166,6 +197,16 @@ func defaultKeys() []key {
 				Group:       groupPHP,
 			},
 			check: validatePHPVersions,
+		},
+		{
+			meta: Meta{
+				Name:        KeySitesWebRoots,
+				Type:        TypeString,
+				Optional:    true,
+				Description: "Folders outside /www/services/sites that a site may use as its web root, separated by commas, for example /www/wwwroot. nginx reads them read-only and PHP reads and writes them. A change recreates the running nginx and PHP containers. Remove a folder only after no site uses it.",
+				Group:       groupSites,
+			},
+			check: validateWebRoots,
 		},
 		{
 			meta: Meta{

@@ -279,8 +279,8 @@ func (p Paths) RenderPool(pool Pool) ([]byte, error) {
 			return nil, fmt.Errorf("php: %s %q cannot be written into a pool file", what, v)
 		}
 	}
-	if !strings.HasPrefix(pool.Root, p.SitesRoot()+"/") || path.Clean(pool.Root) != pool.Root {
-		return nil, fmt.Errorf("php: web root %q is outside %s, where the container cannot see it", pool.Root, p.SitesRoot())
+	if !p.ServesRoot(pool.Root) || path.Clean(pool.Root) != pool.Root {
+		return nil, fmt.Errorf("php: web root %q is outside %s and the allowed web roots, where the container cannot see it", pool.Root, p.SitesRoot())
 	}
 	return execute("pool", struct {
 		Name, Domain, User, Socket, Root, ErrorLog string

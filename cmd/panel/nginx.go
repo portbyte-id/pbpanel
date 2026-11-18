@@ -18,6 +18,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
+	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
 // nginxStack is everything the nginx and sites features run on. The HTTP routes
@@ -43,8 +44,11 @@ type nginxStack struct {
 // and the sites model. Nothing here touches Docker or the disk: a daemon on a
 // host without Docker still starts, and the reconcile reports what is missing.
 func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layout, jobsMgr *jobs.Manager, ed *confedit.Editor, tlsState sites.TLSState, logger *slog.Logger) (*nginxStack, error) {
-	paths := nginx.Paths{Root: filepath.ToSlash(layout.Root)}
-	phpPaths := php.Paths{Root: paths.Root}
+	// The allowed web roots are one holder both services read, so the Settings
+	// page changes what the next spec and render see.
+	roots := webroots.NewHolder()
+	paths := nginx.Paths{Root: filepath.ToSlash(layout.Root), Roots: roots}
+	phpPaths := php.Paths{Root: paths.Root, Roots: roots}
 
 	eng, err := docker.New(docker.DefaultSocket)
 	if err != nil {
@@ -95,6 +99,38 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	// A stop made from the panel survives a panel restart: the flag lives beside
 	// the image catalogue.
 	runtime := nginx.NewRuntime(eng, paths, imgs.ImageFunc()).WithFlags(images.NewCatalog(st))
+
+	// The list is read now and on every change. A change recreates the running
+	// containers, because the roots are mounts; that runs as a job so the save
+	// does not wait for Docker.
+	if saved, err := reg.Str(context.Background(), settings.KeySitesWebRoots); err != nil {
+		logger.Error("web roots: read the setting", "error", err)
+	} else if list, err := webroots.Parse(saved, paths.Root); err != nil {
+		logger.Error("web roots: the saved list is not usable, so none are allowed", "error", err)
+	} else {
+		roots.Set(list)
+	}
+	reg.Subscribe(func(c settings.Change) {
+		if c.Name != settings.KeySitesWebRoots {
+			return
+		}
+		list, err := webroots.Parse(c.New, paths.Root)
+		if err != nil {
+			logger.Error("web roots: refusing the new list", "error", err)
+			return
+		}
+		roots.Set(list)
+		_, err = jobsMgr.Start(context.Background(), "sites.web_roots", func(ctx context.Context, out *jobs.Writer) error {
+			_ = out.Line("recreating running nginx and PHP containers to mount the allowed web roots")
+			if err := runtime.ApplyMounts(ctx); err != nil {
+				return err
+			}
+			return phpMgr.ApplyMounts(ctx)
+		})
+		if err != nil {
+			logger.Error("web roots: start the apply job", "error", err)
+		}
+	})
 
 	return &nginxStack{
 		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs, Runtime: runtime,

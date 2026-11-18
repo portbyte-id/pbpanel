@@ -222,7 +222,8 @@ export function CreateSiteForm({
           />
           <p id={`${id}-root-hint`} className="text-muted-foreground text-xs">
             Leave empty to use the folder shown. It is created with a placeholder page if it does
-            not exist, and must be inside /www/services/sites.
+            not exist, and must be inside /www/services/sites or a folder allowed on the Settings
+            page under Sites.
           </p>
           {fieldError("root")}
         </div>
