@@ -16,8 +16,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ApiError, type AppAction, type PanelApp } from "@/lib/api"
-import { useApps, useControlApp, useDeleteApp } from "@/lib/queries"
+import { ApiError, type AppAction, type PanelApp, type Site } from "@/lib/api"
+import { useApps, useControlApp, useDeleteApp, useSites } from "@/lib/queries"
 
 export function typeLabel(app: Pick<PanelApp, "type" | "node_version">): string {
   if (app.type === "node") return `Node.js ${app.node_version}`
@@ -34,6 +34,12 @@ export function formatUptime(seconds: number): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
+/** The domains of the proxy sites that pass requests to an app's port. */
+export function domainsOf(app: Pick<PanelApp, "proxy_url">, sites: Site[]): string[] {
+  if (app.proxy_url === "") return []
+  return sites.filter((s) => s.kind === "proxy" && s.proxy_target === app.proxy_url).map((s) => s.domain)
+}
+
 export function isRunning(app: Pick<PanelApp, "state">): boolean {
   return app.state === "RUNNING" || app.state === "STARTING"
 }
@@ -43,6 +49,8 @@ export function AppsPage() {
   const { data, isPending, error, refetch } = useApps()
   const control = useControlApp()
   const remove = useDeleteApp()
+  // Domains are a nicety here: if the sites fail to load the list still works.
+  const sites = useSites().data ?? []
   const [editing, setEditing] = useState<PanelApp | "new" | null>(null)
   const [logsFor, setLogsFor] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
@@ -89,6 +97,7 @@ export function AppsPage() {
                 <th scope="col" className="px-3 py-1.5 font-medium">PID</th>
                 <th scope="col" className="px-3 py-1.5 font-medium">Up for</th>
                 <th scope="col" className="px-3 py-1.5 font-medium">Port</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Domains</th>
                 <th scope="col" className="px-3 py-1.5 font-medium">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -110,6 +119,24 @@ export function AppsPage() {
                     {isRunning(app) && app.uptime_seconds > 0 ? formatUptime(app.uptime_seconds) : "–"}
                   </td>
                   <td className="px-3 py-1.5 tabular-nums">{app.port ?? "–"}</td>
+                  <td className="px-3 py-1.5">
+                    {domainsOf(app, sites).length === 0 ? (
+                      <span className="text-muted-foreground">–</span>
+                    ) : (
+                      <div className="flex flex-col gap-0.5">
+                        {domainsOf(app, sites).map((d) => (
+                          <Link
+                            key={d}
+                            to="/sites/$domain"
+                            params={{ domain: d }}
+                            className="underline-offset-4 hover:underline"
+                          >
+                            {d}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5">
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {isRunning(app) ? (
@@ -133,7 +160,7 @@ export function AppsPage() {
                       {app.proxy_url !== "" && (
                         <Button size="sm" variant="outline" asChild>
                           <Link to="/sites" search={{ proxy: app.proxy_url }}>
-                            Proxy site
+                            Add domain
                           </Link>
                         </Button>
                       )}

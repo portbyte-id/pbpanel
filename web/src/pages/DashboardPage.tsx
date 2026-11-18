@@ -64,7 +64,7 @@ export function DashboardPage() {
     <div className="flex flex-col gap-3">
       <HealthBar alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} live={live} />
       <MetricsSection live={live} />
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_21rem]">
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <ServicesSection limit={8} />
         <div className="flex flex-col gap-3">
           <AlertsPanel alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} />
@@ -614,7 +614,7 @@ export function ServiceGrid({
             key={row.name}
             data-testid="service-card"
             data-service={row.name}
-            className="hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5 md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_5.5rem_11rem]"
+            className="hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5 md:grid-cols-[minmax(0,16.25rem)_minmax(0,1fr)_7rem_13.75rem]"
           >
             <div className="min-w-0">
               <p className="text-sm leading-5 font-medium break-all">{row.name}</p>

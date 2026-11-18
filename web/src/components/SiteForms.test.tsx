@@ -45,7 +45,7 @@ describe("CreateSiteForm", () => {
     const user = userEvent.setup()
     const onSubmit = renderForm()
 
-    await user.click(screen.getByRole("radio", { name: /Another server/ }))
+    await user.click(screen.getByRole("radio", { name: /An app or another server/ }))
     expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText("Domain"), "api.test")

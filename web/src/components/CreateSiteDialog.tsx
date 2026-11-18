@@ -1,6 +1,7 @@
 import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
+import { FolderPicker } from "@/components/FolderPicker"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -13,8 +14,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { ApiError, type CreateSiteInput, type SiteKind } from "@/lib/api"
-import { useCreateSite, usePHP } from "@/lib/queries"
+import { ApiError, type CreateSiteInput, type PanelApp, type SiteKind } from "@/lib/api"
+import { useApps, useCreateSite, usePHP } from "@/lib/queries"
 
 /** Aliases are typed as one line or several; commas, spaces and newlines all separate. */
 export function parseAliases(text: string): string[] {
@@ -38,8 +39,11 @@ export function CreateSiteForm({
   pending,
   error,
   phpVersions = [],
+  apps = [],
   initial,
 }: {
+  /** The apps that have a port, offered as targets of a proxy site. */
+  apps?: PanelApp[]
   /** Starting values, for a site created from elsewhere (an app's "Proxy site"). */
   initial?: { kind: SiteKind; target: string }
   onSubmit: (input: CreateSiteInput) => void
@@ -54,6 +58,7 @@ export function CreateSiteForm({
   const [domain, setDomain] = useState("")
   const [aliases, setAliases] = useState("")
   const [root, setRoot] = useState("")
+  const [picking, setPicking] = useState(false)
   const [target, setTarget] = useState(initial?.target ?? "")
   // The newest installed version is the default.
   const [phpVersion, setPHPVersion] = useState(phpVersions[phpVersions.length - 1] ?? "")
@@ -92,7 +97,7 @@ export function CreateSiteForm({
           [
             ["static", "Files from a folder", "HTML, images and other static files."],
             ["php", "A PHP application", "Scripts in a folder, run by PHP-FPM."],
-            ["proxy", "Another server", "Requests are passed to an app listening on a port."],
+            ["proxy", "An app or another server", "Requests are passed to an app listening on a port."],
           ] as const
         ).map(([value, title, hint]) => (
           <label
@@ -194,15 +199,26 @@ export function CreateSiteForm({
       {kind !== "proxy" ? (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-root`}>Folder</Label>
-          <Input
-            id={`${id}-root`}
-            value={root}
-            onChange={(e) => setRoot(e.target.value)}
-            placeholder={`/www/services/sites/${domain.trim() || "example.com"}`}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={field === "root"}
-            aria-describedby={describedBy("root", "hint")}
+          <div className="flex gap-2">
+            <Input
+              id={`${id}-root`}
+              value={root}
+              onChange={(e) => setRoot(e.target.value)}
+              placeholder={`/www/services/sites/${domain.trim() || "example.com"}`}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={field === "root"}
+              aria-describedby={describedBy("root", "hint")}
+            />
+            <Button type="button" variant="outline" onClick={() => setPicking(true)}>
+              Browse…
+            </Button>
+          </div>
+          <FolderPicker
+            open={picking}
+            onOpenChange={setPicking}
+            start={root.trim() || undefined}
+            onPick={setRoot}
           />
           <p id={`${id}-root-hint`} className="text-muted-foreground text-xs">
             Leave empty to use the folder shown. It is created with a placeholder page if it does
@@ -212,6 +228,26 @@ export function CreateSiteForm({
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
+          {apps.length > 0 && (
+            <>
+              <Label htmlFor={`${id}-app`}>App</Label>
+              <Select
+                id={`${id}-app`}
+                value={apps.find((a) => a.proxy_url === target)?.name ?? ""}
+                onChange={(e) => {
+                  const a = apps.find((x) => x.name === e.target.value)
+                  if (a) setTarget(a.proxy_url)
+                }}
+              >
+                <option value="">Another address…</option>
+                {apps.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name} (port {a.port})
+                  </option>
+                ))}
+              </Select>
+            </>
+          )}
           <Label htmlFor={`${id}-target`}>Pass requests to</Label>
           <Input
             id={`${id}-target`}
@@ -258,6 +294,7 @@ export function CreateSiteDialog({
 }) {
   const create = useCreateSite()
   const php = usePHP()
+  const appsList = (useApps().data ?? []).filter((a) => a.proxy_url !== "")
   const ready = (php.data?.versions ?? []).filter((v) => v.state === "ready").map((v) => v.version)
 
   const close = (next: boolean) => {
@@ -282,6 +319,7 @@ export function CreateSiteDialog({
             key={ready.join(",")}
             initial={initial}
             phpVersions={ready}
+            apps={appsList}
             pending={create.isPending}
             error={create.error}
             onCancel={() => close(false)}

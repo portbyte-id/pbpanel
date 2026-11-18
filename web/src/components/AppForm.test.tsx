@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import { AppForm, formatEnv, nodeMajors, parseEnv, parseLines } from "@/components/AppDialog"
 import { appendLog } from "@/components/AppLogs"
 import { ApiError, type NodeVersion, type PanelApp } from "@/lib/api"
-import { formatUptime, isRunning, typeLabel } from "@/pages/AppsPage"
+import { domainsOf, formatUptime, isRunning, typeLabel } from "@/pages/AppsPage"
 import { validNodeRequest } from "@/pages/RuntimesPage"
 
 const node = (version: string): NodeVersion => ({ version, path: `/n/${version}`, used_by: [] })
@@ -119,6 +119,36 @@ describe("AppForm", () => {
     })
   })
 
+  it("passes the domain as a second argument, only when one is typed", async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderForm()
+
+    await user.type(screen.getByLabelText("Name"), "web")
+    await user.type(screen.getByLabelText("Program path"), "/www/services/apps/web/bin/web")
+    await user.type(screen.getByLabelText("Port"), "3000")
+    await user.type(screen.getByLabelText("Domain"), "web.test")
+    await user.type(screen.getByLabelText("Other domains"), "www.web.test, b.test")
+    await user.click(screen.getByRole("button", { name: "Create app" }))
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: "web", port: 3000 }), {
+      domain: "web.test",
+      aliases: ["www.web.test", "b.test"],
+    })
+  })
+
+  it("refuses a domain when the app has no port", async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderForm()
+
+    await user.type(screen.getByLabelText("Name"), "web")
+    await user.type(screen.getByLabelText("Program path"), "/www/services/apps/web/bin/web")
+    await user.type(screen.getByLabelText("Domain"), "web.test")
+    await user.click(screen.getByRole("button", { name: "Create app" }))
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(screen.getByRole("alert")).toHaveTextContent("Set a port first")
+  })
+
   it("asks for a Node version and an entry script, and sends the version", async () => {
     const user = userEvent.setup()
     const onSubmit = renderForm({ nodeVersions: [node("22.11.0"), node("20.18.0")] })
@@ -196,5 +226,19 @@ describe("AppForm", () => {
         restart: "never", autostart: false, port: 8080,
       }),
     )
+  })
+})
+
+describe("domainsOf", () => {
+  const site = (domain: string, kind: "proxy" | "static", target?: string) =>
+    ({ domain, aliases: [], kind, proxy_target: target, php_version: null, created_at: "" }) as never
+  it("lists the proxy sites that point at the app's port", () => {
+    const sites = [
+      site("a.test", "proxy", "http://127.0.0.1:3000"),
+      site("b.test", "proxy", "http://127.0.0.1:4000"),
+      site("c.test", "static"),
+    ]
+    expect(domainsOf({ proxy_url: "http://127.0.0.1:3000" }, sites)).toEqual(["a.test"])
+    expect(domainsOf({ proxy_url: "" }, sites)).toEqual([])
   })
 })

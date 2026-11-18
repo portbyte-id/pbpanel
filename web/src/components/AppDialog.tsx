@@ -21,7 +21,14 @@ import {
   type NodeVersion,
   type PanelApp,
 } from "@/lib/api"
-import { useRuntimes, useSaveApp } from "@/lib/queries"
+import { useCreateSite, useRuntimes, useSaveApp } from "@/lib/queries"
+import { parseAliases } from "@/components/CreateSiteDialog"
+
+/** The domain an app is bound to when it is created. */
+export interface AppDomain {
+  domain: string
+  aliases: string[]
+}
 
 /** One argument per line. Inner spaces are kept: an argument may contain them. */
 export function parseLines(text: string): string[] {
@@ -79,12 +86,15 @@ export function AppForm({
   /** Set when editing: the name is then fixed. */
   app: PanelApp | null
   nodeVersions: NodeVersion[]
-  onSubmit: (input: AppInput) => void
+  /** `bind` is set only when the operator asked for a domain: the app is then put behind a proxy site. */
+  onSubmit: (input: AppInput, bind?: AppDomain) => void
   onCancel: () => void
   pending: boolean
   error: unknown
 }) {
   const id = useId()
+  const [domain, setDomain] = useState("")
+  const [aliases, setAliases] = useState("")
   const [name, setName] = useState(app?.name ?? "")
   const [type, setType] = useState<AppType>(app?.type ?? "go")
   const [command, setCommand] = useState(app?.command ?? "")
@@ -139,6 +149,10 @@ export function AppForm({
         return
       }
     }
+    if (domain.trim() !== "" && portNumber === null) {
+      setLocalError({ field: "domain", text: "Set a port first: the domain passes requests to it." })
+      return
+    }
     setLocalError(null)
     const input: AppInput = {
       name: name.trim(),
@@ -153,7 +167,11 @@ export function AppForm({
     if (workdir.trim() !== "") input.workdir = workdir.trim()
     if (user.trim() !== "") input.user = user.trim()
     if (type === "node") input.node_version = nodeVersion
-    onSubmit(input)
+    if (app === null && domain.trim() !== "") {
+      onSubmit(input, { domain: domain.trim(), aliases: parseAliases(aliases) })
+    } else {
+      onSubmit(input)
+    }
   }
 
   const noNode = type === "node" && majors.length === 0
@@ -294,7 +312,7 @@ export function AppForm({
           />
           {fieldError("port")}
           <p className="text-muted-foreground text-xs">
-            Passed to the app as PORT. It also lets you create a proxy site for it.
+            Passed to the app as PORT. A domain needs it.
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
@@ -311,6 +329,42 @@ export function AppForm({
           {fieldError("user")}
         </div>
       </div>
+
+      {app === null && (
+        <fieldset className="border-input flex flex-col gap-3 rounded-md border p-3">
+          <legend className="px-1 text-sm font-medium">Domain</legend>
+          <p className="text-muted-foreground text-xs">
+            Optional. nginx answers for the domain and passes requests to the app's port. You can
+            add or change domains later from the Sites page.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-domain`}>Domain</Label>
+            <Input
+              id={`${id}-domain`}
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder="app.example.com"
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={invalid("domain")}
+              aria-describedby={describedBy("domain")}
+            />
+            {fieldError("domain")}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-aliases`}>Other domains</Label>
+            <Input
+              id={`${id}-aliases`}
+              value={aliases}
+              onChange={(e) => setAliases(e.target.value)}
+              placeholder="www.app.example.com"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={domain.trim() === ""}
+            />
+          </div>
+        </fieldset>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-restart`}>When it exits</Label>
@@ -356,7 +410,10 @@ export function AppDialog({
   app: PanelApp | null
 }) {
   const save = useSaveApp()
+  const createSite = useCreateSite()
   const runtimes = useRuntimes()
+  // Set when the app was saved but its domain could not be bound.
+  const [siteError, setSiteError] = useState<string | null>(null)
   // A save can succeed with a warning (the app would not stay up). It is read
   // before the dialog closes, so it is shown in place of the form.
   const [warnings, setWarnings] = useState<string[] | null>(null)
@@ -364,7 +421,9 @@ export function AppDialog({
   const close = (next: boolean) => {
     if (!next) {
       save.reset()
+      createSite.reset()
       setWarnings(null)
+      setSiteError(null)
     }
     onOpenChange(next)
   }
@@ -383,6 +442,11 @@ export function AppDialog({
           <div className="flex flex-col gap-3">
             <p className="text-sm">The app was saved, with a problem:</p>
             <ApplyWarnings warnings={warnings} />
+            {siteError !== null && (
+              <p role="alert" className="text-destructive text-sm">
+                The domain was not added: {siteError}
+              </p>
+            )}
             <DialogFooter>
               <Button onClick={() => close(false)}>Done</Button>
             </DialogFooter>
@@ -394,16 +458,29 @@ export function AppDialog({
             key={(runtimes.data?.node ?? []).map((n) => n.version).join(",")}
             app={app}
             nodeVersions={runtimes.data?.node ?? []}
-            pending={save.isPending}
+            pending={save.isPending || createSite.isPending}
             error={save.error}
             onCancel={() => close(false)}
-            onSubmit={(input) =>
+            onSubmit={(input, bind) =>
               save.mutate(
                 { name: app?.name, app: input },
                 {
                   onSuccess: (res) => {
-                    if (res.warnings.length > 0) setWarnings(res.warnings)
-                    else close(false)
+                    const finish = (extra: string | null) => {
+                      if (extra !== null) setSiteError(extra)
+                      if (res.warnings.length > 0 || extra !== null) {
+                        setWarnings(extra !== null && res.warnings.length === 0 ? [] : res.warnings)
+                      } else close(false)
+                    }
+                    if (!bind) return finish(null)
+                    createSite.mutate(
+                      { domain: bind.domain, aliases: bind.aliases, kind: "proxy", proxy_target: res.app.proxy_url },
+                      {
+                        onSuccess: () => finish(null),
+                        onError: (e) =>
+                          finish(e instanceof ApiError ? e.detail : "The site could not be created."),
+                      },
+                    )
                   },
                 },
               )

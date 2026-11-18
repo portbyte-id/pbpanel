@@ -46,7 +46,7 @@ export function LogsPage() {
   }
 
   return (
-    <div className="grid max-w-7xl gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
+    <div className="grid max-w-7xl gap-6 lg:grid-cols-[21rem_minmax(0,1fr)]">
       <SourceList sources={sources.data} selected={selected} onSelect={setSelected} />
       <div className="min-w-0">
         {selected === null ? (
@@ -264,7 +264,7 @@ export function TailViewer({ source }: { source: LogSource }) {
         ref={view}
         tabIndex={0}
         aria-label={`Log of ${source.label}`}
-        className="bg-muted h-[28rem] overflow-auto rounded-md p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all"
+        className="bg-muted h-[35rem] overflow-auto rounded-md p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all"
       >
         {text !== ""
           ? text
