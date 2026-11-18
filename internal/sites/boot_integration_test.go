@@ -5,117 +5,28 @@ package sites
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
-	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
-	"github.com/portbyte-id/server-panel/internal/store"
 )
 
-// chownless is the real filesystem for a test that does not run as root: the
-// www account does not exist on a developer machine, and the files are world
-// readable, which is all the container's workers need here.
-type chownless struct{ OSFS }
-
-func (chownless) Chown(string, int, int) error { return nil }
-
-// get fetches the site through nginx's host-network port 80, by Host header.
-func get(t *testing.T, host string) (int, string) {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
-	req.Host = host
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil {
-		return 0, err.Error()
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(b)
-}
-
-func waitFor(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	for range 40 {
-		if ok() {
-			return
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
-// TestRealNginxEndToEnd runs the whole of steps 1.5 to 1.9 against a real
-// Docker Engine: rendered config passes `nginx -t` and serves a site, a bad raw
-// edit is rolled back with nginx still serving, and a container deleted by hand
-// comes back on the next reconcile. It needs port 80 free on the host.
+// TestRealNginxEndToEnd runs the whole of steps 1.5 to 1.9 against the native
+// nginx: a rendered config passes `nginx -t` and serves a site, a bad raw edit is
+// rolled back with nginx still serving, a crash is restarted by systemd, and a
+// stop by hand is undone by the next reconcile. It needs port 80 free on the host.
 func TestRealNginxEndToEnd(t *testing.T) {
-	eng, err := docker.New(docker.DefaultSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := requireNativeHost(t)
 	bg := context.Background()
-	if _, err := eng.Ping(bg); err != nil {
-		t.Skipf("no Docker Engine: %v", err)
-	}
-	_ = eng.ContainerRemove(bg, nginx.ContainerName, true)
-	t.Cleanup(func() { _ = eng.ContainerRemove(bg, nginx.ContainerName, true) })
-
-	root, err := os.MkdirTemp("", "panel-sites-it-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	for _, d := range []string{"", "panel", "panel/nginx", "panel/nginx/sites", "panel/nginx/includes", "panel/logs", "panel/logs/sites", "panel/history", "services", "services/sites"} {
-		p := filepath.Join(root, d)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	st, err := store.Open(filepath.Join(root, "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-
-	paths := nginx.Paths{Root: root}
-	ed, err := confedit.New(confedit.Options{Roots: []string{paths.Dir()}, HistoryDir: filepath.Join(root, "panel", "history"), Store: st})
-	if err != nil {
-		t.Fatal(err)
-	}
-	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
-	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	global := nginx.NewGlobal(st, ed, live, paths)
-	rec := &Reconciler{
-		Sites: mgr, Global: global, Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
-		BuildImage: func(ctx context.Context) error {
-			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
-			return err
-		},
-	}
+	h := newNativeHost(t, eng, "panel-sites-it-", nativeLayout{})
+	mgr := h.manager(t, nil)
+	rec := h.reconciler(t, mgr)
 
 	// A site is created before nginx has ever run: the files it renders must pass
-	// `nginx -t` in a one-shot container, so the create has to wait for boot.
-	// Boot first, so the apply below has a running nginx to reload.
+	// `nginx -t`, so the create has to wait for boot. Boot first, so the apply
+	// below has a running nginx to reload.
 	if st := rec.Run(bg); !st.OK {
 		t.Fatalf("first reconcile: %+v", st)
 	}
@@ -129,21 +40,22 @@ func TestRealNginxEndToEnd(t *testing.T) {
 	if code, _ := get(t, "www.a.test"); code != 200 {
 		t.Errorf("alias answered %d", code)
 	}
-	if code, _ := get(t, "unknown.test"); code == 200 {
-		t.Error("a host no site claims was answered; the default server must drop it")
+	// A host no site claims gets the landing page of the default server, not the first site.
+	if code, body := get(t, "unknown.test"); code != 200 || !strings.Contains(body, "No website configured") {
+		t.Errorf("unclaimed host: HTTP %d, want the landing page", code)
 	}
 
 	// 1.8: a bad raw edit is rolled back and nginx keeps serving.
-	good, err := global.ReadConf(bg)
+	good, err := h.global.ReadConf(bg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = global.WriteConf(bg, append([]byte("bogus_directive on;\n"), good...))
+	_, err = h.global.WriteConf(bg, append([]byte("bogus_directive on;\n"), good...))
 	var ae *confedit.ApplyError
 	if !errors.As(err, &ae) || ae.Stage != confedit.StageValidate || !strings.Contains(ae.Output, "bogus_directive") {
 		t.Fatalf("bad edit: %v (want a validate-stage rejection quoting nginx)", err)
 	}
-	after, _ := global.ReadConf(bg)
+	after, _ := h.global.ReadConf(bg)
 	if string(after) != string(good) {
 		t.Error("nginx.conf was not restored after the rejected edit")
 	}
@@ -154,22 +66,28 @@ func TestRealNginxEndToEnd(t *testing.T) {
 	// 1.8: a good settings change applies and is reflected on disk.
 	s := nginx.DefaultHTTPSettings()
 	s.ClientMaxBodySize = "7m"
-	if _, err := global.SetSettings(bg, s); err != nil {
+	if _, err := h.global.SetSettings(bg, s); err != nil {
 		t.Fatalf("settings: %v", err)
 	}
-	if b, _ := os.ReadFile(paths.HTTPIncludePath()); !strings.Contains(string(b), "client_max_body_size 7m;") {
+	if b, _ := os.ReadFile(h.paths.HTTPIncludePath()); !strings.Contains(string(b), "client_max_body_size 7m;") {
 		t.Errorf("panel-http.conf = %s", b)
 	}
 
-	// 1.9: delete the container by hand; the next boot restores it.
-	if err := eng.ContainerRemove(bg, nginx.ContainerName, true); err != nil {
-		t.Fatal(err)
-	}
+	// 1.9a: nginx crashes. systemd restarts it with no panel involved.
+	oldPID := nginxMainPID(t)
+	nginxCrash(t)
+	waitFor(t, "systemd to restart nginx", func() bool { return nginxActive() && nginxMainPID(t) != oldPID })
+	waitFor(t, "the site to answer after the crash", func() bool {
+		code, _ := get(t, "a.test")
+		return code == 200
+	})
+
+	// 1.9b: nginx is stopped by hand. The site is down until the next reconcile.
+	nginxStop(t)
 	if code, _ := get(t, "a.test"); code == 200 {
-		t.Fatal("the site still answers after its container was removed")
+		t.Fatal("the site still answers after nginx was stopped")
 	}
-	st2 := rec.Run(bg)
-	if !st2.OK {
+	if st2 := rec.Run(bg); !st2.OK {
 		t.Fatalf("second reconcile: %+v", st2)
 	}
 	waitFor(t, "the site to come back", func() bool {
@@ -177,9 +95,13 @@ func TestRealNginxEndToEnd(t *testing.T) {
 		return code == 200
 	})
 
-	// A third run with everything current writes nothing and reloads once.
+	// A third run with everything current writes nothing and does not restart nginx.
+	pid := nginxMainPID(t)
 	if st3 := rec.Run(bg); !st3.OK {
 		t.Fatalf("third reconcile: %+v", st3)
+	}
+	if nginxMainPID(t) != pid {
+		t.Error("a no-op reconcile restarted nginx")
 	}
 	if code, _ := get(t, "a.test"); code != 200 {
 		t.Errorf("site down after a no-op reconcile: %d", code)

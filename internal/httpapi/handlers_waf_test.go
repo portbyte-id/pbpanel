@@ -4,10 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/waf"
@@ -21,7 +19,7 @@ func newWAFHarness(t *testing.T, available bool) *nginxHarness {
 	paths := nginx.Paths{Root: "/www"}
 	mfs := &memFS{files: map[string][]byte{}, dirs: map[string]bool{}}
 	ap := &memApplier{fs: mfs}
-	svc := &fakeNginx{container: &docker.Container{State: docker.ContainerState{Running: true, Status: "running", StartedAt: time.Unix(1000, 0).UTC()}}}
+	svc := &fakeNginx{status: &nginx.Status{Loaded: true, Active: true, State: "active"}}
 	hist := &fakeHistory{versions: map[string][]confedit.Version{}, content: map[string]string{}}
 
 	engine := waf.New(h.store, paths, func(context.Context) (waf.Availability, error) {

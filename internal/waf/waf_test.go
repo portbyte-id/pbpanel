@@ -182,7 +182,7 @@ func TestRulesFileModesAndParanoia(t *testing.T) {
 			"tx.blocking_paranoia_level=3", "tx.detection_paranoia_level=3",
 			"SecAuditLogFormat JSON",
 			"SecAuditLog /www/panel/logs/sites/a.test.waf-audit.log",
-			"Include " + CRSDir + "/rules/*.conf",
+			"Include " + testPaths.CRSDir() + "/rules/*.conf",
 			"ctl:ruleEngine=Off", // certificate challenges are never inspected
 		} {
 			if !strings.Contains(rules, want) {
@@ -205,7 +205,7 @@ func TestRulesFileExclusionOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := string(RulesFile(testPaths, "a.test", c))
-	include := strings.Index(rules, "Include "+CRSDir)
+	include := strings.Index(rules, "Include "+testPaths.CRSDir())
 	pathEx := strings.Index(rules, "ctl:ruleRemoveById=920420")
 	removeEx := strings.Index(rules, "SecRuleRemoveById 942100")
 	argEx := strings.Index(rules, `SecRuleUpdateTargetById 942200 "!ARGS:password"`)

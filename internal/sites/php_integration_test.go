@@ -7,18 +7,13 @@ import (
 	"errors"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
-	"github.com/portbyte-id/server-panel/internal/images"
-	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
-	"github.com/portbyte-id/server-panel/internal/store"
 )
 
 var phpInfoVersion = regexp.MustCompile(`PHP Version (\d+\.\d+)`)
@@ -44,75 +39,31 @@ func servedVersion(t *testing.T, host string) string {
 func TestRealPHPEndToEnd(t *testing.T) {
 	const verA, verB = "8.3", "8.4"
 
-	eng, err := docker.New(docker.DefaultSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// PHP-FPM still runs in Docker, so the engine is needed for the PHP side too.
+	eng := requireNativeHost(t)
 	bg := context.Background()
-	if _, err := eng.Ping(bg); err != nil {
-		t.Skipf("no Docker Engine: %v", err)
-	}
 	clean := func() {
-		for _, name := range []string{nginx.ContainerName, php.ContainerName(verA), php.ContainerName(verB)} {
+		for _, name := range []string{php.ContainerName(verA), php.ContainerName(verB)} {
 			_ = eng.ContainerRemove(bg, name, true)
 		}
 	}
 	clean()
 	t.Cleanup(clean)
 
-	root, err := os.MkdirTemp("", "panel-php-it-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	for _, d := range []string{"", "panel", "panel/nginx", "panel/nginx/sites", "panel/nginx/includes", "panel/php", "panel/run", "panel/logs", "panel/logs/sites", "panel/history", "services", "services/sites"} {
-		p := filepath.Join(root, d)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	st, err := store.Open(filepath.Join(root, "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-
-	paths := nginx.Paths{Root: root}
-	phpPaths := php.Paths{Root: root}
-	ed, err := confedit.New(confedit.Options{
-		Roots: []string{paths.Dir(), phpPaths.Base()}, HistoryDir: filepath.Join(root, "panel", "history"), Store: st,
+	h := newNativeHost(t, eng, "panel-php-it-", nativeLayout{
+		dirs:  []string{"panel/php", "panel/run"},
+		roots: []string{"panel/php"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	phpPaths := php.Paths{Root: h.root}
 	phpMgr, err := php.New(php.Options{
-		Store: st, Engine: eng, Applier: ed, Paths: phpPaths,
+		Store: h.st, Engine: eng, Applier: h.ed, Paths: phpPaths,
 		Supported: func(context.Context) ([]string, error) { return []string{verA, verB}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
-	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}, PHP: phpMgr})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &Reconciler{
-		Sites: mgr, Global: nginx.NewGlobal(st, ed, live, paths), Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
-		BuildImage: func(ctx context.Context) error {
-			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
-			return err
-		},
-	}
+	mgr := h.manager(t, func(o *Options) { o.PHP = phpMgr })
+	rec := h.reconciler(t, mgr)
 	if st := rec.Run(bg); !st.OK {
 		t.Fatalf("nginx reconcile: %+v", st)
 	}

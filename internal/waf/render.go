@@ -9,13 +9,12 @@ import (
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
-// Where the post-quantum image keeps ModSecurity: the module the nginx build
-// produces, and the OWASP Core Rule Set the Dockerfile unpacks. Both are inside
-// the image, so a rules file refers to them by these paths.
+// ModuleFile is the ModSecurity module every nginx build ships, as `load_module`
+// takes it: relative to the build's own prefix, so a candidate build loads its own
+// module and not the one of the build that serves. The Core Rule Set and the other
+// ModSecurity files live in the build too: see nginx.Paths.ModSecDir and CRSDir.
 const (
-	ModuleFile = "/usr/lib/nginx/modules/ngx_http_modsecurity_module.so"
-	ModSecDir  = "/etc/nginx/modsec"
-	CRSDir     = ModSecDir + "/crs"
+	ModuleFile = "modules/ngx_http_modsecurity_module.so"
 
 	// crsSetupVersion only has to be set: rule 901001 stops the engine when it
 	// is missing, which is how CRS notices a setup file that was never loaded.
@@ -143,7 +142,7 @@ func RulesFile(p nginx.Paths, domain string, c Config) []byte {
 	b.WriteString("SecRequestBodyLimitAction Reject\n")
 	b.WriteString("SecResponseBodyAccess Off\n")
 	b.WriteString("SecTmpDir /tmp/\nSecDataDir /tmp/\n")
-	fmt.Fprintf(&b, "SecUnicodeMapFile %s/unicode.mapping 20127\n", ModSecDir)
+	fmt.Fprintf(&b, "SecUnicodeMapFile %s/unicode.mapping 20127\n", p.ModSecDir())
 
 	// JSON, one event per line: the panel's audit viewer reads it back.
 	b.WriteString("SecAuditEngine RelevantOnly\n")
@@ -187,7 +186,7 @@ func RulesFile(p nginx.Paths, domain string, c Config) []byte {
 		b.WriteString(before.String())
 	}
 
-	fmt.Fprintf(&b, "\nInclude %s/rules/*.conf\n", CRSDir)
+	fmt.Fprintf(&b, "\nInclude %s/rules/*.conf\n", p.CRSDir())
 
 	if after.Len() > 0 {
 		b.WriteString("\n# Exclusions that edit the loaded rules.\n")

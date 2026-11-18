@@ -91,7 +91,7 @@ func newServices(t *testing.T, cmd *fakeCmd, eng *fakeEngine, apps *fakeApps) *S
 	t.Helper()
 	o := ServicesOptions{
 		Cmd:        cmd,
-		Containers: func(context.Context) ([]string, error) { return []string{"panel-nginx", "panel-php-8.4"}, nil },
+		Containers: func(context.Context) ([]string, error) { return []string{"panel-php-8.3", "panel-php-8.4"}, nil },
 	}
 	if eng != nil {
 		o.Engine = eng
@@ -120,11 +120,12 @@ func TestListMapsEveryKind(t *testing.T) {
 			"panel.service":             show("loaded", "active", "running"),
 			"panel-supervisord.service": show("loaded", "failed", "failed"),
 			"panel-firewall.service":    show("loaded", "active", "exited"),
+			"panel-nginx.service":       show("loaded", "active", "running"),
 			"docker.service":            show("not-found", "inactive", "dead"),
 		},
 	}
 	eng := &fakeEngine{containers: map[string]docker.Container{
-		"panel-nginx": running(),
+		"panel-php-8.3": running(),
 		// panel-php-8.4 is not created.
 	}}
 	apps := &fakeApps{list: []AppState{{Name: "blog", State: "RUNNING"}, {Name: "api", State: "FATAL"}, {Name: "x", State: "not loaded"}}}
@@ -137,8 +138,9 @@ func TestListMapsEveryKind(t *testing.T) {
 		"panel":             {KindSystemd, StateRunning},
 		"panel-supervisord": {KindSystemd, StateFailed},
 		"panel-firewall":    {KindSystemd, StateRunning},
+		"panel-nginx":       {KindSystemd, StateRunning},
 		"docker":            {KindSystemd, StateMissing},
-		"panel-nginx":       {KindContainer, StateRunning},
+		"panel-php-8.3":     {KindContainer, StateRunning},
 		"panel-php-8.4":     {KindContainer, StateMissing},
 		"app:blog":          {KindApp, StateRunning},
 		"app:api":           {KindApp, StateFailed},
@@ -163,7 +165,7 @@ func TestListMapsEveryKind(t *testing.T) {
 	}
 	// One `systemctl show` per unit, exact argv.
 	want := []string{"systemctl", "show", "--no-pager", "--property=LoadState,ActiveState,SubState", "panel.service"}
-	if !reflect.DeepEqual(cmd.calls[0], want) || len(cmd.calls) != 4 {
+	if !reflect.DeepEqual(cmd.calls[0], want) || len(cmd.calls) != 5 {
 		t.Errorf("calls = %q", cmd.calls)
 	}
 }
@@ -172,22 +174,22 @@ func TestListContainerStates(t *testing.T) {
 	cmd := &fakeCmd{show: map[string]string{}}
 	eng := &fakeEngine{
 		containers: map[string]docker.Container{
-			"panel-nginx":   {State: docker.ContainerState{Status: "exited", ExitCode: 137}},
+			"panel-php-8.3": {State: docker.ContainerState{Status: "exited", ExitCode: 137}},
 			"panel-php-8.4": {State: docker.ContainerState{Status: "restarting", Running: true, Restarting: true}},
 		},
 	}
 	got := byName(newServices(t, cmd, eng, nil).List(context.Background()))
-	if s := got["panel-nginx"]; s.State != StateFailed || s.Detail != "exited (code 137)" {
+	if s := got["panel-php-8.3"]; s.State != StateFailed || s.Detail != "exited (code 137)" {
 		t.Errorf("nginx = %+v", s)
 	}
 	if s := got["panel-php-8.4"]; s.State != StateStarting {
 		t.Errorf("php = %+v", s)
 	}
 
-	eng.containers["panel-nginx"] = docker.Container{State: docker.ContainerState{Status: "exited"}}
+	eng.containers["panel-php-8.3"] = docker.Container{State: docker.ContainerState{Status: "exited"}}
 	eng.inspectErr = map[string]error{"panel-php-8.4": errors.New("dial unix /var/run/docker.sock: connect: no such file")}
 	got = byName(newServices(t, cmd, eng, nil).List(context.Background()))
-	if s := got["panel-nginx"]; s.State != StateStopped {
+	if s := got["panel-php-8.3"]; s.State != StateStopped {
 		t.Errorf("clean exit = %+v", s)
 	}
 	if s := got["panel-php-8.4"]; s.State != StateUnknown || !strings.Contains(s.Detail, "docker.sock") {
@@ -207,7 +209,7 @@ func TestListToleratesFailures(t *testing.T) {
 		t.Errorf("apps row = %+v", s)
 	}
 	// No engine: no container rows at all.
-	if _, ok := got["panel-nginx"]; ok {
+	if _, ok := got["panel-php-8.3"]; ok {
 		t.Error("container row without an engine")
 	}
 	// An empty `show` (no ActiveState) is unknown, never "stopped".
@@ -282,24 +284,24 @@ func TestControlRejectsOffAllowlist(t *testing.T) {
 func TestControlContainer(t *testing.T) {
 	cmd := &fakeCmd{}
 	eng := &fakeEngine{containers: map[string]docker.Container{
-		"panel-nginx":   running(),
+		"panel-php-8.3": running(),
 		"panel-php-8.4": {State: docker.ContainerState{Status: "exited"}},
 	}}
 	s := newServices(t, cmd, eng, nil)
 	ctx := context.Background()
 
-	if err := s.Control(ctx, "panel-nginx", ActionStop); err != nil {
+	if err := s.Control(ctx, "panel-php-8.3", ActionStop); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(eng.calls, []string{"stop panel-nginx 10s"}) {
+	if !reflect.DeepEqual(eng.calls, []string{"stop panel-php-8.3 10s"}) {
 		t.Fatalf("stop: %q", eng.calls)
 	}
 
 	eng.calls = nil
-	if err := s.Control(ctx, "panel-nginx", ActionRestart); err != nil {
+	if err := s.Control(ctx, "panel-php-8.3", ActionRestart); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(eng.calls, []string{"stop panel-nginx 10s", "start panel-nginx"}) {
+	if !reflect.DeepEqual(eng.calls, []string{"stop panel-php-8.3 10s", "start panel-php-8.3"}) {
 		t.Fatalf("restart running: %q", eng.calls)
 	}
 
@@ -317,7 +319,7 @@ func TestControlContainer(t *testing.T) {
 
 	eng.calls = nil
 	eng.stopErr = errors.New("cannot stop")
-	if err := s.Control(ctx, "panel-nginx", ActionRestart); err == nil || len(eng.calls) != 1 {
+	if err := s.Control(ctx, "panel-php-8.3", ActionRestart); err == nil || len(eng.calls) != 1 {
 		t.Fatalf("restart must not start after a failed stop: err=%v calls=%q", err, eng.calls)
 	}
 	if len(cmd.calls) != 0 {

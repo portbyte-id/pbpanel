@@ -127,6 +127,10 @@ func (l Layout) dirs() []struct {
 		{filepath.Join(l.LogsDir(), "sites"), dirMode{tree, "one directory per site"}},
 		{filepath.Join(l.LogsDir(), "apps"), dirMode{tree, "one directory per app"}},
 		{filepath.Join(l.LogsDir(), "cron"), dirMode{tree, "cron job output"}},
+		// nginx -t needs these before nginx has ever started: its temp directories
+		// live under the cache, and the first reconcile validates the config.
+		{filepath.Join(l.PanelDir(), "cache"), dirMode{tree, "caches the panel keeps"}},
+		{filepath.Join(l.PanelDir(), "cache", "nginx"), dirMode{tree, "nginx temp files (client_temp and the rest)"}},
 		{filepath.Join(l.PanelDir(), "nginx"), dirMode{tree, "generated nginx config"}},
 		{filepath.Join(l.PanelDir(), "nginx", "sites"), dirMode{tree, "one file per site"}},
 		{filepath.Join(l.PanelDir(), "nginx", "includes"), dirMode{tree, "one directory per site"}},

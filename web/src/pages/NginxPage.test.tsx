@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { api, type ImageBuild, type NginxImage } from "@/lib/api"
-import { ImageCard } from "@/pages/NginxPage"
+import { BuildCard } from "@/pages/NginxPage"
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
@@ -53,12 +53,12 @@ function renderCard() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <ImageCard />
+      <BuildCard />
     </QueryClientProvider>,
   )
 }
 
-describe("nginx image card", () => {
+describe("nginx build card", () => {
   beforeEach(() => {
     vi.mocked(api.nginxImage).mockReset()
     vi.mocked(api.updateNginxImage).mockReset()
@@ -94,17 +94,17 @@ describe("nginx image card", () => {
     vi.mocked(api.nginxImage).mockResolvedValue(image({ busy: true }))
     renderCard()
 
-    expect(await screen.findByRole("button", { name: "Update image" })).toBeDisabled()
-    expect(screen.getByText("An image build is running.")).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Rebuild nginx" })).toBeDisabled()
+    expect(screen.getByText("A build is running.")).toBeInTheDocument()
   })
 
-  it("enables Update image when idle and opens the output of the job it starts", async () => {
+  it("enables Rebuild nginx when idle and opens the output of the job it starts", async () => {
     const user = userEvent.setup()
     vi.mocked(api.nginxImage).mockResolvedValue(image())
     vi.mocked(api.updateNginxImage).mockResolvedValue({ id: "job-1", kind: "nginx.image", state: "running" })
     renderCard()
 
-    await user.click(await screen.findByRole("button", { name: "Update image" }))
+    await user.click(await screen.findByRole("button", { name: "Rebuild nginx" }))
     await waitFor(() => expect(api.updateNginxImage).toHaveBeenCalledTimes(1))
     expect(await screen.findByText("job-1")).toBeInTheDocument()
   })
@@ -113,7 +113,7 @@ describe("nginx image card", () => {
     const user = userEvent.setup()
     vi.mocked(api.nginxImage).mockResolvedValueOnce(image())
     const first = renderCard()
-    await screen.findByRole("button", { name: "Update image" })
+    await screen.findByRole("button", { name: "Rebuild nginx" })
     expect(screen.queryByRole("button", { name: "Roll back" })).toBeNull()
     first.unmount()
 
@@ -132,7 +132,7 @@ describe("nginx image card", () => {
     )
     renderCard()
 
-    await screen.findByRole("button", { name: "Update image" })
+    await screen.findByRole("button", { name: "Rebuild nginx" })
     expect(screen.queryByRole("button", { name: "Roll back" })).toBeNull()
   })
 
@@ -140,7 +140,28 @@ describe("nginx image card", () => {
     vi.mocked(api.nginxImage).mockResolvedValue(image({ current: null, builds: [] }))
     renderCard()
 
-    expect(await screen.findByText("No image builds yet.")).toBeInTheDocument()
+    expect(await screen.findByText("No builds yet.")).toBeInTheDocument()
     expect(screen.getByText("No build yet.")).toBeInTheDocument()
+  })
+
+  it("lists nginx builds without an extension column, which only PHP builds have", async () => {
+    const current = build({ id: "current-build", current: true })
+    vi.mocked(api.nginxImage).mockResolvedValue(image({ current, builds: [current] }))
+    renderCard()
+
+    const rows = await screen.findAllByTestId("build-row")
+    expect(rows).toHaveLength(1)
+    expect(screen.queryByText("no extra extensions")).toBeNull()
+    expect(screen.queryByText("Repository")).toBeNull()
+    expect(screen.getByText("Built from")).toBeInTheDocument()
+  })
+
+  it("names the versions without a flavour suffix", async () => {
+    vi.mocked(api.nginxImage).mockResolvedValue(image())
+    renderCard()
+
+    const select = await screen.findByLabelText("nginx version")
+    expect(select).toHaveDisplayValue("1.29 (running)")
+    expect(screen.getByRole("option", { name: "1.30" })).toBeInTheDocument()
   })
 })

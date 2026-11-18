@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
-// Runtime is the nginx container as the reconciler sees it.
+// Runtime is nginx's service as the reconciler sees it.
 type Runtime interface {
-	ImagePresent(ctx context.Context) (bool, error)
-	EnsureContainer(ctx context.Context) (docker.EnsureResult, error)
+	// BuildPresent reports whether a build serves and its files are on disk.
+	BuildPresent(ctx context.Context) (bool, error)
+	// EnsureRunning writes the unit and starts nginx when it is not running.
+	EnsureRunning(ctx context.Context) (nginx.EnsureResult, error)
 }
 
 // Step is one stage of a reconcile and how it ended.
@@ -51,12 +52,11 @@ type Reconciler struct {
 	// Boot validates without reloading: nginx is not running yet when the files
 	// it will start with are written.
 	Boot confedit.Service
-	// Live validates, reloads and health-checks the running container.
+	// Live validates, reloads and health-checks the running nginx.
 	Live    confedit.Service
 	Runtime Runtime
-	// BuildImage builds the derived nginx image when it is missing. It is a
-	// field because a build is a job with visible progress, not a side effect
-	// of reconciling.
+	// BuildImage compiles an nginx build when none serves. It is a field because
+	// a build is a job with visible progress, not a side effect of reconciling.
 	BuildImage func(ctx context.Context) error
 	Logger     *slog.Logger
 
@@ -129,20 +129,21 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 		logf("restored files from an unfinished apply", "paths", recovered)
 	}
 
-	// 2. The image. A missing one is built as a job; reconciling does not pull.
-	present, err := r.Runtime.ImagePresent(ctx)
+	// 2. The build. A missing one is compiled as a job; reconciling does not
+	// download or compile on its own.
+	present, err := r.Runtime.BuildPresent(ctx)
 	if err != nil {
-		return step("image", "", err)
+		return step("build", "", err)
 	}
 	if !present {
 		if r.BuildImage == nil {
-			return step("image", "", fmt.Errorf("no nginx build serves and nothing can build one"))
+			return step("build", "", fmt.Errorf("no nginx build serves and nothing can build one"))
 		}
-		if err := step("image", "building the nginx image", r.BuildImage(ctx)); err != nil {
+		if err := step("build", "compiling nginx", r.BuildImage(ctx)); err != nil {
 			return err
 		}
 	} else {
-		_ = step("image", "the nginx image is present", nil)
+		_ = step("build", "an nginx build is present", nil)
 	}
 
 	// 3. Panel-owned files, from the database. Only files that are missing or
@@ -162,7 +163,7 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 		}
 	} else {
 		// Nothing written, but the raw files may have been edited while the
-		// panel was down; a container started on a broken config would loop.
+		// panel was down; nginx started on a broken config would loop.
 		out, err := r.Boot.Validate(ctx)
 		if err != nil {
 			return step("render", "the configuration on disk is rejected by nginx -t", &outputError{err, out})
@@ -171,20 +172,20 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 	}
 
 	// An operator who stopped nginx from the panel meant it: the files are
-	// current and validated, and the container is left as it was left.
+	// current and validated, and nginx is left as it was left.
 	if s, ok := r.Runtime.(interface{ Stopped(context.Context) bool }); ok && s.Stopped(ctx) {
-		return step("container", "nginx was stopped from the panel and stays stopped; start it there", nil)
+		return step("service", "nginx was stopped from the panel and stays stopped; start it there", nil)
 	}
 
-	// 4. The container.
-	ens, err := r.Runtime.EnsureContainer(ctx)
-	if err := step("container", string(ens.Action)+": "+ens.Reason, err); err != nil {
+	// 4. The service.
+	ens, err := r.Runtime.EnsureRunning(ctx)
+	if err := step("service", string(ens.Action)+": "+ens.Reason, err); err != nil {
 		return err
 	}
 
-	// 5. A container that was already running has not read the files just
-	// written; one that was created or started has.
-	if ens.Action == docker.ActionNone {
+	// 5. An nginx that was already running has not read the files just written;
+	// one that was started has.
+	if ens.Action == nginx.ActionNone {
 		if out, err := r.Live.Validate(ctx); err != nil {
 			return step("reload", "", &outputError{err, out})
 		}
@@ -209,7 +210,7 @@ func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 		files = append(files, confedit.File{Path: r.Sites.p.ConfPath(), Content: b})
 	} else if err != nil {
 		return nil, err
-	} else if up, changed := nginx.UpgradeMainConf(have); changed {
+	} else if up, changed := nginx.UpgradeMainConf(have, r.Sites.p); changed {
 		files = append(files, confedit.File{Path: r.Sites.p.ConfPath(), Content: up})
 	}
 

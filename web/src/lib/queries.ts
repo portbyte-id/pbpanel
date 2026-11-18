@@ -27,6 +27,7 @@ import {
   type UpdateSiteInput,
 } from "@/lib/api"
 import type { CronJobInput } from "@/lib/cron"
+import type { DockerAction } from "@/lib/docker"
 import {
   HISTORY_CAP,
   mergeSnapshots,
@@ -69,6 +70,14 @@ export const queryKeys = {
   sysinfo: ["sysinfo"] as const,
   services: ["services"] as const,
   logSources: ["logs", "sources"] as const,
+  docker: ["docker"] as const,
+  dockerInfo: ["docker", "info"] as const,
+  dockerContainers: ["docker", "containers"] as const,
+  dockerStats: ["docker", "stats"] as const,
+  dockerImages: ["docker", "images"] as const,
+  dockerVolumes: ["docker", "volumes"] as const,
+  dockerProcesses: (id: string) => ["docker", "containers", id, "top"] as const,
+  dockerLogs: (id: string, tail: number) => ["docker", "containers", id, "logs", tail] as const,
   cron: ["cron"] as const,
   cronRuns: (id: number) => ["cron", id, "runs"] as const,
   cronRun: (id: number, runId: number) => ["cron", id, "runs", runId] as const,
@@ -396,7 +405,7 @@ export function useRemovePHP(version: string) {
 }
 
 /**
- * The nginx image. Like the PHP list it is re-read while a build runs, and every
+ * The nginx builds. Like the PHP list it is re-read while a build runs, and every
  * 10 seconds otherwise, so a build started elsewhere shows up here too.
  */
 export function useNginxImage() {
@@ -858,6 +867,101 @@ export function useSiteDetails() {
 
 export function useLogSources() {
   return useQuery({ queryKey: queryKeys.logSources, queryFn: () => api.logSources() })
+}
+
+/* --- Docker -------------------------------------------------------------- */
+
+/** Engine facts and counts. A stopped daemon answers 503, which retrying will not fix. */
+export function useDockerInfo() {
+  return useQuery({
+    queryKey: queryKeys.dockerInfo,
+    queryFn: () => api.dockerInfo(),
+    refetchInterval: 10_000,
+    retry: false,
+  })
+}
+
+export function useDockerContainers() {
+  return useQuery({
+    queryKey: queryKeys.dockerContainers,
+    queryFn: () => api.dockerContainers(),
+    refetchInterval: 5_000,
+    retry: false,
+  })
+}
+
+/** One sample takes about a second on the server, so the monitor polls slower than the list. */
+export function useDockerStats(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.dockerStats,
+    queryFn: () => api.dockerStats(),
+    refetchInterval: 5_000,
+    enabled,
+    retry: false,
+  })
+}
+
+export function useDockerImages() {
+  return useQuery({ queryKey: queryKeys.dockerImages, queryFn: () => api.dockerImages(), retry: false })
+}
+
+export function useDockerVolumes() {
+  return useQuery({ queryKey: queryKeys.dockerVolumes, queryFn: () => api.dockerVolumes(), retry: false })
+}
+
+export function useDockerProcesses(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.dockerProcesses(id ?? ""),
+    queryFn: () => api.dockerProcesses(id ?? ""),
+    enabled: id !== null,
+    refetchInterval: 5_000,
+    retry: false,
+  })
+}
+
+export function useDockerLogs(id: string | null, tail: number) {
+  return useQuery({
+    queryKey: queryKeys.dockerLogs(id ?? "", tail),
+    queryFn: () => api.dockerLogs(id ?? "", tail),
+    enabled: id !== null,
+    refetchInterval: 5_000,
+    retry: false,
+  })
+}
+
+export function useDockerControl() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: string; action: DockerAction }) => api.dockerControl(input.id, input.action),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.docker }),
+  })
+}
+
+export function useDockerRemoveContainer() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Container removed" },
+    mutationFn: (input: { id: string; force: boolean }) => api.dockerRemoveContainer(input.id, input.force),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.docker }),
+  })
+}
+
+export function useDockerRemoveImage() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Image removed" },
+    mutationFn: (id: string) => api.dockerRemoveImage(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.docker }),
+  })
+}
+
+export function useDockerRemoveVolume() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Volume removed" },
+    mutationFn: (name: string) => api.dockerRemoveVolume(name),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.docker }),
+  })
 }
 
 /** The job list polls: `next_run` and `last_run` move without a request from the page. */

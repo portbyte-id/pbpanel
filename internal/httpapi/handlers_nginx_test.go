@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/sites"
 )
@@ -89,22 +88,22 @@ func (a *memApplier) Apply(_ context.Context, ch confedit.Change) (confedit.Resu
 }
 
 type fakeNginx struct {
-	container *docker.Container
-	stateErr  error
+	status   *nginx.Status // nil: the unit does not exist
+	stateErr error
 }
 
 func (f *fakeNginx) Name() string                             { return "nginx" }
 func (f *fakeNginx) Validate(context.Context) (string, error) { return "", nil }
 func (f *fakeNginx) Reload(context.Context) error             { return nil }
 func (f *fakeNginx) Healthy(context.Context) error            { return nil }
-func (f *fakeNginx) State(context.Context) (docker.Container, bool, error) {
+func (f *fakeNginx) State(context.Context) (nginx.Status, bool, error) {
 	if f.stateErr != nil {
-		return docker.Container{}, false, f.stateErr
+		return nginx.Status{}, false, f.stateErr
 	}
-	if f.container == nil {
-		return docker.Container{}, false, nil
+	if f.status == nil {
+		return nginx.Status{}, false, nil
 	}
-	return *f.container, true, nil
+	return *f.status, true, nil
 }
 
 type fakeHistory struct {
@@ -160,7 +159,7 @@ func newNginxHarness(t *testing.T) *nginxHarness {
 	paths := nginx.Paths{Root: "/www"}
 	mfs := &memFS{files: map[string][]byte{}, dirs: map[string]bool{}}
 	ap := &memApplier{fs: mfs}
-	svc := &fakeNginx{container: &docker.Container{State: docker.ContainerState{Running: true, Status: "running", StartedAt: time.Unix(1000, 0).UTC()}}}
+	svc := &fakeNginx{status: &nginx.Status{Loaded: true, Active: true, State: "active", PID: 7}}
 	hist := &fakeHistory{versions: map[string][]confedit.Version{}, content: map[string]string{}}
 
 	mgr, err := sites.New(sites.Options{Store: h.store, Applier: ap, Service: svc, Paths: paths, FS: mfs})
@@ -519,16 +518,20 @@ func TestNginxServiceStatus(t *testing.T) {
 		t.Fatalf("status: %d %v", code, out)
 	}
 
-	h.svc.container = nil
-	_, out = h.call(http.MethodGet, "/api/services/nginx", nil)
-	if c := out["container"].(map[string]any); c["exists"] != false || c["status"] != "missing" {
-		t.Errorf("missing container = %v", c)
+	if c["status"] != "running" {
+		t.Errorf("an active unit reports status %v, want running", c["status"])
 	}
 
-	h.svc.stateErr = errors.New("dial unix /var/run/docker.sock: connect: no such file or directory")
+	h.svc.status = nil
+	_, out = h.call(http.MethodGet, "/api/services/nginx", nil)
+	if c := out["container"].(map[string]any); c["exists"] != false || c["status"] != "missing" {
+		t.Errorf("missing unit = %v", c)
+	}
+
+	h.svc.stateErr = errors.New("systemctl: Failed to connect to bus: /run/dbus/system_bus_socket: No such file or directory")
 	rec := h.do(http.MethodGet, "/api/services/nginx", h.s.cookie, h.s.csrf, nil)
-	if rec.Code != 200 || strings.Contains(rec.Body.String(), "docker.sock") {
-		t.Errorf("docker down: %d %s (the socket path belongs in the log)", rec.Code, rec.Body.String())
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "dbus") {
+		t.Errorf("systemd down: %d %s (the cause belongs in the log)", rec.Code, rec.Body.String())
 	}
 }
 

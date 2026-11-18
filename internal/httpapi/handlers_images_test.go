@@ -9,6 +9,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/jobs"
+	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
 // waitJob waits for the job a 202 answer carries, as pull does.
@@ -128,14 +129,14 @@ type fakeNginxContainer struct {
 	stopped bool
 }
 
-func (f *fakeNginxContainer) Start(context.Context) (docker.EnsureResult, error) {
+func (f *fakeNginxContainer) Start(context.Context) (nginx.EnsureResult, error) {
 	f.ran <- "start"
-	return docker.EnsureResult{}, nil
+	return nginx.EnsureResult{}, nil
 }
 func (f *fakeNginxContainer) Stop(context.Context) error { f.ran <- "stop"; return nil }
-func (f *fakeNginxContainer) Restart(context.Context) (docker.EnsureResult, error) {
+func (f *fakeNginxContainer) Restart(context.Context) (nginx.EnsureResult, error) {
 	f.ran <- "restart"
-	return docker.EnsureResult{}, nil
+	return nginx.EnsureResult{}, nil
 }
 func (f *fakeNginxContainer) Stopped(context.Context) bool { return f.stopped }
 
@@ -177,7 +178,7 @@ func TestNginxImageShowsCurrentAndPrevious(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET nginx image = %d %v", code, out)
 	}
-	if out["base"] != "nginx:1.29" || out["repo"] != "panel/nginx:1.29" {
+	if out["base"] != nginx.BuildSource || out["repo"] != "panel/nginx:1.29" {
 		t.Errorf("base/repo = %v / %v", out["base"], out["repo"])
 	}
 	if cur := out["current"].(map[string]any); cur["id"] != "20261117120001-aaaaaa" {

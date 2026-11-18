@@ -66,7 +66,7 @@ func newPHPHarness(t *testing.T, eng phpEngine) *nginxHarness {
 	paths := nginx.Paths{Root: "/www"}
 	mfs := &memFS{files: map[string][]byte{}, dirs: map[string]bool{}}
 	ap := &memApplier{fs: mfs}
-	svc := &fakeNginx{container: &docker.Container{State: docker.ContainerState{Running: true, Status: "running"}}}
+	svc := &fakeNginx{status: &nginx.Status{Loaded: true, Active: true, State: "active"}}
 	hist := &fakeHistory{versions: map[string][]confedit.Version{}, content: map[string]string{}}
 
 	phpMgr, err := php.New(php.Options{

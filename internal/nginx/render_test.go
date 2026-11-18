@@ -225,25 +225,32 @@ func TestHasIncludeLine(t *testing.T) {
 	}
 }
 
-func TestSpecFollowsTheMountRule(t *testing.T) {
-	spec := Spec(testPaths, "panel/nginx:1.29-test")
-	if err := spec.Validate(testPaths.Root); err != nil {
-		t.Fatalf("the nginx spec breaks the mount rule: %v", err)
+// A native nginx has no /etc/nginx: every file the generated configuration
+// includes comes from the build or from the panel's own tree.
+func TestRenderedConfigNamesNoContainerPaths(t *testing.T) {
+	main, err := testPaths.RenderMainConf()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if spec.Hash() != Spec(testPaths, "panel/nginx:1.29-test").Hash() {
-		t.Error("the spec hash is not stable")
+	php, err := testPaths.RenderPHP("/www/panel/run/php-8.3.sock")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cfg := spec.Config(); cfg.NetworkMode != "host" {
-		t.Errorf("network mode = %q, want host", cfg.NetworkMode)
-	}
-}
-
-func TestDockerfileAddsWWWAtTheFixedID(t *testing.T) {
-	d := string(Dockerfile())
-	for _, want := range []string{"FROM " + BaseImage, "groupadd -g 1500 www", "useradd -u 1500 -g www"} {
-		if !strings.Contains(d, want) {
-			t.Errorf("Dockerfile lacks %q:\n%s", want, d)
+	for name, got := range map[string]string{"nginx.conf": string(main), "php.conf": string(php)} {
+		if strings.Contains(got, "/etc/nginx") || strings.Contains(got, "/dev/stderr") {
+			t.Errorf("%s names a path that only existed in the container image:\n%s", name, got)
 		}
+	}
+	for _, want := range []string{
+		"include " + testPaths.MimeTypes() + ";",
+		"error_log " + testPaths.MainErrorLog() + " warn;",
+	} {
+		if !strings.Contains(string(main), want) {
+			t.Errorf("nginx.conf lacks %q", want)
+		}
+	}
+	if !strings.Contains(string(php), "include "+testPaths.FastCGIParams()+";") {
+		t.Errorf("php.conf does not include the build's fastcgi_params:\n%s", php)
 	}
 }
 

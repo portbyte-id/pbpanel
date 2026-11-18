@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
@@ -692,15 +691,15 @@ func TestUpdateRejectsBadInput(t *testing.T) {
 
 type fakeRuntime struct {
 	present  bool
-	action   docker.Action
+	action   nginx.EnsureAction
 	ensured  int
 	ensureEr error
 }
 
-func (f *fakeRuntime) ImagePresent(context.Context) (bool, error) { return f.present, nil }
-func (f *fakeRuntime) EnsureContainer(context.Context) (docker.EnsureResult, error) {
+func (f *fakeRuntime) BuildPresent(context.Context) (bool, error) { return f.present, nil }
+func (f *fakeRuntime) EnsureRunning(context.Context) (nginx.EnsureResult, error) {
 	f.ensured++
-	return docker.EnsureResult{Action: f.action, Reason: "test"}, f.ensureEr
+	return nginx.EnsureResult{Action: f.action, Reason: "test"}, f.ensureEr
 }
 
 func newReconciler(t *testing.T, r *rig, rt *fakeRuntime) (*Reconciler, *fakeSvc) {
@@ -721,7 +720,7 @@ func TestReconcileRestoresMissingContainerAndFiles(t *testing.T) {
 	// A fresh host after a restore: no nginx.conf, no panel files, and the names
 	// block of the site file damaged, next to a line of the operator's.
 	const siteConf = "/www/panel/nginx/sites/a.test.conf"
-	rt := &fakeRuntime{present: true, action: docker.ActionCreate}
+	rt := &fakeRuntime{present: true, action: nginx.ActionStart}
 	rec, live := newReconciler(t, r, rt)
 	cur, _ := r.fs.ReadFile(siteConf)
 	damaged := strings.Replace(string(cur), "server_name a.test www.a.test;", "server_name stale.test;", 1)
@@ -733,7 +732,7 @@ func TestReconcileRestoresMissingContainerAndFiles(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 	if rt.ensured != 1 {
-		t.Errorf("EnsureContainer calls = %d, want 1", rt.ensured)
+		t.Errorf("EnsureRunning calls = %d, want 1", rt.ensured)
 	}
 	for _, p := range []string{
 		"/www/panel/nginx/nginx.conf", "/www/panel/nginx/panel-main.conf", "/www/panel/nginx/panel-http.conf",
@@ -762,7 +761,7 @@ func TestReconcileReloadsARunningContainerOnce(t *testing.T) {
 	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindStatic}); err != nil {
 		t.Fatal(err)
 	}
-	rt := &fakeRuntime{present: true, action: docker.ActionNone}
+	rt := &fakeRuntime{present: true, action: nginx.ActionNone}
 	rec, live := newReconciler(t, r, rt)
 
 	if st := rec.Run(ctx); !st.OK { // first run writes the missing global files
@@ -789,7 +788,7 @@ func TestReconcileDoesNotStartNginxOnABrokenConfig(t *testing.T) {
 	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindStatic}); err != nil {
 		t.Fatal(err)
 	}
-	rt := &fakeRuntime{present: true, action: docker.ActionCreate}
+	rt := &fakeRuntime{present: true, action: nginx.ActionStart}
 	rec, _ := newReconciler(t, r, rt)
 	rec.Run(ctx) // writes everything
 
@@ -807,7 +806,7 @@ func TestReconcileDoesNotStartNginxOnABrokenConfig(t *testing.T) {
 
 func TestReconcileBuildsAMissingImageAndStopsWhenItCannot(t *testing.T) {
 	r := newRig(t)
-	rt := &fakeRuntime{present: false, action: docker.ActionCreate}
+	rt := &fakeRuntime{present: false, action: nginx.ActionStart}
 	rec, _ := newReconciler(t, r, rt)
 
 	if st := rec.Run(ctx); st.OK || rt.ensured != 0 {
@@ -823,7 +822,7 @@ func TestReconcileBuildsAMissingImageAndStopsWhenItCannot(t *testing.T) {
 
 func TestReconcileRecoversBeforeAnythingElse(t *testing.T) {
 	r := newRig(t)
-	rt := &fakeRuntime{present: true, action: docker.ActionNone}
+	rt := &fakeRuntime{present: true, action: nginx.ActionNone}
 	rec, _ := newReconciler(t, r, rt)
 	rec.Recover = func() ([]string, error) { return []string{"/www/panel/nginx/nginx.conf"}, nil }
 	st := rec.Run(ctx)

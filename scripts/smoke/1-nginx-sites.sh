@@ -18,9 +18,9 @@
 #   SMOKE_SKIP_REBOOT=1  skip the reboot step
 #
 # Independent oracle: "does the site serve" is answered by curl from the
-# workstation to port 80 with a Host header, "is nginx up" by `docker inspect`
-# on the VM, and "is the file unchanged" by sha256sum on the VM. None of them
-# is a panel endpoint.
+# workstation to port 80 with a Host header, "is nginx up" by `systemctl` on
+# the VM, and "is the file unchanged" by sha256sum on the VM. None of them is a
+# panel endpoint.
 #
 # Needs port 80 of the VM reachable from the workstation, and python3 on the VM
 # (it is the throwaway backend of the proxy site).
@@ -64,8 +64,10 @@ both_serve() {
 
 last_body() { cat "$SMOKE_TMP/last.json" 2>/dev/null; }
 
+NGINX=/www/panel/nginx/current/sbin/nginx
+
 nginx_running() {
-	[ "$(vm "docker inspect -f '{{.State.Running}}' panel-nginx" 2>/dev/null)" = true ]
+	[ "$(vm 'systemctl is-active panel-nginx' 2>/dev/null)" = active ]
 }
 
 panel_healthy() {
@@ -88,15 +90,17 @@ fi
 assert_not_equal "an admin password is available" "" "$pass"
 assert_http "login" 200 "$(api_login "$host" "$port" "$SMOKE_USER" "$pass")"
 
-# The first start builds the nginx image, which takes a while on a fresh VM.
-wait_until 300 "the nginx container to run" nginx_running
-assert_equal "docker reports panel-nginx running" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' panel-nginx" 2>/dev/null)"
-assert_equal "the container uses the host network (docker inspect)" host \
-	"$(vm "docker inspect -f '{{.HostConfig.NetworkMode}}' panel-nginx" 2>/dev/null)"
+# The first start compiles nginx in a builder container, which takes several
+# minutes on a fresh VM.
+wait_until 900 "nginx to run" nginx_running
+assert_equal "systemd reports panel-nginx active" active "$(vm 'systemctl is-active panel-nginx' 2>/dev/null)"
+assert_contains "the master runs a binary from a build directory (readlink /proc/PID/exe)" "/www/panel/nginx/versions/" \
+	"$(vm 'readlink /proc/$(systemctl show -p MainPID --value panel-nginx)/exe' 2>/dev/null)"
+assert_equal "no panel-nginx container is left (docker ps)" none \
+	"$(vm "docker ps -a --filter name=^panel-nginx\$ --format '{{.Names}}' | grep -q . && echo present || echo none" 2>/dev/null)"
 assert_http "GET /api/services/nginx" 200 "$(api_call GET "$host" "$port" /api/services/nginx)"
 assert_contains "the boot reconcile finished without an error" '"ok":true' "$(last_body)"
-assert_http "a host no site claims gets no answer" 000 "$(site_status unclaimed.test)"
+assert_http "a host no site claims gets the landing page" 200 "$(site_status unclaimed.test)"
 
 # --- 2. a backend for the proxy site ------------------------------------------
 step 2 "start a throwaway backend on 127.0.0.1:$BACKEND_PORT (a unit, so it survives the reboot)"
@@ -129,13 +133,12 @@ assert_contains "the error class is config_rejected" '"error":"config_rejected"'
 assert_contains "the response carries nginx -t's own message" 'unknown directive' "$(last_body)"
 assert_contains "nginx names the file it rejected" "$SITE_FILE" "$(last_body)"
 assert_equal "the file on disk is byte-for-byte what it was (sha256sum)" "$before" "$(vm "sha256sum < $SITE_FILE" 2>/dev/null)"
-assert_equal "nginx is still running (docker inspect)" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' panel-nginx" 2>/dev/null)"
+assert_equal "nginx is still running (systemctl)" active "$(vm 'systemctl is-active panel-nginx' 2>/dev/null)"
 both_serve "after the rejected edit"
 
 assert_http "PUT a broken nginx.conf" 422 \
 	"$(api_call PUT "$host" "$port" /api/nginx/conf '{"content":"bogus_directive on;\n"}')"
-assert_ok "nginx.conf still passes nginx -t on the VM" vm "docker exec panel-nginx nginx -t -c /www/panel/nginx/nginx.conf"
+assert_ok "nginx.conf still passes nginx -t on the VM" vm "$NGINX -t -c /www/panel/nginx/nginx.conf"
 both_serve "after the rejected nginx.conf"
 
 # --- 5. detached and regenerate -----------------------------------------------
@@ -170,18 +173,25 @@ assert_http "PUT /api/nginx/settings" 200 \
 	"$(api_call PUT "$host" "$port" /api/nginx/settings '{"worker_processes":"auto","client_max_body_size":"77m","gzip":true,"keepalive_timeout":65,"client_body_timeout":60,"client_header_timeout":60,"send_timeout":60,"server_tokens":false}')"
 assert_contains "panel-http.conf carries the value (cat on the VM)" "client_max_body_size 77m;" \
 	"$(vm "cat /www/panel/nginx/panel-http.conf" 2>/dev/null)"
-assert_contains "nginx loaded it (nginx -T in the container)" "client_max_body_size 77m;" \
-	"$(vm "docker exec panel-nginx nginx -T -c /www/panel/nginx/nginx.conf 2>/dev/null" 2>/dev/null)"
+assert_contains "nginx loaded it (nginx -T on the VM)" "client_max_body_size 77m;" \
+	"$(vm "$NGINX -T -c /www/panel/nginx/nginx.conf 2>/dev/null" 2>/dev/null)"
 
-# --- 7. the container removed by hand ------------------------------------------
-step 7 "delete the nginx container by hand: a daemon restart restores it"
-vm "docker rm -f panel-nginx >/dev/null"
-assert_http "the site is down while the container is gone" 000 "$(site_status "$STATIC")"
+# --- 7. nginx killed, then stopped by hand --------------------------------------
+step 7 "kill nginx: systemd brings it back; stop it by hand: a daemon restart restores it"
+old_pid=$(vm 'systemctl show -p MainPID --value panel-nginx' 2>/dev/null)
+vm 'kill -9 $(systemctl show -p MainPID --value panel-nginx)'
+wait_until 30 "systemd to restart nginx" nginx_running
+new_pid=$(vm 'systemctl show -p MainPID --value panel-nginx' 2>/dev/null)
+assert_not_equal "the master is a new process after the kill" "$old_pid" "$new_pid"
+wait_until 30 "the static site to answer after the kill" sh -c "curl -s --max-time 5 -H 'Host: $STATIC' http://$host/ | grep -q '$STATIC_MARK'"
+both_serve "after nginx was killed"
+
+vm "systemctl stop panel-nginx"
+assert_http "the site is down while nginx is stopped" 000 "$(site_status "$STATIC")"
 vm "systemctl restart panel"
 wait_until 60 "the panel to answer" panel_healthy
-wait_until 120 "the nginx container to run again" nginx_running
-assert_equal "docker reports panel-nginx running again" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' panel-nginx" 2>/dev/null)"
+wait_until 120 "nginx to run again" nginx_running
+assert_equal "systemd reports panel-nginx active again" active "$(vm 'systemctl is-active panel-nginx' 2>/dev/null)"
 wait_until 30 "the static site to answer" sh -c "curl -s --max-time 5 -H 'Host: $STATIC' http://$host/ | grep -q '$STATIC_MARK'"
 both_serve "after the daemon restart"
 
@@ -198,7 +208,7 @@ else
 	fi
 	wait_until 300 "ssh to come back" vm true
 	wait_until 120 "the panel to answer" panel_healthy
-	wait_until 120 "the nginx container to run" nginx_running
+	wait_until 120 "nginx to run" nginx_running
 	wait_until 60 "the static site to answer" sh -c "curl -s --max-time 5 -H 'Host: $STATIC' http://$host/ | grep -q '$STATIC_MARK'"
 	wait_until 60 "the proxy site to answer" sh -c "curl -s --max-time 5 -H 'Host: $PROXY' http://$host/ | grep -q '$PROXY_MARK'"
 	both_serve "after the reboot"
@@ -215,7 +225,7 @@ assert_http "the static site no longer answers" 000 "$(site_status "$STATIC")"
 assert_http "the proxy site no longer answers" 000 "$(site_status "$PROXY")"
 assert_equal "the site file is gone (test -e)" gone "$(vm "test -e $SITE_FILE && echo present || echo gone" 2>/dev/null)"
 assert_equal "the web root is kept (test -d)" kept "$(vm "test -d /www/services/sites/$STATIC && echo kept || echo gone" 2>/dev/null)"
-assert_ok "the remaining config passes nginx -t on the VM" vm "docker exec panel-nginx nginx -t -c /www/panel/nginx/nginx.conf"
+assert_ok "the remaining config passes nginx -t on the VM" vm "$NGINX -t -c /www/panel/nginx/nginx.conf"
 
 # The backend unit and the kept web root are this script's own; remove them.
 vm "systemctl disable --now $BACKEND_UNIT >/dev/null 2>&1; rm -f /etc/systemd/system/$BACKEND_UNIT; systemctl daemon-reload; rm -rf $BACKEND_DIR /www/services/sites/$STATIC"

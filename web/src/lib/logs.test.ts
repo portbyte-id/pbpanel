@@ -22,9 +22,9 @@ describe("groupSources", () => {
       src("site:b.test:access", "b.test access", "site"),
       src("panel:audit", "Audit", "audit"),
       src("site:a.test:access", "a.test access", "site"),
-      src("docker:panel-nginx", "nginx container", "docker"),
+      src("nginx:error", "nginx errors", "nginx"),
     ])
-    expect(groups.map((g) => g.kind)).toEqual(["audit", "docker", "site"])
+    expect(groups.map((g) => g.kind)).toEqual(["audit", "nginx", "site"])
     expect(groups[2]?.sources.map((s) => s.label)).toEqual(["a.test access", "b.test access"])
     expect(groups[2]?.label).toBe("Sites")
   })

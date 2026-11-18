@@ -32,13 +32,29 @@ const legacyLandingLocation = `        location / {
             return 444;
         }`
 
-// UpgradeMainConf swaps the old generated catch-all block for the landing page. The
-// bool reports whether it changed anything. nginx.conf is operator-owned, so a file
-// that no longer contains the old block byte-for-byte is returned untouched.
-func UpgradeMainConf(content []byte) ([]byte, bool) {
-	old := []byte(legacyLandingLocation)
-	if bytes.Count(content, old) != 1 {
-		return content, false
+// legacyMimeInclude is where the container image kept the media type table. A
+// native build has no /etc/nginx; the table ships inside the build.
+const legacyMimeInclude = "include /etc/nginx/mime.types;"
+
+// legacyErrorLog sent nginx's own errors to the container's stderr, which Docker
+// kept. A native nginx writes them to a file the log viewer reads.
+const legacyErrorLog = "error_log /dev/stderr warn;"
+
+// UpgradeMainConf brings a generated nginx.conf up to date: the old catch-all block
+// becomes the landing page, the media type table is read from the build instead
+// of the container image's /etc/nginx, and nginx's own errors go to a log file. The
+// bool reports whether it changed anything. nginx.conf is operator-owned, so a part
+// that no longer matches byte-for-byte is left as it is.
+func UpgradeMainConf(content []byte, p Paths) ([]byte, bool) {
+	out, changed := content, false
+	if old := []byte(legacyErrorLog); bytes.Count(out, old) == 1 {
+		out, changed = bytes.Replace(out, old, []byte("error_log "+p.MainErrorLog()+" warn;"), 1), true
 	}
-	return bytes.Replace(content, old, []byte(landingLocation), 1), true
+	if old := []byte(legacyLandingLocation); bytes.Count(out, old) == 1 {
+		out, changed = bytes.Replace(out, old, []byte(landingLocation), 1), true
+	}
+	if old := []byte(legacyMimeInclude); bytes.Count(out, old) == 1 {
+		out, changed = bytes.Replace(out, old, []byte("include "+p.MimeTypes()+";"), 1), true
+	}
+	return out, changed
 }

@@ -130,7 +130,9 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 
 	m.Logs = newLogRegistry(eng, reg, layout, appsSvc, siteList, m.cron, cronLogs, logger)
 
-	var hooks []logs.ReopenHook
+	// nginx reopens its logs on USR1, through its unit; PHP-FPM's containers take
+	// the same signal through Docker.
+	hooks := []logs.ReopenHook{reopenNginxLogs(nginx.ExecRunner{})}
 	if eng != nil {
 		hooks = append(hooks, reopenContainerLogs(eng, func(ctx context.Context) []string { return panelContainers(ctx, reg) }))
 	}
@@ -185,10 +187,10 @@ func (m *m7Stack) start(ctx context.Context, logger *slog.Logger) (wait func(gra
 	}
 }
 
-// panelContainers names the containers the panel owns: nginx, and one per PHP
-// version in the catalogue setting. A setting that cannot be read leaves nginx.
+// panelContainers names the containers the panel owns: one per PHP version in
+// the catalogue setting. nginx is not one of them: it runs natively under systemd.
 func panelContainers(ctx context.Context, reg *settings.Registry) []string {
-	names := []string{nginx.ContainerName}
+	var names []string
 	csv, err := reg.Str(ctx, settings.KeyPHPVersions)
 	if err != nil {
 		return names
@@ -251,6 +253,10 @@ func newLogRegistry(eng *docker.Client, reg *settings.Registry, layout install.L
 	}))
 
 	root := filepath.ToSlash(layout.Root)
+	// nginx's own errors, as a file: under systemd it has no container to ask for them.
+	if err := r.Add(logs.Source{ID: "nginx:error", Label: "nginx errors", Kind: logs.KindNginx, Path: nginx.Paths{Root: root}.MainErrorLog()}); err != nil {
+		logger.Error("log source not registered", "id", "nginx:error", "error", err)
+	}
 	if siteList != nil {
 		r.AddProvider(logs.ProviderFunc(func(ctx context.Context) ([]logs.Source, error) {
 			return siteLogSources(ctx, siteList, nginx.Paths{Root: root}, php.Paths{Root: root})
@@ -411,6 +417,29 @@ func (p *pipeCloser) Close() error {
 type containerSignaler interface {
 	ContainerInspect(ctx context.Context, id string) (docker.Container, error)
 	ContainerKill(ctx context.Context, id, signal string) error
+}
+
+// reopenNginxLogs makes a running nginx reopen its log files, which is what a
+// rotation needs after it has moved them. The unit forwards the signal to the
+// master. nginx not running has no file open, so a failure to signal it is not an
+// error.
+func reopenNginxLogs(run nginx.Runner) logs.ReopenHook {
+	return func(ctx context.Context) error {
+		st, err := nginxStatus(ctx, run)
+		if err != nil || !st {
+			return nil
+		}
+		if out, err := run.Run(ctx, "systemctl", "kill", "-s", "USR1", nginx.UnitName); err != nil {
+			return fmt.Errorf("nginx: reopen logs: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+}
+
+// nginxStatus reports whether the nginx unit is active.
+func nginxStatus(ctx context.Context, run nginx.Runner) (bool, error) {
+	out, err := run.Run(ctx, "systemctl", "is-active", nginx.UnitName)
+	return strings.TrimSpace(string(out)) == "active", err
 }
 
 // reopenContainerLogs signals every running panel container with USR1, which

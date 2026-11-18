@@ -15,34 +15,6 @@ func rootedPaths(t *testing.T, roots ...string) Paths {
 	return Paths{Root: "/www", Roots: h}
 }
 
-func TestSpecMountsAllowedRootsReadOnly(t *testing.T) {
-	spec := Spec(rootedPaths(t, "/www/wwwroot"), "img")
-	found := false
-	for _, m := range spec.Mounts {
-		if m.Path == "/www/wwwroot" {
-			found = true
-			if !m.ReadOnly {
-				t.Fatal("an allowed web root is mounted read-write into nginx")
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("no mount for the allowed root: %+v", spec.Mounts)
-	}
-	if err := spec.Validate("/www"); err != nil {
-		t.Fatalf("the spec with an allowed root does not validate: %v", err)
-	}
-}
-
-func TestSpecWithoutRootsMountsNoOtherFolder(t *testing.T) {
-	spec := Spec(Paths{Root: "/www"}, "img")
-	for _, m := range spec.Mounts {
-		if m.Path == "/www/wwwroot" {
-			t.Fatalf("a root nobody allowed is mounted: %+v", m)
-		}
-	}
-}
-
 func TestServesRootAcceptsSitesTreeAndAllowedFolders(t *testing.T) {
 	p := rootedPaths(t, "/www/wwwroot")
 	for root, want := range map[string]bool{
