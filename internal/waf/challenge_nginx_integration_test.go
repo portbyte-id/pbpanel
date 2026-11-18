@@ -55,12 +55,15 @@ func TestChallengeAgainstRealNginx(t *testing.T) {
 	p := nginx.Paths{Root: root}
 	e := guardedEngine(t)
 	e.p = p
+	// Google's published test keys: the Turnstile branch needs the panel's keys.
+	e.WithTurnstile(func(context.Context) (string, string, error) {
+		return "1x00000000000000000000AA", "1x0000000000000000000000000000000AA", nil
+	})
 
 	for _, provider := range []guard.Provider{guard.ProviderPoW, guard.ProviderTurnstile} {
 		t.Run(string(provider), func(t *testing.T) {
 			c, err := challengeConfig(func(ch *Challenge) {
 				ch.Provider, ch.Difficulty = provider, 10
-				ch.TurnstileSiteKey = "1x00000000000000000000AA"
 				ch.ExemptPaths = []string{"/api/", "/hook/"}
 			}).Normalize()
 			if err != nil {

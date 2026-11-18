@@ -145,7 +145,7 @@ func serve(ctx context.Context, _ []string) error {
 	if nginxStack != nil {
 		siteList = nginxStack.Sites
 	}
-	m7 := newM7(st, reg, layout, appsSvc, siteList, logger)
+	m7 := newM7(st, reg, layout, appsSvc, siteList, cronBuiltins(tlsSvc), logger)
 
 	// Traffic and WAF events come from the logs nginx writes; the collector only
 	// reads them, so it runs whether or not nginx is up.
@@ -212,7 +212,6 @@ func serve(ctx context.Context, _ []string) error {
 	go sweepSessions(ctx, authSvc, logger)
 	waitM7 := m7.start(ctx, logger)
 	if tlsSvc != nil {
-		tlsSvc.start(ctx)
 		tlsSvc.startAutoIP(ctx, reg, auditW, logger)
 	}
 

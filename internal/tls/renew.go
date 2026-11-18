@@ -20,13 +20,9 @@ const (
 
 const (
 	defaultDaysBefore = 30
-	defaultInterval   = 24 * time.Hour
 	// failureBackoff is how long a certificate that failed to renew is left
 	// alone by RunOnce, so a broken DNS record does not hit the CA every run.
 	failureBackoff = 6 * time.Hour
-	// firstRunDelay is the wait between Start and the first scan, long enough
-	// for the listener, nginx and the settings to be up.
-	firstRunDelay  = time.Minute
 	maxErrorLength = 500
 	// applyFailedPrefix marks a row whose certificate was issued and stored but
 	// not installed. The next run installs it without ordering again.
@@ -57,8 +53,6 @@ type RenewerOptions struct {
 	Email func() string
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
-	// Interval is the time between scans; 0 means 24 h.
-	Interval time.Duration
 	// Audit is called for every renewed, failed or backoff-skipped attempt; may be nil.
 	Audit func(ctx context.Context, domain, outcome, detail string)
 	// Logger may be nil.
@@ -82,29 +76,24 @@ type Renewer struct {
 	daysBefore func() int
 	email      func() string
 	now        func() time.Time
-	interval   time.Duration
 	audit      func(context.Context, string, string, string)
 	log        *slog.Logger
 
-	firstDelay time.Duration
-	sem        chan struct{}
+	sem chan struct{}
 }
 
-// NewRenewer returns a Renewer.
+// NewRenewer returns a Renewer. It does not schedule itself: the cron service runs
+// RunOnce as its built-in `tls.renew` job.
 func NewRenewer(o RenewerOptions) (*Renewer, error) {
 	if o.Store == nil || o.Issuer == nil {
 		return nil, errors.New("tls: renewer needs a Store and an Issuer")
 	}
 	r := &Renewer{
 		st: o.Store, issuer: o.Issuer, apply: o.Apply, daysBefore: o.DaysBefore, email: o.Email,
-		now: o.Now, interval: o.Interval, audit: o.Audit, log: o.Logger,
-		firstDelay: firstRunDelay, sem: make(chan struct{}, 1),
+		now: o.Now, audit: o.Audit, log: o.Logger, sem: make(chan struct{}, 1),
 	}
 	if r.now == nil {
 		r.now = time.Now
-	}
-	if r.interval <= 0 {
-		r.interval = defaultInterval
 	}
 	if r.log == nil {
 		r.log = slog.Default()
@@ -330,31 +319,4 @@ func trimError(s string) string {
 		cut--
 	}
 	return s[:cut] + "..."
-}
-
-// Start scans once shortly after it is called and then every Interval, until
-// ctx ends. A panic in a scan is logged and the loop carries on.
-func (r *Renewer) Start(ctx context.Context) {
-	timer := time.NewTimer(r.firstDelay)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		r.runGuarded(ctx)
-		timer.Reset(r.interval)
-	}
-}
-
-func (r *Renewer) runGuarded(ctx context.Context) {
-	defer func() {
-		if p := recover(); p != nil {
-			r.log.Error("tls: renewal run panicked", "panic", fmt.Sprint(p))
-		}
-	}()
-	if _, err := r.RunOnce(ctx); err != nil && ctx.Err() == nil {
-		r.log.Error("tls: renewal run", "err", err)
-	}
 }

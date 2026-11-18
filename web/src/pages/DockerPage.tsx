@@ -79,7 +79,7 @@ export function DockerPage() {
   const d = info.data
 
   return (
-    <div className="flex max-w-6xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <dl
         className="border-border grid grid-cols-2 gap-x-6 gap-y-2 rounded-md border p-3 text-sm sm:grid-cols-3 lg:grid-cols-6"
         aria-label="Docker engine"
@@ -294,7 +294,7 @@ function DetailsDialog({ container, onClose }: { container: DockerContainer | nu
   const running = container?.state === "running"
   return (
     <Dialog open={container !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{container?.name}</DialogTitle>
           <DialogDescription className="font-mono text-xs">{container?.image}</DialogDescription>

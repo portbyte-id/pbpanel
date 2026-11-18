@@ -7,7 +7,7 @@ import { ServicesSection } from "@/pages/DashboardPage"
  */
 export function ServicesPage() {
   return (
-    <div className="max-w-5xl">
+    <div>
       <ServicesSection filters />
     </div>
   )

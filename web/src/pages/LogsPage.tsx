@@ -40,7 +40,7 @@ const LIMIT_CHOICES = [100, 1000, 5000, 10_000]
  */
 export function LogsPage() {
   return (
-    <Tabs defaultValue="files" className="max-w-7xl">
+    <Tabs defaultValue="files">
       <TabsList aria-label="Log views">
         <TabsTrigger value="files">Log files</TabsTrigger>
         <TabsTrigger value="waf">WAF audit</TabsTrigger>
@@ -68,7 +68,7 @@ function LogFiles() {
   }
 
   return (
-    <div className="grid max-w-7xl gap-6 lg:grid-cols-[21rem_minmax(0,1fr)]">
+    <div className="grid gap-6 lg:grid-cols-[21rem_minmax(0,1fr)]">
       <SourceList sources={sources.data} selected={selected} onSelect={setSelected} />
       <div className="min-w-0">
         {selected === null ? (

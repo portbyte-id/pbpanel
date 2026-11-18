@@ -20,6 +20,9 @@ const (
 	// KindShell writes ScriptBody to a file under the panel data directory and
 	// runs `/bin/sh <file>`. Shell jobs are refused unless the caller allows them.
 	KindShell Kind = "shell"
+	// KindBuiltin runs a Go function the panel registered under Job.Builtin. Only
+	// the panel creates these, when it seeds its default jobs; the API refuses them.
+	KindBuiltin Kind = "builtin"
 )
 
 // Overlap says what happens when a job fires while its previous run is still going.
@@ -73,11 +76,14 @@ const (
 
 // Errors the API layer maps to statuses.
 var (
-	ErrNotFound         = errors.New("cron: job not found")
-	ErrDuplicate        = errors.New("cron: a job with that name already exists")
-	ErrInvalid          = errors.New("cron: invalid job")
-	ErrShellNotAllowed  = errors.New("cron: shell jobs are not enabled")
-	ErrRunNotFound      = errors.New("cron: run not found")
+	ErrNotFound        = errors.New("cron: job not found")
+	ErrDuplicate       = errors.New("cron: a job with that name already exists")
+	ErrInvalid         = errors.New("cron: invalid job")
+	ErrShellNotAllowed = errors.New("cron: shell jobs are not enabled")
+	ErrRunNotFound     = errors.New("cron: run not found")
+	// ErrBuiltin refuses a change to a built-in job that the panel does not allow:
+	// deleting it, or changing its kind, account or command.
+	ErrBuiltin          = errors.New("cron: built-in job")
 	errShellScriptDirNA = errors.New("cron: no script directory is configured for shell jobs")
 )
 
@@ -87,10 +93,12 @@ func invalid(format string, a ...any) error {
 
 // Job is a stored job definition.
 type Job struct {
-	ID         int64    `json:"id"`
-	Name       string   `json:"name"`
-	Schedule   string   `json:"schedule"`
-	Kind       Kind     `json:"kind"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Kind     Kind   `json:"kind"`
+	// Builtin names the registered function a built-in job runs; empty otherwise.
+	Builtin    string   `json:"builtin,omitempty"`
 	User       string   `json:"user"`
 	Argv       []string `json:"argv,omitempty"`
 	ScriptPath string   `json:"script_path,omitempty"`
@@ -226,6 +234,8 @@ func normalize(spec JobSpec, defaultRetention int) (JobSpec, error) {
 		if len(spec.Argv) != 0 || spec.ScriptPath != "" {
 			return spec, invalid("a shell job takes neither argv nor script_path")
 		}
+	case KindBuiltin:
+		return spec, invalid("kind %q is reserved for the panel's own jobs", KindBuiltin)
 	default:
 		return spec, invalid("kind %q must be argv, script or shell", spec.Kind)
 	}
@@ -235,7 +245,12 @@ func normalize(spec JobSpec, defaultRetention int) (JobSpec, error) {
 			return spec, err
 		}
 	}
+	return normalizePolicy(spec, defaultRetention)
+}
 
+// normalizePolicy fills and checks the fields every kind of job has: how long a
+// run may take, what happens on overlap, and how many runs are kept.
+func normalizePolicy(spec JobSpec, defaultRetention int) (JobSpec, error) {
 	if spec.TimeoutSeconds == 0 {
 		spec.TimeoutSeconds = int(DefaultTimeout / time.Second)
 	}

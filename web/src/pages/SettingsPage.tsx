@@ -88,7 +88,7 @@ export function SettingsPage() {
   const activeTab = tab ?? data?.groups[0]?.name ?? PANEL_CERT_TAB
 
   return (
-    <div className="flex max-w-3xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       {(
         <Tabs value={activeTab} onValueChange={setTab} className="gap-3">
           <TabsList className="flex-wrap">

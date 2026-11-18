@@ -19,7 +19,6 @@ import (
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
-	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -36,22 +35,13 @@ func wafAvailability(built bool) waf.Availability {
 	return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
 }
 
-// guardKeys builds the challenge page's keyring and the box that seals Turnstile
-// secrets, both from data/secret.key.
-func guardKeys(layout install.Layout) (*guard.Keyring, *secretbox.Box, error) {
+// guardKeys builds the challenge page's keyring from data/secret.key.
+func guardKeys(layout install.Layout) (*guard.Keyring, error) {
 	master, err := os.ReadFile(layout.SecretKeyPath())
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the secret key: %w", err)
+		return nil, fmt.Errorf("reading the secret key: %w", err)
 	}
-	keys, err := guard.NewKeyring(master)
-	if err != nil {
-		return nil, nil, err
-	}
-	box, err := secretbox.New(master)
-	if err != nil {
-		return nil, nil, err
-	}
-	return keys, box, nil
+	return guard.NewKeyring(master)
 }
 
 // serveGuard answers the challenge page over the unix socket nginx proxies
@@ -175,10 +165,10 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	// The challenge page signs its cookies with keys derived from secret.key.
 	// Without the file the rest of the firewall still works.
 	var guardHandler *guard.Handler
-	if keys, box, err := guardKeys(layout); err != nil {
+	if keys, err := guardKeys(layout); err != nil {
 		logger.Warn("the challenge page is not available", "error", err)
 	} else {
-		wafEngine.WithGuard(keys, box)
+		wafEngine.WithGuard(keys)
 		guardHandler = guard.NewHandler(keys, wafEngine.GuardSettings, nil, logger)
 	}
 	mgr, err := sites.New(sites.Options{

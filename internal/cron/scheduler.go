@@ -254,13 +254,33 @@ func (s *Service) runJob(ctx context.Context, job Job, runID int64) finish {
 		return f
 	}
 
-	acct, err := s.lookup(job.User)
-	if err != nil {
-		return fail("user %q: %v", job.User, err)
-	}
-	cmd, err := s.command(job, acct)
-	if err != nil {
-		return fail("%v", err)
+	// launch starts the job's work and returns its exit code. A process goes through
+	// the executor; a built-in runs in this process.
+	var launch func(ctx context.Context, out io.Writer) (int, error)
+	if job.Kind == KindBuiltin {
+		fn := s.builtins[job.Builtin]
+		if fn == nil {
+			return fail("built-in %q is not registered", job.Builtin)
+		}
+		launch = func(ctx context.Context, out io.Writer) (int, error) {
+			if err := runBuiltin(ctx, fn, out); err != nil {
+				return 1, err
+			}
+			return 0, nil
+		}
+	} else {
+		acct, err := s.lookup(job.User)
+		if err != nil {
+			return fail("user %q: %v", job.User, err)
+		}
+		cmd, err := s.command(job, acct)
+		if err != nil {
+			return fail("%v", err)
+		}
+		launch = func(ctx context.Context, out io.Writer) (int, error) {
+			cmd.Output = out
+			return s.exec.Run(ctx, cmd)
+		}
 	}
 
 	tail := &tailBuffer{max: s.tailBytes}
@@ -287,7 +307,6 @@ func (s *Service) runJob(ctx context.Context, job Job, runID int64) finish {
 		out = io.MultiWriter(capped, tail)
 		defer func() { _ = logFile.Close() }()
 	}
-	cmd.Output = out
 
 	// The timeout runs on the injected clock so tests can trigger it without waiting.
 	tctx, tcancel := context.WithCancel(ctx)
@@ -304,7 +323,7 @@ func (s *Service) runJob(ctx context.Context, job Job, runID int64) finish {
 		}
 	}()
 
-	code, err := s.exec.Run(tctx, cmd)
+	code, err := launch(tctx, out)
 
 	f.exitCode = code
 	switch {

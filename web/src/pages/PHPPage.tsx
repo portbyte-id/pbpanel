@@ -88,7 +88,7 @@ export function PHPPage() {
   const failedSteps = data.reconcile.filter((s) => !s.ok)
 
   return (
-    <div className="flex max-w-4xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       {failedSteps.length > 0 && (
         <div role="alert" className="border-destructive/40 bg-destructive/5 rounded-md border p-3">
           <p className="text-destructive text-sm font-medium">

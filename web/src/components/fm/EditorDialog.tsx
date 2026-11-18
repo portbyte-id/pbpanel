@@ -826,7 +826,7 @@ export function EditorDialog({
       </DialogContent>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Editor settings</DialogTitle>
             <DialogDescription>These are kept in this browser.</DialogDescription>
@@ -867,7 +867,7 @@ export function EditorDialog({
       </Dialog>
 
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Shortcuts</DialogTitle>
             <DialogDescription>Inside the editor.</DialogDescription>

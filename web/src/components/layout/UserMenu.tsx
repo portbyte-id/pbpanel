@@ -55,7 +55,7 @@ export function UserMenu({ username }: { username: string }) {
       </button>
 
       <Dialog open={accountOpen} onOpenChange={setAccountOpen}>
-        <DialogContent className="sm:max-w-xs">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>{username}</DialogTitle>
             <DialogDescription>Signed in to this panel.</DialogDescription>

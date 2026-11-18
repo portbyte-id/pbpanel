@@ -13,15 +13,26 @@ import (
 
 // Groups shown on the Settings page, in this order.
 const (
-	groupPanel   = "Panel"
-	groupSites   = "Sites"
-	groupLogin   = "Login"
-	groupSession = "Session"
-	groupPHP     = "PHP"
-	groupFiles   = "Files"
-	groupTLS     = "TLS"
-	groupCron    = "Cron"
-	groupLogs    = "Logs"
+	groupPanel    = "Panel"
+	groupSites    = "Sites"
+	groupLogin    = "Login"
+	groupSession  = "Session"
+	groupPHP      = "PHP"
+	groupFiles    = "Files"
+	groupTLS      = "TLS"
+	groupFirewall = "Firewall"
+	groupCron     = "Cron"
+	groupLogs     = "Logs"
+)
+
+// Firewall settings. The Turnstile keys are shared by every site whose challenge
+// page uses Turnstile; the site key is public and the secret is checked on each
+// visitor's token, so both are read on every request.
+const (
+	// KeyWAFTurnstileSiteKey is the Turnstile site key the challenge page loads.
+	KeyWAFTurnstileSiteKey = "waf.turnstile.site_key"
+	// KeyWAFTurnstileSecret is the Turnstile secret key tokens are checked with.
+	KeyWAFTurnstileSecret = "waf.turnstile.secret"
 )
 
 // Cron and log settings (development plan M7).
@@ -339,6 +350,27 @@ func defaultKeys() []key {
 				Description: "When this host has a public IPv4 address on one of its own interfaces (not behind NAT), request an IP-address certificate for the panel from the ACME directory and keep it renewed. It never replaces a certificate you uploaded or one issued for a host name. Port 80 must be reachable from the internet.",
 				Group:       groupTLS,
 			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyWAFTurnstileSiteKey,
+				Type:        TypeString,
+				Optional:    true,
+				Description: "Cloudflare Turnstile site key the challenge page of every site that uses Turnstile loads. Leave empty until a site uses Turnstile. Changes apply to the next visitor, with no reload.",
+				Group:       groupFirewall,
+			},
+			check: validateOptionalTurnstileSiteKey,
+		},
+		{
+			meta: Meta{
+				Name:        KeyWAFTurnstileSecret,
+				Type:        TypeString,
+				Optional:    true,
+				Secret:      true,
+				Description: "Cloudflare Turnstile secret key the panel checks each visitor's token with. Read on every check, so a change needs no reload.",
+				Group:       groupFirewall,
+			},
+			check: validateOptionalTurnstileSecret,
 		},
 		{
 			meta: Meta{

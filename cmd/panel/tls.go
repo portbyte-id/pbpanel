@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/audit"
+	"github.com/portbyte-id/server-panel/internal/cron"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/secretbox"
@@ -115,8 +117,41 @@ func newTLS(st *store.Store, reg *settings.Registry, layout install.Layout, audi
 // state is the sites model's view of the certificate store.
 func (t *tlsStack) state() sites.TLSState { return tlsState{st: t.Store, root: t.root} }
 
-// start runs the daily renewal scan until ctx ends.
-func (t *tlsStack) start(ctx context.Context) { go t.Renewer.Start(ctx) }
+// cronBuiltins are the functions the cron service's built-in jobs run. The renewal
+// is registered even on a host without a certificate store, so its job still
+// shows on the Cron page and each run says why it failed.
+func cronBuiltins(t *tlsStack) map[string]cron.BuiltinFunc {
+	return map[string]cron.BuiltinFunc{cron.BuiltinSSLRenew: t.renewBuiltin}
+}
+
+// renewBuiltin is the cron built-in `tls.renew`: one renewal scan, with a line per
+// certificate in the run's output. A certificate that failed to renew fails the
+// run; the others were still renewed before it did.
+func (t *tlsStack) renewBuiltin(ctx context.Context, out io.Writer) error {
+	if t == nil || t.Renewer == nil {
+		return errors.New("the certificate store is not available; see the daemon log")
+	}
+	outcomes, err := t.Renewer.RunOnce(ctx)
+	counts := make(map[string]int)
+	for _, o := range outcomes {
+		counts[o.Result]++
+		line := o.Domain + ": " + o.Result
+		if o.Error != "" {
+			line += ": " + o.Error
+		}
+		_, _ = fmt.Fprintln(out, line)
+	}
+	_, _ = fmt.Fprintf(out, "%d checked: %d renewed, %d failed, %d skipped, %d not due\n",
+		len(outcomes), counts[tls.OutcomeRenewed], counts[tls.OutcomeFailed],
+		counts[tls.OutcomeSkipped], counts[tls.OutcomeNotDue])
+	if err != nil {
+		return err
+	}
+	if n := counts[tls.OutcomeFailed]; n > 0 {
+		return fmt.Errorf("%d certificate(s) failed to renew", n)
+	}
+	return nil
+}
 
 const (
 	// autoIPFirstDelay lets the listener and nginx come up before the first

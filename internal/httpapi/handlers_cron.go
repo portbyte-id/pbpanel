@@ -63,6 +63,8 @@ func (s *server) cronFail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, cron.ErrDuplicate):
 		writeJSON(w, http.StatusConflict, errorEnvelope{Error: errConflict,
 			Detail: "a job with that name already exists", Field: "name"})
+	case errors.Is(err, cron.ErrBuiltin):
+		writeJSON(w, http.StatusConflict, errorEnvelope{Error: errConflict, Detail: err.Error()})
 	case errors.Is(err, cron.ErrShellNotAllowed):
 		writeError(w, http.StatusForbidden, errShellNotAllowed,
 			"shell jobs are turned off; enable cron.allow_shell in Settings to use them")

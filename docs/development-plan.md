@@ -636,7 +636,7 @@ has not run because it needs a public VM, a Cloudflare zone and Let's Encrypt st
 | 6.3 | done, real nginx 1.29 | The redirect is a server-level `if` chain in `tls.conf`; the ACME path is exempt. The nginx container mounts only `ssl/sites` and `ssl/acme-webroot`, read-only, never `ssl/` (panel key, ACME account key). |
 | 6.4 | done, Pebble | HTTP-01 through lego's webroot provider, with a pre-flight that never reaches the CA on failure. Passes against a real Pebble in WSL Docker. |
 | 6.5 | done, Pebble | DNS-01 wildcard passes against Pebble. The Cloudflare client is a direct v4 client (no process env) and is tested only against an httptest fake. |
-| 6.6 | done | Daily job, 30-day window, 6 h backoff after a failure. `MarkNotApplied` lets a failed install be retried without ordering again. |
+| 6.6 | done | Renewal scan, 30-day window, 6 h backoff after a failure. `MarkNotApplied` lets a failed install be retried without ordering again. Since M7 the scan is the cron built-in `ssl-renew` (daily 03:17), not a separate loop. |
 | 6.7 | done | `CertReloader`: swap on success only, `.prev` kept for one rollback, startup recovery from a half-written pair. The panel hostname issued by ACME is recorded in `ssl/panel-cert-domain`. |
 | 6.8 | done | 13 routes under `/api/sites/{domain}/tls`, `/api/tls/*`, `/api/panel/cert*`; TLS tab and `/tls` page. 202 vitest. |
 | 6.9 | written, not run | See below. |

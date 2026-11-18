@@ -89,9 +89,8 @@ const (
 	MaxClearanceMinutes     = 7 * 24 * 60
 	DefaultClearanceMinutes = 60
 
-	maxSiteKey = 128
-	// maxSecret bounds the stored value, which is the sealed form of the key.
-	maxSecret = 1024
+	// MaxTurnstileKey bounds a Turnstile site key or secret key.
+	MaxTurnstileKey = 128
 )
 
 // Challenge is the page a visitor has to pass before the site opens: a
@@ -103,14 +102,7 @@ type Challenge struct {
 	// Each extra bit doubles the average work: 16 takes well under a second.
 	Difficulty int `json:"difficulty"`
 	// ClearanceMinutes is how long a visitor who passed is let through.
-	ClearanceMinutes int    `json:"clearance_minutes"`
-	TurnstileSiteKey string `json:"turnstile_site_key"`
-	// TurnstileSecret is write-only over the API: a request sets it, an empty
-	// one keeps the stored key, and a response never carries it. In the
-	// database it is sealed with the panel's secret key.
-	TurnstileSecret string `json:"turnstile_secret,omitempty"`
-	// TurnstileSecretSet tells the UI a key is stored.
-	TurnstileSecretSet bool `json:"turnstile_secret_set"`
+	ClearanceMinutes int `json:"clearance_minutes"`
 	// ExemptPaths are path prefixes that are never challenged: APIs, webhooks,
 	// feeds, anything a program and not a browser requests.
 	ExemptPaths []string `json:"exempt_paths"`
@@ -174,9 +166,8 @@ func (c Config) IsDefault() bool {
 		len(c.PathBlocklist) == 0 && len(c.IPRules.Allow) == 0 && len(c.IPRules.Deny) == 0
 }
 
-// normalizeChallenge validates the challenge. It does not check that a
-// Turnstile secret is present: that is known only once the stored one is
-// merged in, which the sites layer does.
+// normalizeChallenge validates the challenge. The Turnstile keys are global
+// panel settings, so a site's challenge has nothing to check about them.
 func normalizeChallenge(ch Challenge) (Challenge, error) {
 	def := DefaultChallenge()
 	switch ch.Provider {
@@ -198,18 +189,6 @@ func normalizeChallenge(ch Challenge) (Challenge, error) {
 	if ch.ClearanceMinutes < MinClearanceMinutes || ch.ClearanceMinutes > MaxClearanceMinutes {
 		return Challenge{}, invalid("challenge.clearance_minutes", "must be between %d and %d", MinClearanceMinutes, MaxClearanceMinutes)
 	}
-	ch.TurnstileSiteKey = strings.TrimSpace(ch.TurnstileSiteKey)
-	if ch.TurnstileSiteKey != "" && !validKey(ch.TurnstileSiteKey, maxSiteKey) {
-		return Challenge{}, invalid("challenge.turnstile_site_key", "must be 1-%d letters, digits, _ or -", maxSiteKey)
-	}
-	if ch.Enabled && ch.Provider == guard.ProviderTurnstile && ch.TurnstileSiteKey == "" {
-		return Challenge{}, invalid("challenge.turnstile_site_key", "is required for Turnstile")
-	}
-	ch.TurnstileSecret = strings.TrimSpace(ch.TurnstileSecret)
-	if len(ch.TurnstileSecret) > maxSecret {
-		return Challenge{}, invalid("challenge.turnstile_secret", "is too long")
-	}
-
 	paths := make([]string, 0, len(ch.ExemptPaths))
 	seen := map[string]bool{}
 	for _, p := range ch.ExemptPaths {
@@ -253,8 +232,11 @@ func validKey(s string, max int) bool {
 	return true
 }
 
-// ValidTurnstileSecret reports whether a plain secret key looks like one.
-func ValidTurnstileSecret(s string) bool { return validKey(s, maxSiteKey) }
+// ValidTurnstileSiteKey reports whether s is shaped like a Turnstile site key.
+func ValidTurnstileSiteKey(s string) bool { return validKey(s, MaxTurnstileKey) }
+
+// ValidTurnstileSecret reports whether s is shaped like a Turnstile secret key.
+func ValidTurnstileSecret(s string) bool { return validKey(s, MaxTurnstileKey) }
 
 // Normalize validates c and returns its canonical form: lists are never nil,
 // entries are trimmed and de-duplicated, addresses are written as masked

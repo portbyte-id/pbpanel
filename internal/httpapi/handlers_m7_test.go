@@ -742,6 +742,7 @@ func TestCronErrorMapping(t *testing.T) {
 		{"duplicate", cron.ErrDuplicate, 409, errConflict, "name"},
 		{"invalid", fmt.Errorf("%w: schedule: want 5 fields", cron.ErrInvalid), 400, errInvalidInput, ""},
 		{"shell off", cron.ErrShellNotAllowed, 403, errShellNotAllowed, ""},
+		{"built-in", fmt.Errorf("%w: ssl-renew is part of the panel", cron.ErrBuiltin), 409, errConflict, ""},
 		{"missing", cron.ErrNotFound, 404, errNotFound, ""},
 		{"internal", errors.New("sql: /var/lib/secret.db locked"), 500, errInternal, ""},
 	} {

@@ -26,8 +26,10 @@ type Settings struct {
 	Clearance time.Duration
 	// CookieName is the cookie the site's secure_link line reads.
 	CookieName string
-	// TurnstileSecret is the plain Turnstile secret key.
-	TurnstileSecret string
+	// TurnstileSiteKey and TurnstileSecret are the panel's Turnstile keys, read
+	// for each request. They are empty when Settings does not have them.
+	TurnstileSiteKey string
+	TurnstileSecret  string
 }
 
 // Lookup returns a site's settings, and false for a site that has no challenge.
@@ -41,6 +43,13 @@ type Verifier interface {
 // maxVerifyBody bounds what a browser posts back. A Turnstile token is at most
 // 2048 characters.
 const maxVerifyBody = 8 << 10
+
+// Shown to a visitor when a Turnstile site cannot be checked because the panel
+// lacks one of its keys. The fix is in Settings, so the text says so.
+const (
+	errTurnstileKeyUnset    = "the Turnstile site key is not set; an administrator must set it under Settings > Firewall"
+	errTurnstileSecretUnset = "the Turnstile secret key is not set; an administrator must set it under Settings > Firewall"
+)
 
 // Handler answers the requests nginx passes on from the challenge page.
 type Handler struct {
@@ -110,9 +119,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token := newPuzzle(h.keys.puzzleKey(domain), ip, ua, s.Difficulty, h.now(), hex.EncodeToString(rnd[:]))
 		writeJSON(w, http.StatusOK, map[string]any{"challenge": token, "difficulty": s.Difficulty})
 
+	case ConfigPath:
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, problem{"use GET"})
+			return
+		}
+		if s.Provider != ProviderTurnstile {
+			writeJSON(w, http.StatusNotFound, problem{"this site does not use Turnstile"})
+			return
+		}
+		if s.TurnstileSiteKey == "" {
+			writeJSON(w, http.StatusServiceUnavailable, problem{errTurnstileKeyUnset})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"sitekey": s.TurnstileSiteKey})
+
 	case VerifyPath:
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, problem{"use POST"})
+			return
+		}
+		if s.Provider == ProviderTurnstile && s.TurnstileSecret == "" {
+			writeJSON(w, http.StatusServiceUnavailable, problem{errTurnstileSecretUnset})
 			return
 		}
 		var body struct {

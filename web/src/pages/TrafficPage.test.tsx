@@ -129,7 +129,8 @@ describe("pollWhileVisible", () => {
 })
 
 describe("TrafficPage", () => {
-  it("shows the totals, the chart, the tables and the per-site WAF mode", async () => {
+  it("shows the totals, the chart, the sites and the top lists under their tabs", async () => {
+    const user = userEvent.setup()
     renderPage()
 
     const label = await screen.findByText("Requests per second now")
@@ -142,18 +143,22 @@ describe("TrafficPage", () => {
     // The data behind the chart is a table as well.
     expect(screen.getByRole("table", { name: /Requests per 10 seconds by status class/ })).toBeInTheDocument()
 
-    expect(within(screen.getByRole("region", { name: "Top client IPs" })).getByText("203.0.113.9")).toBeInTheDocument()
-    expect(within(screen.getByRole("region", { name: "Top paths" })).getByText("/wp-login.php")).toBeInTheDocument()
-    expect(within(screen.getByRole("region", { name: "User agents" })).getByText("curl/8.5")).toBeInTheDocument()
-
     const sitesTable = await screen.findByRole("table", { name: "Traffic per site" })
     const rowA = within(sitesTable).getByRole("row", { name: /a\.test/ })
     expect(within(rowA).getByText(/Blocking · level 2/)).toBeInTheDocument()
     const rowB = within(sitesTable).getByRole("row", { name: /b\.test/ })
     expect(within(rowB).getByText("Off")).toBeInTheDocument()
+
+    // The top lists are behind their own tab, so they are not in the Overview.
+    expect(screen.queryByRole("region", { name: "Top client IPs" })).not.toBeInTheDocument()
+    await user.click(screen.getByRole("tab", { name: "Top lists" }))
+    expect(within(screen.getByRole("region", { name: "Top client IPs" })).getByText("203.0.113.9")).toBeInTheDocument()
+    expect(within(screen.getByRole("region", { name: "Top paths" })).getByText("/wp-login.php")).toBeInTheDocument()
+    expect(within(screen.getByRole("region", { name: "User agents" })).getByText("curl/8.5")).toBeInTheDocument()
   })
 
-  it("shows the protection posture, firewall activity and response mix", async () => {
+  it("shows the protection posture above the tabs, and the response mix and firewall activity under theirs", async () => {
+    const user = userEvent.setup()
     renderPage()
 
     const posture = await screen.findByRole("region", { name: "Protection" })
@@ -161,22 +166,25 @@ describe("TrafficPage", () => {
     expect(posture).toHaveTextContent("Blocking · 1")
     expect(posture).toHaveTextContent("Rate limit · 1")
 
-    const fw = await screen.findByRole("region", { name: "Firewall activity" })
-    expect(await within(fw).findByText("SQL Injection Attack")).toBeInTheDocument()
-    expect(within(fw).getByText("942100")).toBeInTheDocument()
-    expect(fw).toHaveTextContent("4 blocked")
-    expect(fw).toHaveTextContent("3 detected only")
-
     const mix = screen.getByRole("region", { name: "Response mix" })
     expect(mix).toHaveTextContent("2xx success")
     expect(mix).toHaveTextContent("11,000")
     // The tile comes first; the sites table has a column of the same name.
     expect(screen.getAllByText("Error rate")[0].closest("div")).toHaveTextContent("8.5%")
+
+    await user.click(screen.getByRole("tab", { name: "Firewall" }))
+    const fw = await screen.findByRole("region", { name: "Firewall activity" })
+    expect(await within(fw).findByText("SQL Injection Attack")).toBeInTheDocument()
+    expect(within(fw).getByText("942100")).toBeInTheDocument()
+    expect(fw).toHaveTextContent("4 blocked")
+    expect(fw).toHaveTextContent("3 detected only")
   })
 
   it("keeps the page working when the firewall audit is unavailable", async () => {
+    const user = userEvent.setup()
     vi.mocked(api.wafEventSummary).mockRejectedValue(new ApiError(503, "unavailable", "no audit log"))
     renderPage()
+    await user.click(screen.getByRole("tab", { name: "Firewall" }))
     expect(await screen.findByText(/firewall audit is not available/)).toBeInTheDocument()
     expect(screen.getByText("12.3k")).toBeInTheDocument()
   })
@@ -225,6 +233,7 @@ describe("TrafficPage", () => {
     const user = userEvent.setup()
     vi.useFakeTimers({ shouldAdvanceTime: true })
     renderPage()
+    await user.click(screen.getByRole("tab", { name: "Live requests" }))
 
     const feed = await screen.findByRole("table", { name: /Most recent requests/ })
     expect(within(feed).getAllByRole("row")).toHaveLength(3) // header + 2
@@ -251,6 +260,7 @@ describe("TrafficPage", () => {
   it("sends the feed filters to the server", async () => {
     const user = userEvent.setup()
     renderPage()
+    await user.click(screen.getByRole("tab", { name: "Live requests" }))
     await screen.findByRole("table", { name: /Most recent requests/ })
 
     await user.selectOptions(screen.getByLabelText("Status"), "4xx")

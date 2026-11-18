@@ -65,7 +65,7 @@ export function AppsPage() {
   const act = (name: string, action: AppAction) => control.mutate({ name, action })
 
   return (
-    <div className="flex max-w-6xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-4">
         <p className="text-muted-foreground max-w-2xl text-sm">
           Programs that run in the background under supervisord. They keep running when the panel

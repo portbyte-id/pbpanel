@@ -7,21 +7,15 @@ import (
 	"testing"
 
 	"github.com/portbyte-id/server-panel/internal/guard"
-	"github.com/portbyte-id/server-panel/internal/secretbox"
 )
 
 func guardedEngine(t *testing.T) *Engine {
 	t.Helper()
-	master := []byte("0123456789abcdef0123456789abcdef")
-	keys, err := guard.NewKeyring(master)
+	keys, err := guard.NewKeyring([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := secretbox.New(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return New(nil, testPaths, nil).WithGuard(keys, box)
+	return New(nil, testPaths, nil).WithGuard(keys)
 }
 
 func challengeConfig(mutate func(*Challenge)) Config {
@@ -54,8 +48,6 @@ func TestChallengeNormalize(t *testing.T) {
 		"difficulty low":    func(ch *Challenge) { ch.Difficulty = 4 },
 		"difficulty high":   func(ch *Challenge) { ch.Difficulty = 30 },
 		"clearance":         func(ch *Challenge) { ch.ClearanceMinutes = 1 },
-		"turnstile no key":  func(ch *Challenge) { ch.Provider = guard.ProviderTurnstile },
-		"site key quote":    func(ch *Challenge) { ch.Provider, ch.TurnstileSiteKey = guard.ProviderTurnstile, `0x"; return 200;` },
 		"exempt whole site": func(ch *Challenge) { ch.ExemptPaths = []string{"/"} },
 		"exempt brace":      func(ch *Challenge) { ch.ExemptPaths = []string{"/a{b"} },
 		"exempt ip":         func(ch *Challenge) { ch.ExemptIPs = []string{"nope"} },
@@ -168,20 +160,33 @@ func TestChallengeWithoutKeys(t *testing.T) {
 	}
 }
 
-func TestTurnstileSecretSealing(t *testing.T) {
+// TestTurnstileNeedsGlobalKeys: a site can only use Turnstile while the panel has
+// both keys, and the keys are read when the site is checked, not when it is saved.
+func TestTurnstileNeedsGlobalKeys(t *testing.T) {
 	e := guardedEngine(t)
-	sealed, err := e.SealTurnstileSecret("a.test", "0xSECRET")
-	if err != nil {
-		t.Fatal(err)
+	c := challengeConfig(func(ch *Challenge) { ch.Provider = guard.ProviderTurnstile })
+	ctx := context.Background()
+
+	if err := e.Check(ctx, c); !errors.Is(err, ErrNoTurnstile) {
+		t.Fatalf("no Turnstile source: %v", err)
 	}
-	if strings.Contains(sealed, "0xSECRET") {
-		t.Fatal("the secret is stored in the clear")
+	var siteKey, secret string
+	e.WithTurnstile(func(context.Context) (string, string, error) { return siteKey, secret, nil })
+	if err := e.Check(ctx, c); !errors.Is(err, ErrNoTurnstile) {
+		t.Fatalf("no keys set: %v", err)
 	}
-	if _, err := e.box.Open(sealed, turnstileAAD("b.test")); err == nil {
-		t.Fatal("a secret sealed for one site opened for another")
+	siteKey = "0xSITE"
+	if err := e.Check(ctx, c); !errors.Is(err, ErrNoTurnstile) {
+		t.Fatalf("site key without a secret: %v", err)
 	}
-	plain, err := e.box.Open(sealed, turnstileAAD("a.test"))
-	if err != nil || string(plain) != "0xSECRET" {
-		t.Fatalf("open: %q %v", plain, err)
+	secret = "0xSECRET"
+	if err := e.Check(ctx, c); err != nil {
+		t.Fatalf("both keys set: %v", err)
+	}
+	if ready, err := e.TurnstileReady(ctx); err != nil || !ready {
+		t.Fatalf("TurnstileReady = %v %v", ready, err)
+	}
+	if err := e.Check(ctx, challengeConfig(nil)); err != nil {
+		t.Fatalf("a proof-of-work site needs no Turnstile keys: %v", err)
 	}
 }
