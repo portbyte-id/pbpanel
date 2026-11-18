@@ -21,6 +21,23 @@ export interface WafExclusion {
   note: string
 }
 
+export type ChallengeProvider = "pow" | "turnstile"
+
+/** The page a visitor passes before the site opens. */
+export interface WafChallenge {
+  enabled: boolean
+  provider: ChallengeProvider
+  /** Leading zero bits the proof of work needs. */
+  difficulty: number
+  clearance_minutes: number
+  turnstile_site_key: string
+  /** Write-only: sent to set a new key, never returned. Empty keeps the stored one. */
+  turnstile_secret?: string
+  turnstile_secret_set: boolean
+  exempt_paths: string[]
+  exempt_ips: string[]
+}
+
 export interface WafConfig {
   mode: WafMode
   paranoia: 1 | 2 | 3 | 4
@@ -28,6 +45,7 @@ export interface WafConfig {
   path_blocklist: string[]
   ip_rules: { allow: string[]; deny: string[] }
   exclusions: WafExclusion[]
+  challenge: WafChallenge
 }
 
 export interface WafSiteStatus {
@@ -36,6 +54,8 @@ export interface WafSiteStatus {
   reason: string
   attached: boolean
   crs_version: string
+  /** The challenge needs the panel's secret key. */
+  challenge_available?: boolean
 }
 
 export interface WafSiteResponse {
@@ -52,6 +72,8 @@ export interface WafOverviewSite {
   path_blocklist: number
   ip_rules: number
   exclusions: number
+  /** The challenge provider, or "" when the challenge is off. */
+  challenge?: ChallengeProvider | ""
 }
 
 export interface WafOverview {
@@ -199,6 +221,16 @@ export const DEFAULT_WAF_CONFIG: WafConfig = {
   path_blocklist: [],
   ip_rules: { allow: [], deny: [] },
   exclusions: [],
+  challenge: {
+    enabled: false,
+    provider: "pow",
+    difficulty: 16,
+    clearance_minutes: 60,
+    turnstile_site_key: "",
+    turnstile_secret_set: false,
+    exempt_paths: [],
+    exempt_ips: [],
+  },
 }
 
 /** Server limits, mirrored so the form can refuse before a request. */
@@ -208,7 +240,32 @@ export const WAF_LIMITS = {
   exclusions: 200,
   note: 200,
   maxRuleId: 9_999_999,
+  minDifficulty: 8,
+  maxDifficulty: 24,
 } as const
+
+const TURNSTILE_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/
+
+export function isValidTurnstileKey(k: string): boolean {
+  return TURNSTILE_KEY_RE.test(k)
+}
+
+/** The proof-of-work levels offered, with a rough time on a phone. */
+export const DIFFICULTY_OPTIONS: { value: number; label: string }[] = [
+  { value: 12, label: "Light (12): instant" },
+  { value: 16, label: "Normal (16): under a second" },
+  { value: 18, label: "Firm (18): about a second" },
+  { value: 20, label: "Hard (20): a few seconds" },
+  { value: 22, label: "Under attack (22): 10 seconds or more" },
+]
+
+export const CLEARANCE_OPTIONS: { value: number; label: string }[] = [
+  { value: 15, label: "15 minutes" },
+  { value: 60, label: "1 hour" },
+  { value: 240, label: "4 hours" },
+  { value: 1440, label: "1 day" },
+  { value: 10080, label: "7 days" },
+]
 
 const PATH_RE = /^\/[A-Za-z0-9/_.~%-]*$/
 const ARG_RE = /^[A-Za-z0-9_.\-[\]]{1,64}$/
@@ -269,6 +326,20 @@ export function configProblems(c: WafConfig): Record<string, string> {
     if (c.ip_rules[side].length > WAF_LIMITS.ips) out[`ip_${side}`] = `At most ${WAF_LIMITS.ips} entries.`
   }
   if (c.exclusions.length > WAF_LIMITS.exclusions) out.exclusions = `At most ${WAF_LIMITS.exclusions} exclusions.`
+  const ch = c.challenge
+  if (ch.enabled && ch.provider === "turnstile") {
+    if (!isValidTurnstileKey(ch.turnstile_site_key)) {
+      out.turnstile_site_key = "Enter the site key from the Cloudflare dashboard."
+    }
+    const secret = ch.turnstile_secret ?? ""
+    if (secret === "" && !ch.turnstile_secret_set) {
+      out.turnstile_secret = "Enter the secret key from the Cloudflare dashboard."
+    } else if (secret !== "" && !isValidTurnstileKey(secret)) {
+      out.turnstile_secret = "The secret key may use only letters, digits, _ and -."
+    }
+  }
+  if (ch.exempt_paths.length > WAF_LIMITS.paths) out.exempt_paths = `At most ${WAF_LIMITS.paths} paths.`
+  if (ch.exempt_ips.length > WAF_LIMITS.ips) out.exempt_ips = `At most ${WAF_LIMITS.ips} entries.`
   return out
 }
 

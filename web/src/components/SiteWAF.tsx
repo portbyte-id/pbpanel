@@ -14,7 +14,10 @@ import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api"
 import {
+  CLEARANCE_OPTIONS,
   configProblems,
+  DEFAULT_WAF_CONFIG,
+  DIFFICULTY_OPTIONS,
   EXCLUSION_KIND_LABEL,
   exclusionProblem,
   isValidArg,
@@ -24,6 +27,8 @@ import {
   PARANOIA_HELP,
   splitList,
   WAF_LIMITS,
+  type ChallengeProvider,
+  type WafChallenge,
   type WafConfig,
   type WafExclusion,
   type WafExclusionKind,
@@ -56,12 +61,17 @@ export function SiteWAF({ domain, prefill }: { domain: string; prefill?: WafPref
       />
     )
   }
+  // A panel older than the challenge page sends no challenge; fill in the defaults.
+  const saved: WafConfig = {
+    ...data.config,
+    challenge: { ...DEFAULT_WAF_CONFIG.challenge, ...data.config.challenge },
+  }
   // Keyed on what the server holds, so a save or a reload resets the form to it.
   return (
     <WafForm
-      key={JSON.stringify(data.config)}
+      key={JSON.stringify(saved)}
       domain={domain}
-      saved={data.config}
+      saved={saved}
       status={data.status}
       prefill={prefill}
     />
@@ -93,7 +103,13 @@ function WafForm({
   }
 
   const submit = () => {
-    save.mutate(draft, { onSuccess: () => setConfirming(false) })
+    // The secret goes out only when one was typed; an empty one keeps the stored key.
+    const { turnstile_secret, ...challenge } = draft.challenge
+    const body: WafConfig = {
+      ...draft,
+      challenge: turnstile_secret ? { ...challenge, turnstile_secret } : challenge,
+    }
+    save.mutate(body, { onSuccess: () => setConfirming(false) })
   }
   const onSave = () => {
     if (draft.mode === "block" && saved.mode !== "block") setConfirming(true)
@@ -196,6 +212,15 @@ function WafForm({
           </p>
         )}
       </section>
+
+      {/* --- Challenge page ------------------------------------------------- */}
+      <ChallengeSection
+        domain={domain}
+        challenge={draft.challenge}
+        available={status.challenge_available !== false}
+        problems={problems}
+        onChange={(challenge) => set({ challenge })}
+      />
 
       {/* --- Native protections --------------------------------------------- */}
       <section aria-labelledby={`${id}-native`} className="flex flex-col gap-5">
@@ -376,6 +401,215 @@ function WafForm({
         </p>
       </ConfirmDialog>
     </form>
+  )
+}
+
+const PROVIDER_LABEL: Record<ChallengeProvider, string> = {
+  pow: "Proof of work",
+  turnstile: "Cloudflare Turnstile",
+}
+
+/**
+ * The page a visitor passes before the site opens. nginx checks the clearance
+ * cookie on its own, so a visitor who passed costs nothing more.
+ */
+function ChallengeSection({
+  domain,
+  challenge: ch,
+  available,
+  problems,
+  onChange,
+}: {
+  domain: string
+  challenge: WafChallenge
+  available: boolean
+  problems: Record<string, string>
+  onChange: (next: WafChallenge) => void
+}) {
+  const id = useId()
+  const set = (patch: Partial<WafChallenge>) => onChange({ ...ch, ...patch })
+  const off = !ch.enabled
+  const difficultyKnown = DIFFICULTY_OPTIONS.some((o) => o.value === ch.difficulty)
+  const clearanceKnown = CLEARANCE_OPTIONS.some((o) => o.value === ch.clearance_minutes)
+
+  return (
+    <section aria-labelledby={`${id}-heading`} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-0.5">
+        <h3 id={`${id}-heading`} className="text-sm font-semibold">
+          Challenge page
+        </h3>
+        <p className="text-muted-foreground text-xs">
+          Visitors see a short check before {domain} opens. Once they pass, nginx lets them through on its
+          own until the clearance runs out.
+        </p>
+      </div>
+
+      {!available && (
+        <Callout tone="warning" role="status" className="text-sm">
+          The challenge page needs the panel's secret key (data/secret.key), which this panel does not
+          have. Reinstalling the panel creates it.
+        </Callout>
+      )}
+
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={ch.enabled}
+          disabled={!available && !ch.enabled}
+          onChange={(e) => set({ enabled: e.target.checked })}
+        />
+        Check visitors before the site opens
+      </label>
+
+      <fieldset className="flex flex-col gap-1.5" disabled={off}>
+        <legend className="text-sm font-medium">Check</legend>
+        <div role="radiogroup" aria-label="Challenge type" className="inline-flex flex-wrap gap-1">
+          {(["pow", "turnstile"] as ChallengeProvider[]).map((p) => (
+            <label
+              key={p}
+              className="has-[:checked]:bg-primary has-[:checked]:text-primary-foreground has-[:focus-visible]:ring-ring/50 has-[:disabled]:opacity-50 border-input cursor-pointer rounded-md border px-3 py-1.5 text-sm has-[:disabled]:cursor-not-allowed has-[:focus-visible]:ring-[3px]"
+            >
+              <input
+                type="radio"
+                name={`${id}-provider`}
+                value={p}
+                checked={ch.provider === p}
+                onChange={() => set({ provider: p })}
+                className="sr-only"
+              />
+              {PROVIDER_LABEL[p]}
+            </label>
+          ))}
+        </div>
+        <p className="text-muted-foreground text-xs">
+          {ch.provider === "pow"
+            ? "The browser solves a small puzzle in JavaScript, with no interaction. Nothing leaves this server. It slows bots down; it does not tell a person from a headless browser."
+            : "Cloudflare Turnstile decides whether the visitor is a person, usually without a click. The visitor's browser talks to Cloudflare. Get a site key and secret key from the Turnstile section of the Cloudflare dashboard; the site does not have to be on Cloudflare."}
+        </p>
+      </fieldset>
+
+      <div className="flex flex-wrap gap-4">
+        {ch.provider === "pow" && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-difficulty`}>Puzzle difficulty</Label>
+            <Select
+              id={`${id}-difficulty`}
+              value={ch.difficulty}
+              disabled={off}
+              onChange={(e) => set({ difficulty: Number(e.target.value) })}
+            >
+              {!difficultyKnown && <option value={ch.difficulty}>Custom ({ch.difficulty})</option>}
+              {DIFFICULTY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-clearance`}>Let a visitor through for</Label>
+          <Select
+            id={`${id}-clearance`}
+            value={ch.clearance_minutes}
+            disabled={off}
+            onChange={(e) => set({ clearance_minutes: Number(e.target.value) })}
+          >
+            {!clearanceKnown && <option value={ch.clearance_minutes}>{ch.clearance_minutes} minutes</option>}
+            {CLEARANCE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+
+      {ch.provider === "turnstile" && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor={`${id}-sitekey`}>Turnstile site key</Label>
+            <Input
+              id={`${id}-sitekey`}
+              value={ch.turnstile_site_key}
+              placeholder="0x4AAAAAAA…"
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono"
+              disabled={off}
+              aria-invalid={!off && problems.turnstile_site_key !== undefined}
+              onChange={(e) => set({ turnstile_site_key: e.target.value.trim() })}
+            />
+            {!off && problems.turnstile_site_key && (
+              <p role="alert" className="text-destructive text-xs">
+                {problems.turnstile_site_key}
+              </p>
+            )}
+          </div>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor={`${id}-secret`}>Turnstile secret key</Label>
+            <Input
+              id={`${id}-secret`}
+              type="password"
+              value={ch.turnstile_secret ?? ""}
+              placeholder={ch.turnstile_secret_set ? "Stored. Leave blank to keep it." : "0x4AAAAAAA…"}
+              autoComplete="new-password"
+              spellCheck={false}
+              className="font-mono"
+              disabled={off}
+              aria-invalid={!off && problems.turnstile_secret !== undefined}
+              aria-describedby={`${id}-secret-help`}
+              onChange={(e) => {
+                const v = e.target.value.trim()
+                set({ turnstile_secret: v === "" ? undefined : v })
+              }}
+            />
+            <p id={`${id}-secret-help`} className="text-muted-foreground text-xs">
+              Stored encrypted. The panel never shows it again.
+            </p>
+            {!off && problems.turnstile_secret && (
+              <p role="alert" className="text-destructive text-xs">
+                {problems.turnstile_secret}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-5 md:grid-cols-2">
+        <ListEditor
+          label="Never check these paths"
+          help="Path prefixes programs call, not browsers: APIs, webhooks, feeds. They cannot pass a check."
+          placeholder="/api/"
+          items={ch.exempt_paths}
+          max={WAF_LIMITS.paths}
+          validate={(p) =>
+            p === "/"
+              ? "That is the whole site; turn the check off instead."
+              : isValidPath(p)
+                ? null
+                : "Start with / and use only letters, digits and / _ . ~ % -."
+          }
+          onChange={(items) => set({ exempt_paths: items })}
+        />
+        <ListEditor
+          label="Never check these IPs"
+          help="Addresses or CIDR ranges, such as your uptime monitor or office."
+          placeholder="203.0.113.0/24"
+          items={ch.exempt_ips}
+          max={WAF_LIMITS.ips}
+          validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
+          onChange={(items) => set({ exempt_ips: items })}
+        />
+      </div>
+
+      {ch.enabled && (
+        <Callout tone="info" role="status" className="text-sm">
+          Search engines and link previews cannot pass the check either, so pages behind it drop out of
+          search results while it is on. Certificate renewal is never checked.
+        </Callout>
+      )}
+    </section>
   )
 }
 

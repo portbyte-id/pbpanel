@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
+	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -29,18 +31,77 @@ type Availability struct {
 // AvailabilityFunc looks at the nginx build that serves.
 type AvailabilityFunc func(ctx context.Context) (Availability, error)
 
+// ErrNoChallenge is returned when a config asks for the challenge page on a
+// panel that has no secret key to sign clearance cookies with.
+var ErrNoChallenge = errors.New("waf: the challenge page needs the panel's secret key (data/secret.key), which this panel does not have")
+
 // Engine keeps the per-site settings and renders them.
 type Engine struct {
 	st    *store.Store
 	p     nginx.Paths
 	avail AvailabilityFunc
 	now   func() time.Time
+
+	// keys and box are set by WithGuard; without them the challenge cannot be
+	// switched on.
+	keys *guard.Keyring
+	box  *secretbox.Box
 }
 
 // New returns the engine. avail may be nil, which reports ModSecurity as
 // unavailable.
 func New(st *store.Store, p nginx.Paths, avail AvailabilityFunc) *Engine {
 	return &Engine{st: st, p: p, avail: avail, now: time.Now}
+}
+
+// WithGuard gives the engine what the challenge page needs: the keys that sign
+// clearance cookies and the box that seals Turnstile secrets.
+func (e *Engine) WithGuard(keys *guard.Keyring, box *secretbox.Box) *Engine {
+	e.keys, e.box = keys, box
+	return e
+}
+
+// ChallengeAvailable reports whether the challenge page can be switched on.
+func (e *Engine) ChallengeAvailable() bool { return e.keys != nil && e.box != nil }
+
+func turnstileAAD(domain string) string { return "waf.turnstile:" + domain }
+
+// SealTurnstileSecret seals a plain secret key for storage.
+func (e *Engine) SealTurnstileSecret(domain, plain string) (string, error) {
+	if e.box == nil {
+		return "", ErrNoChallenge
+	}
+	return e.box.Seal([]byte(plain), turnstileAAD(domain))
+}
+
+// GuardSettings is the lookup the challenge handler uses: a site's challenge,
+// with the Turnstile secret opened, or false when the site has none.
+func (e *Engine) GuardSettings(ctx context.Context, domain string) (guard.Settings, bool, error) {
+	c, err := e.Get(ctx, domain)
+	if err != nil {
+		return guard.Settings{}, false, err
+	}
+	ch := c.Challenge
+	if !ch.Enabled {
+		return guard.Settings{}, false, nil
+	}
+	s := guard.Settings{
+		Provider:   ch.Provider,
+		Difficulty: ch.Difficulty,
+		Clearance:  time.Duration(ch.ClearanceMinutes) * time.Minute,
+		CookieName: CookieName(domain),
+	}
+	if ch.Provider == guard.ProviderTurnstile {
+		if e.box == nil || ch.TurnstileSecret == "" {
+			return guard.Settings{}, false, fmt.Errorf("waf: %s has no usable Turnstile secret key", domain)
+		}
+		plain, err := e.box.Open(ch.TurnstileSecret, turnstileAAD(domain))
+		if err != nil {
+			return guard.Settings{}, false, fmt.Errorf("waf: open the Turnstile secret of %s: %w", domain, err)
+		}
+		s.TurnstileSecret = string(plain)
+	}
+	return s, true, nil
 }
 
 // Availability reports whether ModSecurity can be used right now.
@@ -57,6 +118,9 @@ func (e *Engine) Availability(ctx context.Context) Availability {
 
 // Check refuses a config that needs a module the build lacks.
 func (e *Engine) Check(ctx context.Context, c Config) error {
+	if c.Challenge.Enabled && !e.ChallengeAvailable() {
+		return ErrNoChallenge
+	}
 	if !c.UsesModSecurity() {
 		return nil
 	}
@@ -181,8 +245,17 @@ func (e *Engine) Render(ctx context.Context, domain string) (Rendered, error) {
 
 // RenderConfig renders a config that is not necessarily stored yet.
 func (e *Engine) RenderConfig(domain string, c Config) Rendered {
+	// A challenge stored on a panel that has since lost its key renders as off:
+	// a cookie nobody can sign would lock every visitor out.
+	if c.Challenge.Enabled && e.keys == nil {
+		c.Challenge.Enabled = false
+	}
+	secret := ""
+	if e.keys != nil {
+		secret = e.keys.CookieSecret(domain)
+	}
 	r := Rendered{
-		Block:      BlockBody(e.p, domain, c),
+		Block:      blockBody(e.p, domain, c, secret),
 		NeedsBlock: !c.IsDefault(),
 		Files:      []confedit.File{{Path: e.p.WAFHTTPFile(domain), Content: HTTPInclude(domain, c)}},
 	}
@@ -190,6 +263,11 @@ func (e *Engine) RenderConfig(domain string, c Config) Rendered {
 		r.Files = append(r.Files, confedit.File{Path: e.p.WAFRulesFile(domain), Content: RulesFile(e.p, domain, c)})
 	} else {
 		r.Files = append(r.Files, confedit.File{Path: e.p.WAFRulesFile(domain), Delete: true})
+	}
+	if c.Challenge.Enabled {
+		r.Files = append(r.Files, confedit.File{Path: e.p.GuardPage(domain), Content: guard.Page(domain, c.Challenge.Provider, c.Challenge.TurnstileSiteKey)})
+	} else {
+		r.Files = append(r.Files, confedit.File{Path: e.p.GuardPage(domain), Delete: true})
 	}
 	return r
 }
@@ -213,6 +291,7 @@ func (e *Engine) RemovedFiles(domain string) []confedit.File {
 	return []confedit.File{
 		{Path: e.p.WAFHTTPFile(domain), Delete: true},
 		{Path: e.p.WAFRulesFile(domain), Delete: true},
+		{Path: e.p.GuardPage(domain), Delete: true},
 	}
 }
 

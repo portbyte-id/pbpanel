@@ -5,18 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
+	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -31,6 +34,43 @@ func wafAvailability(built bool) waf.Availability {
 		return waf.Availability{Flavor: "pqc", Reason: "no nginx build serves yet; build one on the Nginx page"}
 	}
 	return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+}
+
+// guardKeys builds the challenge page's keyring and the box that seals Turnstile
+// secrets, both from data/secret.key.
+func guardKeys(layout install.Layout) (*guard.Keyring, *secretbox.Box, error) {
+	master, err := os.ReadFile(layout.SecretKeyPath())
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading the secret key: %w", err)
+	}
+	keys, err := guard.NewKeyring(master)
+	if err != nil {
+		return nil, nil, err
+	}
+	box, err := secretbox.New(master)
+	if err != nil {
+		return nil, nil, err
+	}
+	return keys, box, nil
+}
+
+// serveGuard answers the challenge page over the unix socket nginx proxies
+// /.pb-challenge/ to. A site whose page cannot reach it shows the visitor an
+// error and a retry button; visitors with a valid cookie are not affected.
+func serveGuard(ctx context.Context, sock string, h *guard.Handler, logger *slog.Logger) {
+	if err := os.MkdirAll(filepath.Dir(filepath.FromSlash(sock)), 0o755); err != nil {
+		logger.Error("the challenge socket directory could not be created", "error", err)
+		return
+	}
+	ln, err := guard.Listen(filepath.FromSlash(sock), nginx.WWWGID)
+	if err != nil {
+		logger.Error("the challenge page cannot be answered", "error", err)
+		return
+	}
+	logger.Info("challenge socket listening", "path", sock)
+	if err := guard.Serve(ctx, ln, h); err != nil {
+		logger.Error("the challenge socket stopped", "error", err)
+	}
 }
 
 // legacyNginxContainer is the container nginx ran in before it ran under systemd.
@@ -82,6 +122,8 @@ type nginxStack struct {
 	Images *nginx.Images
 	// Runtime starts, stops and restarts the container.
 	Runtime *nginx.Runtime
+	// Guard answers the challenge page; nil without data/secret.key.
+	Guard *guard.Handler
 
 	phpMu    sync.Mutex
 	phpSteps []sites.PHPStep
@@ -130,6 +172,15 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		}
 		return wafAvailability(built), nil
 	})
+	// The challenge page signs its cookies with keys derived from secret.key.
+	// Without the file the rest of the firewall still works.
+	var guardHandler *guard.Handler
+	if keys, box, err := guardKeys(layout); err != nil {
+		logger.Warn("the challenge page is not available", "error", err)
+	} else {
+		wafEngine.WithGuard(keys, box)
+		guardHandler = guard.NewHandler(keys, wafEngine.GuardSettings, nil, logger)
+	}
 	mgr, err := sites.New(sites.Options{
 		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
 		WAF: wafEngine,
@@ -200,6 +251,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 
 	return &nginxStack{
 		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs, Runtime: runtime,
+		Guard: guardHandler,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
@@ -214,6 +266,9 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 // nginx is not, because that is when an operator needs it, so a failure is
 // logged and kept in the reconciler's status, never fatal.
 func (n *nginxStack) start(ctx context.Context, logger *slog.Logger) {
+	if n.Guard != nil {
+		go serveGuard(ctx, n.Paths.GuardSocket(), n.Guard, logger)
+	}
 	go func() {
 		// The image catalogue first: an image from before builds had IDs is adopted
 		// here, and a build the last daemon left running is failed. Without this a
