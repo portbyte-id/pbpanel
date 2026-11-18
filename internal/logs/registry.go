@@ -66,7 +66,7 @@ func (s Source) validate() error {
 			return fmt.Errorf("%w: %s container name", ErrInvalidSource, s.ID)
 		}
 	case s.Path != "":
-		if strings.ContainsRune(s.Path, 0) || !(strings.HasPrefix(s.Path, "/") || isAbs(s.Path)) {
+		if strings.ContainsRune(s.Path, 0) || (!strings.HasPrefix(s.Path, "/") && !isAbs(s.Path)) {
 			return fmt.Errorf("%w: %s path must be absolute", ErrInvalidSource, s.ID)
 		}
 	default:

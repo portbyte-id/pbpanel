@@ -70,7 +70,7 @@ func NewServer(ctx context.Context, reg *settings.Registry, paths CertPaths, h h
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			srv.Close()
+			_ = srv.Close()
 		}
 	}()
 	return srv, nil

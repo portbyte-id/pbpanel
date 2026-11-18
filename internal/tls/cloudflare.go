@@ -114,7 +114,7 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, query url.Valu
 		}
 		return nil, errors.New(redact(fmt.Sprintf("cloudflare: %s %s: %v", method, path, err), c.token))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody))
 	if err != nil {
 		return nil, errors.New(redact(fmt.Sprintf("cloudflare: read response: %v", err), c.token))

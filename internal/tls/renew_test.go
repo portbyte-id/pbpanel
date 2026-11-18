@@ -292,7 +292,7 @@ func TestRenewBackoffSixHours(t *testing.T) {
 	rr.put(t, "bad.example.com", SourceHTTP01, 10*day)
 	rr.iss.err["bad.example.com"] = errors.New("nope")
 	ctx := context.Background()
-	rr.rn.RunOnce(ctx)
+	_, _ = rr.rn.RunOnce(ctx)
 	if n := len(rr.iss.callList()); n != 1 {
 		t.Fatalf("calls = %d", n)
 	}

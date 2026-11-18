@@ -36,7 +36,7 @@ func validID(id string) bool {
 		return false
 	}
 	for _, c := range id {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -169,7 +169,7 @@ func (s *Service) UploadChunk(ctx context.Context, id string, offset int64, sum 
 	if err != nil {
 		return u, mapErr(err)
 	}
-	defer unix.Close(f)
+	defer func() { _ = unix.Close(f) }()
 	if _, err := unix.Pwrite(f, buf, offset); err != nil {
 		return u, mapErr(err)
 	}
@@ -344,12 +344,12 @@ func (s *Service) SweepUploads(ctx context.Context) (int, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, err
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	removed := 0
 	for _, id := range ids {

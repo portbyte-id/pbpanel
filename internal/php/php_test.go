@@ -541,7 +541,7 @@ func TestFailedPullLeavesFailedWithOutput(t *testing.T) {
 		}
 		v := r.state(t, "8.4")
 		if v.State != StateFailed || !strings.Contains(v.Output, "pulling layer 1") ||
-			!(strings.Contains(v.Output, "manifest unknown") || strings.Contains(v.Output, "groupadd failed")) {
+			(!strings.Contains(v.Output, "manifest unknown") && !strings.Contains(v.Output, "groupadd failed")) {
 			t.Errorf("%s: %+v, want failed with the output and the error", name, v)
 		}
 		// A failed version can be pulled again.

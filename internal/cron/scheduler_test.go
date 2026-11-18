@@ -131,7 +131,9 @@ func TestRunLoopDoesNotFireTheMinuteItStartedIn(t *testing.T) {
 		t.Fatalf("the start minute fired: %d runs", r.ex.count())
 	}
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want context.Canceled", err)
+	}
 }
 
 func TestRunMarksLeftoverRunningRunsInterrupted(t *testing.T) {
@@ -148,7 +150,9 @@ func TestRunMarksLeftoverRunningRunsInterrupted(t *testing.T) {
 	go func() { done <- r.svc.Run(ctx) }()
 	waitFor(t, "loop to sleep", func() bool { return r.clk.schedulerWaits() >= 1 })
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want context.Canceled", err)
+	}
 
 	runs := r.runs(t, j.ID)
 	if len(runs) != 1 || runs[0].Status != StatusInterrupted || runs[0].FinishedAt == nil {

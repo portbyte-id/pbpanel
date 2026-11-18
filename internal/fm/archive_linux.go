@@ -177,7 +177,7 @@ func addTree(ctx context.Context, sink archiveSink, fd int, name, arcName string
 			return mapErr(err)
 		}
 		dir := os.NewFile(uintptr(dfd), name)
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 		names, err := dir.Readdirnames(-1)
 		if err != nil {
 			return mapErr(err)
@@ -198,7 +198,7 @@ func addTree(ctx context.Context, sink archiveSink, fd int, name, arcName string
 			return mapErr(err)
 		}
 		f := os.NewFile(uintptr(in), name)
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		return sink.file(arcName, st, &ctxReader{ctx, f})
 	}
 	return nil // sockets, devices, FIFOs are not archived
@@ -544,7 +544,7 @@ func (x *extractRun) handle(e archiveEntry, r io.Reader) error {
 		if err != nil {
 			return err
 		}
-		defer unix.Close(pfd)
+		defer func() { _ = unix.Close(pfd) }()
 		last := comps[len(comps)-1]
 		if x.overwrite {
 			_ = unix.Unlinkat(pfd, last, 0)
@@ -564,13 +564,13 @@ func (x *extractRun) handle(e archiveEntry, r io.Reader) error {
 		if err != nil {
 			return err
 		}
-		defer unix.Close(pfd)
+		defer func() { _ = unix.Close(pfd) }()
 		tcomps := strings.Split(target, "/")
 		tfd, err := mkdirAll(x.root, tcomps[:len(tcomps)-1], 0o755)
 		if err != nil {
 			return err
 		}
-		defer unix.Close(tfd)
+		defer func() { _ = unix.Close(tfd) }()
 		last := comps[len(comps)-1]
 		if x.overwrite {
 			_ = unix.Unlinkat(pfd, last, 0)
@@ -592,7 +592,7 @@ func (x *extractRun) handle(e archiveEntry, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(pfd)
+	defer func() { _ = unix.Close(pfd) }()
 	last := comps[len(comps)-1]
 	if x.overwrite {
 		_ = unix.Unlinkat(pfd, last, 0) // never write through an existing link
@@ -686,7 +686,7 @@ func statComps(root int, comps []string) (unix.Stat_t, error) {
 		}
 		pfd = next
 	}
-	defer unix.Close(pfd)
+	defer func() { _ = unix.Close(pfd) }()
 	var st unix.Stat_t
 	err = unix.Fstatat(pfd, comps[len(comps)-1], &st, unix.AT_SYMLINK_NOFOLLOW)
 	return st, err
@@ -715,7 +715,7 @@ func (s *Service) Extract(ctx context.Context, archive, dest string, overwrite b
 	if err != nil {
 		return mapErr(err)
 	}
-	defer unix.Close(rfd)
+	defer func() { _ = unix.Close(rfd) }()
 	real, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", rfd))
 	if err != nil {
 		return err

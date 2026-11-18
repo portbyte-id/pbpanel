@@ -90,8 +90,8 @@ func (r *Registry) tailDocker(ctx context.Context, name string, opts TailOptions
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	defer rc.Close()
-	stop := context.AfterFunc(ctx, func() { rc.Close() })
+	defer func() { _ = rc.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = rc.Close() })
 	defer stop()
 	err = readLines(rc, emit, nil)
 	if ctx.Err() != nil {
@@ -105,7 +105,7 @@ func tailFile(ctx context.Context, path string, opts TailOptions, emit func(stri
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, errors.Unwrap(err))
 	}
-	defer func() { f.Close() }()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -165,11 +165,11 @@ func tailFile(ctx context.Context, path string, opts TailOptions, emit func(stri
 			if nf, err := os.Open(path); err == nil {
 				ni, serr := nf.Stat()
 				if serr == nil {
-					f.Close()
+					_ = f.Close()
 					f, info = nf, ni
 					continue
 				}
-				nf.Close()
+				_ = nf.Close()
 			}
 		case statErr == nil:
 			// Size comes from the open descriptor, not the stat taken before the

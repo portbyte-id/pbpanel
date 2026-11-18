@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/portbyte-id/server-panel/internal/osdep"
 )
 
 // MaxExtensions bounds a build request. Each extension is a layer's worth of
@@ -146,14 +148,11 @@ func Dockerfile(ver string, exts []Extension) []byte {
 	}
 	packages = sortedUnique(packages)
 	if len(packages) > 0 || len(pecl) > 0 {
-		install := "apt-get update && apt-get install -y --no-install-recommends"
-		if len(packages) > 0 {
-			install += " " + strings.Join(packages, " ")
-		}
+		var extra []string
 		if len(pecl) > 0 {
-			install += " ${PHPIZE_DEPS}"
+			extra = append(extra, "${PHPIZE_DEPS}")
 		}
-		fmt.Fprintf(&b, "RUN %s && rm -rf /var/lib/apt/lists/*\n", install)
+		fmt.Fprintf(&b, "RUN %s\n", osdep.ImageInstallCommand(packages, extra...))
 	}
 	for _, e := range bundled {
 		if len(e.Configure) > 0 {

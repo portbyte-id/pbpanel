@@ -39,14 +39,14 @@ func readAny(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var r io.Reader = f
 	if strings.HasSuffix(path, ".gz") {
 		zr, err := gzip.NewReader(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer zr.Close()
+		defer func() { _ = zr.Close() }()
 		r = zr
 	}
 	b, err := io.ReadAll(r)

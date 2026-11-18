@@ -85,7 +85,8 @@ func TestNormalizeCanonicalForm(t *testing.T) {
 }
 
 func TestSiteIDNeverCollides(t *testing.T) {
-	if SiteID("a-b.com") == SiteID("a.b-com") || SiteID("a.test") != SiteID("a.test") {
+	first, again := SiteID("a.test"), SiteID("a.test")
+	if SiteID("a-b.com") == SiteID("a.b-com") || first != again {
 		t.Error("site ids must be stable and distinct")
 	}
 }

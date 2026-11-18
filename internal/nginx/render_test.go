@@ -284,7 +284,7 @@ func TestTLSRedirectExemptsTheChallengePath(t *testing.T) {
 	set := strings.Index(got, "if ($scheme = http)")
 	exempt := strings.Index(got, `if ($uri ~ ^/\.well-known/acme-challenge/)`)
 	ret := strings.Index(got, "return 301 https://$host$request_uri;")
-	if set < 0 || exempt < 0 || ret < 0 || !(set < exempt && exempt < ret) {
+	if set < 0 || exempt < 0 || ret < 0 || set >= exempt || exempt >= ret {
 		t.Errorf("redirect order wrong (scheme=%d exempt=%d return=%d):\n%s", set, exempt, ret, got)
 	}
 	plain, _ := testPaths.RenderTLS("a.test", &TLS{

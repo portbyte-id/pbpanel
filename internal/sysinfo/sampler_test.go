@@ -276,7 +276,8 @@ func TestRunSamplesOnTicks(t *testing.T) {
 	src.set("loadavg", "bad") // a failing sample is reported, the loop goes on
 	ticks <- time.Time{}
 	select {
-	case <-errCh:
+	case err := <-errCh:
+		t.Logf("sample error reported: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("failed sample not reported")
 	}

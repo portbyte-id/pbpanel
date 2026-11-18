@@ -191,7 +191,7 @@ func gzipFile(src string) (bool, error) {
 		}
 		return false, err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	st, err := in.Stat()
 	if err != nil || !st.Mode().IsRegular() {
 		return false, err
@@ -216,10 +216,10 @@ func gzipFile(src string) (bool, error) {
 		err = os.Rename(tmp, src+".gz")
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return false, err
 	}
-	in.Close()
+	_ = in.Close()
 	if err := os.Remove(src); err != nil {
 		return true, err
 	}

@@ -88,7 +88,7 @@ func TestAccountReusedPerDirectory(t *testing.T) {
 	if got := a.newAccounts.Load(); got != 1 {
 		t.Fatalf("newAccount calls on A = %d, want 1: the second order must reuse the account", got)
 	}
-	if u1.key.D.Cmp(u2.key.D) != 0 || u2.reg == nil || u2.reg.URI != u1.reg.URI {
+	if !u1.key.Equal(u2.key) || u2.reg == nil || u2.reg.URI != u1.reg.URI {
 		t.Fatal("reused account differs from the registered one")
 	}
 
@@ -109,7 +109,7 @@ func TestAccountReusedPerDirectory(t *testing.T) {
 	if b.newAccounts.Load() != 1 || a.newAccounts.Load() != 1 {
 		t.Fatalf("A=%d B=%d, want 1 and 1", a.newAccounts.Load(), b.newAccounts.Load())
 	}
-	if u3.key.D.Cmp(u1.key.D) == 0 {
+	if u3.key.Equal(u1.key) {
 		t.Fatal("two directories share an account key")
 	}
 	for _, d := range []string{a.dir(), b.dir()} {
@@ -288,7 +288,7 @@ func TestPreflightNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 	p := newProbeRig(t, dialTo(srv), 0)
-	requirePreflight(t, p.run(t), "example.com", "HTTP 404")
+	_ = requirePreflight(t, p.run(t), "example.com", "HTTP 404")
 	p.assertClean(t)
 }
 
@@ -303,7 +303,7 @@ func TestPreflightRedirectNotFollowed(t *testing.T) {
 	}))
 	defer srv.Close()
 	p := newProbeRig(t, dialTo(srv), 0)
-	requirePreflight(t, p.run(t), "example.com", "redirects")
+	_ = requirePreflight(t, p.run(t), "example.com", "redirects")
 	if followed.Load() {
 		t.Error("the probe followed a redirect")
 	}
@@ -316,7 +316,7 @@ func TestPreflightTimeout(t *testing.T) {
 	defer srv.Close()
 	defer close(release)
 	p := newProbeRig(t, dialTo(srv), 50*time.Millisecond)
-	requirePreflight(t, p.run(t), "example.com", "timed out")
+	_ = requirePreflight(t, p.run(t), "example.com", "timed out")
 	p.assertClean(t)
 }
 
@@ -325,7 +325,7 @@ func TestPreflightConnectionRefused(t *testing.T) {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}}
 	}
 	p := newProbeRig(t, dial, 0)
-	requirePreflight(t, p.run(t), "example.com", "refused")
+	_ = requirePreflight(t, p.run(t), "example.com", "refused")
 	p.assertClean(t)
 }
 
@@ -334,7 +334,7 @@ func TestPreflightDNSDoesNotResolve(t *testing.T) {
 		return nil, &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
 	}
 	p := newProbeRig(t, dial, 0)
-	requirePreflight(t, p.run(t), "example.com", "does not resolve")
+	_ = requirePreflight(t, p.run(t), "example.com", "does not resolve")
 	p.assertClean(t)
 }
 
@@ -351,7 +351,7 @@ func TestPreflightReportsTheFailingName(t *testing.T) {
 	defer srv.Close()
 	p := newProbeRig(t, dialTo(srv), 0)
 	webroot.Store(p.webDir)
-	requirePreflight(t, p.run(t), "www.example.com", "HTTP 404")
+	_ = requirePreflight(t, p.run(t), "www.example.com", "HTTP 404")
 }
 
 func TestPreflightPassesWhenTheWebrootIsServed(t *testing.T) {

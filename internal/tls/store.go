@@ -181,7 +181,7 @@ func (s *Store) ListCerts(ctx context.Context) ([]Cert, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls: list certificates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Cert
 	for rows.Next() {
 		c, err := scanCert(rows)
@@ -351,7 +351,7 @@ func (s *Store) ListProviders(ctx context.Context) ([]ProviderInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls: list providers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ProviderInfo
 	for rows.Next() {
 		var p ProviderInfo

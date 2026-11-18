@@ -14,7 +14,6 @@ type fakeExec struct {
 	runs  [][]string
 	envs  [][]string
 	onRun func(argv []string) error
-	lines []string
 	// head is what `git rev-parse HEAD` prints; empty means the pinned commit.
 	head string
 }

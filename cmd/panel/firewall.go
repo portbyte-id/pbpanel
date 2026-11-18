@@ -74,7 +74,7 @@ func firewallRestore(ctx context.Context, w io.Writer, dbPath string) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	if err := firewall.RestoreConfirmed(ctx, st, firewall.ExecCmd{}); err != nil {
 		return fmt.Errorf("firewall restore: %w", err)
 	}
@@ -89,7 +89,7 @@ func firewallRestore(ctx context.Context, w io.Writer, dbPath string) error {
 	if err := openPanelPort(ctx, port); err != nil {
 		return fmt.Errorf("firewall restore: panel port %d: %w", port, err)
 	}
-	fmt.Fprintln(w, "firewall: confirmed ruleset restored (nothing happens when the firewall is disabled); panel port open")
+	_, _ = fmt.Fprintln(w, "firewall: confirmed ruleset restored (nothing happens when the firewall is disabled); panel port open")
 	return nil
 }
 
@@ -101,10 +101,10 @@ func firewallDisable(ctx context.Context, w io.Writer, dbPath string) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	if err := firewall.DisableAll(ctx, st, firewall.ExecCmd{}); err != nil {
 		return fmt.Errorf("firewall disable: %w", err)
 	}
-	fmt.Fprintln(w, "firewall: disabled. The panel chains are flushed and unhooked; the distribution's own firewall services stay masked.")
+	_, _ = fmt.Fprintln(w, "firewall: disabled. The panel chains are flushed and unhooked; the distribution's own firewall services stay masked.")
 	return nil
 }

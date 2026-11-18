@@ -66,7 +66,7 @@ func New(o Options) (*Service, error) {
 	// The trash and uploads trees are reachable only through the Trash and
 	// Upload APIs: a rename in there would orphan an index row. The guard runs
 	// on the resolved path of a create target or a move/copy destination.
-	s.FS.guard = func(real string) error {
+	s.guard = func(real string) error {
 		if s.internalTree(real) {
 			return fmt.Errorf("%w: %s is managed by the panel", ErrProtected, real)
 		}
@@ -236,7 +236,7 @@ func (s *Service) TrashList(ctx context.Context) ([]TrashItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []TrashItem{}
 	for rows.Next() {
 		it, err := scanTrash(rows)
@@ -264,7 +264,7 @@ func (s *Service) payload(it TrashItem) (string, error) {
 		return "", fmt.Errorf("%w: corrupt trash entry", ErrInvalidPath)
 	}
 	for _, c := range it.ID {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return "", fmt.Errorf("%w: corrupt trash entry", ErrInvalidPath)
 		}
 	}

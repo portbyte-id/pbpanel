@@ -63,7 +63,7 @@ func (s *Service) readFile(ctx context.Context, p *parent) (File, error) {
 		return File{}, mapErr(err)
 	}
 	f := os.NewFile(uintptr(fd), p.base)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		return File{}, mapErr(err)
