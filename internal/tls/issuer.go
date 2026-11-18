@@ -6,9 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -270,9 +272,22 @@ func (i *Issuer) issue(ctx context.Context, domain string, names []string, email
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		res, err := client.Certificate.Obtain(certificate.ObtainRequest{
-			Domains: names, Bundle: true, PrivateKey: certKey, Profile: profile,
-		})
+		var res *certificate.Resource
+		var err error
+		if hasIPName(names) {
+			// lego would put the first name in the CSR's Common Name, and the CA
+			// refuses an IP address there. Build the CSR with the names as SANs only.
+			var csr *x509.CertificateRequest
+			if csr, err = sanOnlyCSR(certKey, names); err == nil {
+				res, err = client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
+					CSR: csr, Bundle: true, PrivateKey: certKey, Profile: profile,
+				})
+			}
+		} else {
+			res, err = client.Certificate.Obtain(certificate.ObtainRequest{
+				Domains: names, Bundle: true, PrivateKey: certKey, Profile: profile,
+			})
+		}
 		done <- outcome{res, err}
 	}()
 	var res *certificate.Resource
@@ -392,6 +407,33 @@ func (i *Issuer) account(ctx context.Context, dir, email string) (*acmeUser, err
 	default:
 		return nil, err
 	}
+}
+
+func hasIPName(names []string) bool {
+	for _, n := range names {
+		if net.ParseIP(n) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// sanOnlyCSR builds a CSR with no Common Name: DNS names and IP addresses go
+// in the Subject Alternative Name extension only.
+func sanOnlyCSR(key crypto.Signer, names []string) (*x509.CertificateRequest, error) {
+	tmpl := x509.CertificateRequest{}
+	for _, n := range names {
+		if ip := net.ParseIP(n); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else {
+			tmpl.DNSNames = append(tmpl.DNSNames, n)
+		}
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &tmpl, key)
+	if err != nil {
+		return nil, fmt.Errorf("tls: build CSR: %w", err)
+	}
+	return x509.ParseCertificateRequest(der)
 }
 
 // requiresEAB reports a CA known to refuse an account without External Account
