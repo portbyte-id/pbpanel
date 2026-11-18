@@ -7,6 +7,7 @@ import { JobsDrawer } from "@/components/JobsDrawer"
 import { IssueCertForm, TLSWarnings, UploadCertForm } from "@/components/TLSForms"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   ApiError,
   type CertView,
@@ -39,7 +40,13 @@ export function ExpiryBadge({ daysLeft }: { daysLeft: number }) {
   )
 }
 
-/** The TLS tab of a site: the certificate it serves, and how to get or replace one. */
+/**
+ * The TLS tab of a site, in three tabs: the certificate it serves, a
+ * certificate from a pre-configured ACME provider, or the operator's own.
+ *
+ * The tab list stays clickable when the include is detached; only the controls
+ * inside each tab are disabled, so the reason is readable in every tab.
+ */
 export function SiteTLS({ detail }: { detail: SiteDetail }) {
   const id = useId()
   const domain = detail.domain
@@ -59,24 +66,46 @@ export function SiteTLS({ detail }: { detail: SiteDetail }) {
     )
   }
 
+  const cert = tls.data ?? null
+
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-4">
       {detached && (
         <p id={`${id}-detached`} role="status" className="text-muted-foreground text-sm">
           Switched off: {feature.reason ?? "the site file no longer includes this control's file."}{" "}
           The controls below do nothing until the include line is back.
         </p>
       )}
-      {/* A disabled fieldset disables every control inside it, buttons included. */}
-      <fieldset disabled={detached} className="flex min-w-0 flex-col gap-8">
-        <legend className="sr-only">TLS certificate for {domain}</legend>
-        <Current domain={domain} cert={tls.data ?? null} />
-        <GetCertificate
-          detail={detail}
-          cert={tls.data ?? null}
-          providers={providers.data?.providers ?? []}
-        />
-      </fieldset>
+      <Tabs defaultValue="details">
+        <TabsList aria-label={`TLS for ${domain}`}>
+          <TabsTrigger value="details">Details</TabsTrigger>
+          <TabsTrigger value="acme">Create with ACME</TabsTrigger>
+          <TabsTrigger value="own">Own certificate</TabsTrigger>
+        </TabsList>
+        {/* A disabled fieldset disables every control inside it, buttons included. */}
+        <TabsContent value="details">
+          <fieldset disabled={detached} className="flex min-w-0 flex-col gap-8 pt-2">
+            <legend className="sr-only">Certificate for {domain}</legend>
+            <Current domain={domain} cert={cert} />
+          </fieldset>
+        </TabsContent>
+        <TabsContent value="acme">
+          <fieldset disabled={detached} className="flex min-w-0 flex-col gap-8 pt-2">
+            <legend className="sr-only">Create a certificate with ACME for {domain}</legend>
+            <AcmeCertificate
+              detail={detail}
+              cert={cert}
+              providers={providers.data?.providers ?? []}
+            />
+          </fieldset>
+        </TabsContent>
+        <TabsContent value="own">
+          <fieldset disabled={detached} className="flex min-w-0 flex-col gap-8 pt-2">
+            <legend className="sr-only">Own certificate for {domain}</legend>
+            <OwnCertificate domain={domain} cert={cert} />
+          </fieldset>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -98,8 +127,8 @@ function Current({ domain, cert }: { domain: string; cert: CertView | null }) {
 
       {cert === null ? (
         <p className="text-sm">
-          This site has no certificate, so {domain} is served over plain HTTP only. Request or
-          upload one below.
+          This site has no certificate, so {domain} is served over plain HTTP only. Create one
+          with ACME or use your own in the other tabs.
         </p>
       ) : (
         <>
@@ -139,7 +168,8 @@ function Current({ domain, cert }: { domain: string; cert: CertView | null }) {
           </div>
           {!canRenew(cert) && (
             <p id={`${id}-renew-why`} className="text-muted-foreground text-xs">
-              An uploaded certificate can't be renewed here. Upload a new one, or request a Let's Encrypt certificate below.
+              An uploaded certificate can't be renewed here. Upload a new one in the Own certificate
+              tab, or create one with ACME.
             </p>
           )}
           <ApplyError error={renew.error} fallback="The renewal could not be started." />
@@ -225,7 +255,8 @@ function RenewalLine({ cert }: { cert: CertView }) {
   return <span>Not renewed yet. The panel renews it automatically when it is due.</span>
 }
 
-function GetCertificate({
+/** Requests a certificate from an ACME provider, with the names the site already serves. */
+function AcmeCertificate({
   detail,
   cert,
   providers,
@@ -237,19 +268,20 @@ function GetCertificate({
   const id = useId()
   const domain = detail.domain
   const [jobId, setJobId] = useState<string | null>(null)
-  const [warnings, setWarnings] = useState<TLSWarning[]>([])
-  const [uploaded, setUploaded] = useState(false)
   const refresh = useRefreshTLS()
   const issue = useIssueSiteCert(domain)
-  const upload = useUploadSiteCert(domain)
-  const verb = cert ? "Replace" : "Get"
+  const verb = cert ? "Replace" : "Create"
 
   return (
     <>
       <section aria-labelledby={`${id}-issue`} className="flex flex-col gap-3">
         <h3 id={`${id}-issue`} className="text-sm font-semibold">
-          {verb} a certificate from Let's Encrypt
+          {verb} a certificate with ACME
         </h3>
+        <p className="text-muted-foreground text-xs">
+          Pick the provider and the names. The panel renews a certificate it issued before it
+          expires.
+        </p>
         <IssueCertForm
           domain={domain}
           defaultNames={[domain, ...detail.aliases]}
@@ -260,31 +292,6 @@ function GetCertificate({
         />
       </section>
 
-      <section aria-labelledby={`${id}-upload`} className="flex flex-col gap-3">
-        <h3 id={`${id}-upload`} className="text-sm font-semibold">
-          {cert ? "Replace it with" : "Or use"} your own certificate
-        </h3>
-        <UploadCertForm
-          pending={upload.isPending}
-          error={upload.error}
-          onSubmit={(input) => {
-            setUploaded(false)
-            upload.mutate(input, {
-              onSuccess: (res) => {
-                setWarnings(res.warnings ?? [])
-                setUploaded(true)
-              },
-            })
-          }}
-        />
-        {uploaded && (
-          <p role="status" className="text-sm">
-            Certificate saved.
-          </p>
-        )}
-        <TLSWarnings warnings={warnings} />
-      </section>
-
       <JobsDrawer
         jobId={jobId}
         onClose={() => {
@@ -293,5 +300,43 @@ function GetCertificate({
         }}
       />
     </>
+  )
+}
+
+/** Uploads a certificate and its key from the operator's own files. */
+function OwnCertificate({ domain, cert }: { domain: string; cert: CertView | null }) {
+  const id = useId()
+  const [warnings, setWarnings] = useState<TLSWarning[]>([])
+  const [uploaded, setUploaded] = useState(false)
+  const upload = useUploadSiteCert(domain)
+
+  return (
+    <section aria-labelledby={`${id}-upload`} className="flex flex-col gap-3">
+      <h3 id={`${id}-upload`} className="text-sm font-semibold">
+        {cert ? "Replace it with your own certificate" : "Use your own certificate"}
+      </h3>
+      <p className="text-muted-foreground text-xs">
+        The panel does not renew an uploaded certificate. Upload a new one before it expires.
+      </p>
+      <UploadCertForm
+        pending={upload.isPending}
+        error={upload.error}
+        onSubmit={(input) => {
+          setUploaded(false)
+          upload.mutate(input, {
+            onSuccess: (res) => {
+              setWarnings(res.warnings ?? [])
+              setUploaded(true)
+            },
+          })
+        }}
+      />
+      {uploaded && (
+        <p role="status" className="text-sm">
+          Certificate saved.
+        </p>
+      )}
+      <TLSWarnings warnings={warnings} />
+    </section>
   )
 }

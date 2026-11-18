@@ -74,64 +74,116 @@
   --text-2xl--line-height: 2.1rem;
 }
 
+/*
+ * Orange theme. Light uses a deep orange for controls (white text on it passes
+ * AA); dark is "orange-dark": a warm charcoal surface with a brighter orange
+ * for controls, so the accent stays readable on it.
+ */
 :root {
   --radius: 0.5rem;
-  --background: oklch(0.985 0.003 255);
-  --foreground: oklch(0.2 0.02 258);
+  --background: oklch(0.985 0.005 75);
+  --foreground: oklch(0.22 0.02 50);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.02 258);
+  --card-foreground: oklch(0.22 0.02 50);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.02 258);
-  --primary: oklch(0.46 0.16 259);
-  --primary-foreground: oklch(0.99 0.005 259);
-  --secondary: oklch(0.955 0.006 258);
-  --secondary-foreground: oklch(0.28 0.03 258);
-  --muted: oklch(0.955 0.006 258);
-  --muted-foreground: oklch(0.46 0.02 258);
-  --accent: oklch(0.94 0.012 258);
-  --accent-foreground: oklch(0.25 0.04 258);
+  --popover-foreground: oklch(0.22 0.02 50);
+  --primary: oklch(0.553 0.195 38.4);
+  --primary-foreground: oklch(0.985 0.005 75);
+  --secondary: oklch(0.957 0.01 70);
+  --secondary-foreground: oklch(0.28 0.03 50);
+  --muted: oklch(0.957 0.01 70);
+  --muted-foreground: oklch(0.47 0.02 55);
+  --accent: oklch(0.945 0.03 60);
+  --accent-foreground: oklch(0.3 0.06 40);
   --destructive: oklch(0.52 0.21 27);
   --destructive-foreground: oklch(0.985 0 0);
   --success: oklch(0.52 0.13 152);
   --warning: oklch(0.5 0.13 70);
   --info: oklch(0.5 0.15 245);
-  --border: oklch(0.905 0.008 258);
-  --input: oklch(0.87 0.01 258);
-  --ring: oklch(0.6 0.14 259);
-  --sidebar: oklch(0.972 0.005 258);
-  --sidebar-foreground: oklch(0.32 0.03 258);
-  --sidebar-accent: oklch(0.925 0.016 258);
-  --sidebar-border: oklch(0.9 0.008 258);
+  --border: oklch(0.91 0.01 70);
+  --input: oklch(0.88 0.012 70);
+  --ring: oklch(0.66 0.18 45);
+  --sidebar: oklch(0.973 0.008 70);
+  --sidebar-foreground: oklch(0.32 0.03 50);
+  --sidebar-accent: oklch(0.93 0.035 55);
+  --sidebar-border: oklch(0.9 0.01 70);
+  /* Syntax colours for the code editors; see `.code-light` below. */
+  --code-keyword: oklch(0.5 0.2 305);
+  --code-string: oklch(0.5 0.13 150);
+  --code-number: oklch(0.56 0.18 45);
+  --code-comment: oklch(0.56 0.02 60);
+  --code-name: oklch(0.45 0.15 255);
+  --code-prop: oklch(0.5 0.13 200);
+  --code-type: oklch(0.5 0.15 235);
+  --code-meta: oklch(0.5 0.13 90);
+  --code-invalid: oklch(0.52 0.21 27);
 }
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.17 0.014 258);
-  --foreground: oklch(0.95 0.006 258);
-  --card: oklch(0.215 0.016 258);
-  --card-foreground: oklch(0.95 0.006 258);
-  --popover: oklch(0.235 0.018 258);
-  --popover-foreground: oklch(0.95 0.006 258);
-  --primary: oklch(0.72 0.14 259);
-  --primary-foreground: oklch(0.18 0.03 259);
-  --secondary: oklch(0.27 0.018 258);
-  --secondary-foreground: oklch(0.95 0.006 258);
-  --muted: oklch(0.27 0.018 258);
-  --muted-foreground: oklch(0.7 0.02 258);
-  --accent: oklch(0.3 0.025 258);
-  --accent-foreground: oklch(0.96 0.006 258);
+  --background: oklch(0.18 0.012 50);
+  --foreground: oklch(0.955 0.01 75);
+  --card: oklch(0.225 0.014 50);
+  --card-foreground: oklch(0.955 0.01 75);
+  --popover: oklch(0.245 0.016 50);
+  --popover-foreground: oklch(0.955 0.01 75);
+  --primary: oklch(0.75 0.165 52);
+  --primary-foreground: oklch(0.2 0.03 45);
+  --secondary: oklch(0.275 0.016 50);
+  --secondary-foreground: oklch(0.955 0.01 75);
+  --muted: oklch(0.275 0.016 50);
+  --muted-foreground: oklch(0.72 0.025 65);
+  --accent: oklch(0.32 0.04 50);
+  --accent-foreground: oklch(0.97 0.01 75);
   --destructive: oklch(0.7 0.18 22);
   --destructive-foreground: oklch(0.16 0.02 22);
   --success: oklch(0.74 0.14 152);
   --warning: oklch(0.8 0.14 78);
   --info: oklch(0.76 0.12 245);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.62 0.13 259);
-  --sidebar: oklch(0.195 0.015 258);
-  --sidebar-foreground: oklch(0.86 0.01 258);
-  --sidebar-accent: oklch(0.285 0.025 258);
-  --sidebar-border: oklch(1 0 0 / 8%);
+  --border: oklch(0.95 0.02 60 / 10%);
+  --input: oklch(0.95 0.02 60 / 15%);
+  --ring: oklch(0.72 0.16 52);
+  --sidebar: oklch(0.2 0.013 50);
+  --sidebar-foreground: oklch(0.88 0.015 70);
+  --sidebar-accent: oklch(0.3 0.035 50);
+  --sidebar-border: oklch(0.95 0.02 60 / 8%);
+  --code-keyword: oklch(0.8 0.13 305);
+  --code-string: oklch(0.82 0.13 150);
+  --code-number: oklch(0.8 0.15 60);
+  --code-comment: oklch(0.62 0.025 65);
+  --code-name: oklch(0.82 0.1 250);
+  --code-prop: oklch(0.82 0.11 200);
+  --code-type: oklch(0.82 0.11 230);
+  --code-meta: oklch(0.84 0.13 95);
+  --code-invalid: oklch(0.72 0.18 25);
+}
+
+/*
+ * An editor can pin its own palette (`code-light` / `code-dark` on its wrapper)
+ * instead of following the page.
+ */
+.code-light {
+  --code-keyword: oklch(0.5 0.2 305);
+  --code-string: oklch(0.5 0.13 150);
+  --code-number: oklch(0.56 0.18 45);
+  --code-comment: oklch(0.56 0.02 60);
+  --code-name: oklch(0.45 0.15 255);
+  --code-prop: oklch(0.5 0.13 200);
+  --code-type: oklch(0.5 0.15 235);
+  --code-meta: oklch(0.5 0.13 90);
+  --code-invalid: oklch(0.52 0.21 27);
+}
+
+.code-dark {
+  --code-keyword: oklch(0.8 0.13 305);
+  --code-string: oklch(0.82 0.13 150);
+  --code-number: oklch(0.8 0.15 60);
+  --code-comment: oklch(0.62 0.025 65);
+  --code-name: oklch(0.82 0.1 250);
+  --code-prop: oklch(0.82 0.11 200);
+  --code-type: oklch(0.82 0.11 230);
+  --code-meta: oklch(0.84 0.13 95);
+  --code-invalid: oklch(0.72 0.18 25);
 }
 
 @layer base {
