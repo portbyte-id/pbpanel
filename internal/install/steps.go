@@ -76,6 +76,11 @@ type Installer struct {
 	// Fetch downloads the release. Nil means an https download that refuses a
 	// checksum mismatch.
 	Fetch FetchFunc
+
+	// PanelPortOpener makes the panel port reachable through the host firewall, so a
+	// fresh install is not unreachable behind a default REJECT. Nil skips the step;
+	// cmd/panel supplies the iptables implementation, and tests leave it nil.
+	PanelPortOpener func(ctx context.Context, port int) error
 }
 
 // step is one entry of the install list.
@@ -167,6 +172,7 @@ func (s *runState) steps() []step {
 		{name: "unit-file", done: s.unitDone, run: s.writeUnit},
 		{name: "firewall-unit", done: s.firewallUnitDone, run: s.writeFirewallUnit},
 		{name: "enable-firewall-unit", done: s.firewallEnabledDone, run: s.enableFirewallUnit},
+		{name: "panel-port", done: s.panelPortDone, run: s.openPanelPort},
 		{name: "supervisord-binary", done: s.supervisordBinaryDone, run: s.installSupervisord},
 		{name: "supervisord-conf", done: s.supervisordConfDone, run: s.writeSupervisordConf},
 		{name: "supervisord-unit", done: s.supervisordUnitDone, run: s.writeSupervisordUnit},
@@ -523,6 +529,28 @@ func (s *runState) firewallEnabledDone(ctx context.Context) (bool, error) {
 
 func (s *runState) enableFirewallUnit(ctx context.Context) error {
 	return s.Runner.Run(ctx, "systemctl", "enable", firewallUnitName)
+}
+
+// --- panel port ------------------------------------------------------------
+
+// panelPortDone skips the step when no opener is wired. Otherwise it always runs:
+// the opener replaces its own rule, so a second install converges to the same
+// state.
+func (s *runState) panelPortDone(context.Context) (bool, error) {
+	return s.PanelPortOpener == nil, nil
+}
+
+func (s *runState) openPanelPort(ctx context.Context) error {
+	st, reg, err := s.openRegistry(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	port, err := reg.Int(ctx, "panel.port")
+	if err != nil {
+		return err
+	}
+	return s.PanelPortOpener(ctx, port)
 }
 
 // --- enable and start ------------------------------------------------------

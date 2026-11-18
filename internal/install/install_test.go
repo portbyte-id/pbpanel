@@ -277,6 +277,7 @@ func TestInstallStepOrder(t *testing.T) {
 		"unit-file",
 		"firewall-unit",
 		"enable-firewall-unit",
+		"panel-port",
 		"supervisord-binary",
 		"supervisord-conf",
 		"supervisord-unit",

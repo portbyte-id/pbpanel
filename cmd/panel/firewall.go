@@ -51,8 +51,19 @@ func newFirewall(ctx context.Context, st *store.Store, reg *settings.Registry, l
 	return svc
 }
 
-// firewallRestore replays the last confirmed ruleset. panel-firewall.service runs
-// it at boot, before the daemon, so it opens the database directly.
+// openPanelPort keeps the panel port reachable through the host firewall, outside the
+// managed ruleset. It runs at install, at every daemon start and at boot, so the port
+// stays open whether or not the operator ever enables the firewall.
+func openPanelPort(ctx context.Context, port int) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	return firewall.OpenPanelPort(ctx, firewall.ExecCmd{}, port, firewall.HostHasIPv6())
+}
+
+// firewallRestore replays the last confirmed ruleset and re-opens the panel port.
+// panel-firewall.service runs it at boot, before the daemon, so it opens the database
+// directly.
 func firewallRestore(ctx context.Context, w io.Writer, dbPath string) error {
 	st, err := openStore(dbPath)
 	if err != nil {
@@ -62,7 +73,18 @@ func firewallRestore(ctx context.Context, w io.Writer, dbPath string) error {
 	if err := firewall.RestoreConfirmed(ctx, st, firewall.ExecCmd{}); err != nil {
 		return fmt.Errorf("firewall restore: %w", err)
 	}
-	fmt.Fprintln(w, "firewall: confirmed ruleset restored (nothing happens when the firewall is disabled)")
+	reg, err := settings.New(st)
+	if err != nil {
+		return fmt.Errorf("firewall restore: %w", err)
+	}
+	port, err := reg.Int(ctx, "panel.port")
+	if err != nil {
+		return fmt.Errorf("firewall restore: panel.port: %w", err)
+	}
+	if err := openPanelPort(ctx, port); err != nil {
+		return fmt.Errorf("firewall restore: panel port %d: %w", port, err)
+	}
+	fmt.Fprintln(w, "firewall: confirmed ruleset restored (nothing happens when the firewall is disabled); panel port open")
 	return nil
 }
 

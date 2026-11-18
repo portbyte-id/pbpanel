@@ -23,10 +23,11 @@ import (
 // block forever.
 func installPanel(ctx context.Context, stdout io.Writer) error {
 	in := &install.Installer{
-		Layout: defaultLayout(),
-		OS:     osdep.NewUbuntu(osdep.DefaultRunner()),
-		Runner: osdep.DefaultRunner(),
-		Out:    stdout,
+		Layout:          defaultLayout(),
+		OS:              osdep.NewUbuntu(osdep.DefaultRunner()),
+		Runner:          osdep.DefaultRunner(),
+		Out:             stdout,
+		PanelPortOpener: openPanelPort,
 	}
 
 	// The prompt is decided before the run: once the admin account exists the
