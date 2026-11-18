@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type FirewallPending, type FirewallRule, type FirewallState } from "@/lib/api"
 import { coarseSeconds, useCountdown } from "@/lib/countdown"
 import {
+  useAddAllowlistEntry,
   useAddBlocklistEntry,
   useApplyFirewall,
   useConfirmFirewall,
@@ -20,8 +21,10 @@ import {
   useDisableFirewall,
   useEnableFirewall,
   useFirewall,
+  useFirewallAllowlist,
   useFirewallBlocklist,
   useFirewallRules,
+  useRemoveAllowlistEntry,
   useRemoveBlocklistEntry,
   useRevertFirewall,
 } from "@/lib/queries"
@@ -72,12 +75,16 @@ export function FirewallPage() {
         <TabsList>
           <TabsTrigger value="rules">Rules</TabsTrigger>
           <TabsTrigger value="blocklist">Blocklist</TabsTrigger>
+          <TabsTrigger value="allowlist">Allow list</TabsTrigger>
         </TabsList>
         <TabsContent value="rules">
           <RulesSection fw={fw} />
         </TabsContent>
         <TabsContent value="blocklist">
           <BlocklistSection />
+        </TabsContent>
+        <TabsContent value="allowlist">
+          <AllowlistSection />
         </TabsContent>
       </Tabs>
     </div>
@@ -543,6 +550,123 @@ function BlocklistSection() {
                         size="sm"
                         disabled={remove.isPending}
                         aria-label={`Unblock ${entry.addr}`}
+                        onClick={() => remove.mutate(entry.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {remove.error && (
+        <p role="alert" className="text-destructive text-xs">
+          {firewallErrorText(remove.error, "The address could not be removed.")}
+        </p>
+      )}
+    </section>
+  )
+}
+
+function AllowlistSection() {
+  const id = useId()
+  const list = useFirewallAllowlist()
+  const add = useAddAllowlistEntry()
+  const remove = useRemoveAllowlistEntry()
+  const [addr, setAddr] = useState("")
+  const [comment, setComment] = useState("")
+
+  const entries = list.data ?? []
+  const addError = firewallErrorText(add.error, "The address could not be allowed.")
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const input: { addr: string; comment?: string } = { addr: addr.trim() }
+    if (comment.trim() !== "") input.comment = comment.trim()
+    add.mutate(input, {
+      onSuccess: () => {
+        setAddr("")
+        setComment("")
+      },
+    })
+  }
+
+  return (
+    <section aria-labelledby="fw-allowlist" className="flex flex-col gap-3">
+      <h3 id="fw-allowlist" className="text-sm font-semibold">
+        Allow list
+      </h3>
+      <p className="text-muted-foreground text-sm">
+        Always allowed from these addresses, on every port. The blocklist cannot block them.
+      </p>
+
+      <form onSubmit={submit} className="flex flex-wrap items-start gap-3" noValidate>
+        <div className="flex min-w-48 flex-col gap-1.5">
+          <Label htmlFor={`${id}-addr`}>Address or CIDR</Label>
+          <Input
+            id={`${id}-addr`}
+            value={addr}
+            onChange={(e) => setAddr(e.target.value)}
+            placeholder="198.51.100.7"
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={add.error !== null}
+            aria-describedby={add.error ? `${id}-error` : undefined}
+          />
+        </div>
+        <div className="flex min-w-48 flex-col gap-1.5">
+          <Label htmlFor={`${id}-comment`}>Comment</Label>
+          <Input
+            id={`${id}-comment`}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+        <Button type="submit" className="mt-[2rem]" disabled={add.isPending || addr.trim() === ""}>
+          {add.isPending ? "Blocking…" : "Allow address"}
+        </Button>
+      </form>
+      {addError && (
+        <p id={`${id}-error`} role="alert" className="text-destructive text-xs">
+          {addError}
+        </p>
+      )}
+
+      {list.error && (
+        <p role="alert" className="text-destructive text-sm">
+          {firewallErrorText(list.error, "The allow list could not be loaded.")}
+        </p>
+      )}
+
+      {!list.isPending && entries.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No allowed addresses.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <caption className="sr-only">Allowed addresses</caption>
+            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+              <tr>
+                <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {entries.map((entry) => (
+                <tr key={entry.id}>
+                  <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
+                  <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
+                  <td className="px-3 py-1.5">
+                    <div className="flex justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={remove.isPending}
+                        aria-label={`Remove ${entry.addr} from the allow list`}
                         onClick={() => remove.mutate(entry.id)}
                       >
                         Remove

@@ -96,3 +96,40 @@ func assertCalls(t *testing.T, got, want []string) {
 		t.Fatalf("calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestOpenWebPortsOneRulePerSpecPerFamily(t *testing.T) {
+	c := &portCmd{listing: map[string]string{}}
+	if err := OpenWebPorts(context.Background(), c, true); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, bin := range []string{"iptables", "ip6tables"} {
+		want = append(want, bin+" -S INPUT",
+			bin+" -I INPUT 1 -p tcp -m tcp --dport 80 -m comment --comment panel:web -j ACCEPT",
+			bin+" -I INPUT 1 -p tcp -m tcp --dport 443 -m comment --comment panel:web -j ACCEPT",
+			bin+" -I INPUT 1 -p udp -m udp --dport 443 -m comment --comment panel:web -j ACCEPT")
+	}
+	assertCalls(t, c.calls, want)
+}
+
+func TestOpenWebPortsReplacesOldRulesAndKeepsOthers(t *testing.T) {
+	c := &portCmd{listing: map[string]string{
+		"iptables": "-A INPUT -p tcp -m tcp --dport 80 -m comment --comment panel:web -j ACCEPT\n" +
+			"-A INPUT -p tcp -m tcp --dport 8443 -m comment --comment panel:open -j ACCEPT\n",
+	}}
+	if err := OpenWebPorts(context.Background(), c, false); err != nil {
+		t.Fatal(err)
+	}
+	dels := 0
+	for _, call := range c.calls {
+		if strings.Contains(call, " -D ") {
+			dels++
+			if !strings.Contains(call, "panel:web") {
+				t.Fatalf("deleted a foreign rule: %s", call)
+			}
+		}
+	}
+	if dels != 1 || len(c.calls) != 5 {
+		t.Fatalf("dels=%d calls=%v", dels, c.calls)
+	}
+}

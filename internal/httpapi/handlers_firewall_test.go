@@ -49,6 +49,14 @@ func (f *fakeFirewall) AddBlock(_ context.Context, e firewall.BlockEntry) (firew
 	return e, f.err
 }
 func (f *fakeFirewall) DeleteBlock(_ context.Context, id int64) error { f.gotID = id; return f.err }
+func (f *fakeFirewall) Allowlist(context.Context) ([]firewall.AllowEntry, error) {
+	return []firewall.AllowEntry{{ID: 1, Addr: "198.51.100.9/32"}}, f.err
+}
+func (f *fakeFirewall) AddAllow(_ context.Context, e firewall.AllowEntry) (firewall.AllowEntry, error) {
+	e.ID = 4
+	return e, f.err
+}
+func (f *fakeFirewall) DeleteAllow(_ context.Context, id int64) error { f.gotID = id; return f.err }
 func (f *fakeFirewall) Enable(context.Context) (firewall.Pending, error) {
 	f.rec("enable")
 	return f.pending, f.err
@@ -150,6 +158,8 @@ func TestFirewallErrorMapping(t *testing.T) {
 		{"protocol", firewall.ErrProto, 400, errInvalidRule, "protocol", "POST", "/api/firewall/rules"},
 		{"rule source", firewall.ErrAddr, 400, errInvalidRule, "source", "POST", "/api/firewall/rules"},
 		{"block address", firewall.ErrAddr, 400, errInvalidRule, "addr", "POST", "/api/firewall/blocklist"},
+		{"allow address", firewall.ErrAddr, 400, errInvalidRule, "addr", "POST", "/api/firewall/allowlist"},
+		{"allow duplicate", firewall.ErrDuplicate, 409, errConflict, "", "POST", "/api/firewall/allowlist"},
 		{"comment", firewall.ErrComment, 400, errInvalidRule, "comment", "POST", "/api/firewall/rules"},
 		{"missing", firewall.ErrNotFound, 404, errNotFound, "", "DELETE", "/api/firewall/rules/9"},
 		{"duplicate", firewall.ErrDuplicate, 409, errConflict, "", "POST", "/api/firewall/blocklist"},
@@ -167,7 +177,7 @@ func TestFirewallErrorMapping(t *testing.T) {
 			switch c.path {
 			case "/api/firewall/rules":
 				body = map[string]any{"portStart": 1, "portEnd": 1, "protocol": "tcp", "enabled": true}
-			case "/api/firewall/blocklist":
+			case "/api/firewall/blocklist", "/api/firewall/allowlist":
 				body = map[string]any{"addr": "x"}
 			case "/api/firewall/confirm":
 				body = map[string]any{"token": "t"}
@@ -225,5 +235,33 @@ func TestFirewallStateShape(t *testing.T) {
 	}
 	if raw["pending"] != nil {
 		t.Errorf("pending must be null when nothing is waiting, got %v", raw["pending"])
+	}
+}
+
+func TestFirewallAllowlistRoundTrip(t *testing.T) {
+	f := &fakeFirewall{}
+	h, s := firewallHarness(t, f)
+
+	rec := h.do(http.MethodPost, "/api/firewall/allowlist", s.cookie, s.csrf,
+		map[string]any{"addr": "198.51.100.9", "comment": "office"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var got firewall.AllowEntry
+	h.decode(rec, &got)
+	if got.ID != 4 || got.Addr != "198.51.100.9" || got.Comment != "office" {
+		t.Fatalf("response: %+v", got)
+	}
+	if rec := h.do(http.MethodGet, "/api/firewall/allowlist", s.cookie, s.csrf, nil); rec.Code != http.StatusOK {
+		t.Fatalf("list: %d", rec.Code)
+	}
+	if rec := h.do(http.MethodDelete, "/api/firewall/allowlist/5", s.cookie, s.csrf, nil); rec.Code != http.StatusNoContent || f.gotID != 5 {
+		t.Fatalf("delete: %d id=%d", rec.Code, f.gotID)
+	}
+	if rec := h.do(http.MethodDelete, "/api/firewall/allowlist/abc", s.cookie, s.csrf, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("bad id: %d", rec.Code)
+	}
+	if rec := h.doRaw(http.MethodPost, "/api/firewall/allowlist", s.cookie, s.csrf, `{"addr":"1.2.3.4","nope":2}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field: %d", rec.Code)
 	}
 }

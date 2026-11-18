@@ -350,82 +350,85 @@ func (m *Manager) prepareRoot(s Site, indexName string) (created bool, err error
 	return true, nil
 }
 
-// includeFiles renders the panel-owned include files of a site.
-func (m *Manager) includeFiles(ctx context.Context, s Site) ([]confedit.File, error) {
-	listen, err := nginx.RenderListen()
+// includeFiles renders the include files a site still has: the reverse proxy's.
+// Everything else is a block in the site file.
+func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
+	if s.Kind != KindProxy {
+		return nil, nil
+	}
+	proxy, err := nginx.RenderProxy(s.ProxyTarget)
 	if err != nil {
 		return nil, err
 	}
-	names, err := nginx.RenderNames(s.Domain, s.Aliases)
-	if err != nil {
-		return nil, err
-	}
-	acme, err := m.p.RenderACME()
-	if err != nil {
-		return nil, err
-	}
-	tlsFile, err := m.tlsFile(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	files := []confedit.File{
-		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeListen), Content: listen},
-		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeNames), Content: names},
-		{Path: m.p.SiteInclude(s.Domain, nginx.IncludeACME), Content: acme},
-		tlsFile,
-	}
-	if s.Kind == KindProxy {
-		proxy, err := nginx.RenderProxy(s.ProxyTarget)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludeProxy), Content: proxy})
-	}
-	if s.Kind == KindPHP {
-		b, err := m.renderPHPInclude(s)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludePHP), Content: b})
-	}
-	return files, nil
+	return []confedit.File{{Path: m.p.SiteInclude(s.Domain, nginx.IncludeProxy), Content: proxy}}, nil
 }
 
-// tlsFile renders tls.conf: the HTTPS listener when the store has a certificate
-// for the site, an empty managed file when it has none.
-func (m *Manager) tlsFile(ctx context.Context, s Site) (confedit.File, error) {
+// tlsBody renders the TLS block: the HTTPS listener when the store has a
+// certificate for the site, a comment when it has none.
+func (m *Manager) tlsBody(ctx context.Context, s Site) ([]byte, error) {
 	var t *nginx.TLS
 	if m.tls != nil {
 		info, ok, err := m.tls.Lookup(ctx, s.Domain)
 		if err != nil {
-			return confedit.File{}, fmt.Errorf("sites: look up the certificate of %s: %w", s.Domain, err)
+			return nil, fmt.Errorf("sites: look up the certificate of %s: %w", s.Domain, err)
 		}
 		if ok {
 			t = &nginx.TLS{CertFile: info.CertFile, KeyFile: info.KeyFile, RedirectHTTP: info.RedirectHTTP}
 		}
 	}
-	b, err := m.p.RenderTLS(s.Domain, t)
-	if err != nil {
-		return confedit.File{}, err
-	}
-	return confedit.File{Path: m.p.SiteInclude(s.Domain, nginx.IncludeTLS), Content: b}, nil
+	return m.p.RenderTLS(s.Domain, t)
 }
 
-func (m *Manager) siteFile(s Site) (confedit.File, error) {
+// siteFile renders the whole site file with every managed block filled in.
+func (m *Manager) siteFile(ctx context.Context, s Site) (confedit.File, error) {
 	b, err := m.p.RenderSiteFile(s.nginx())
 	if err != nil {
 		return confedit.File{}, err
 	}
+	listen, err := nginx.RenderListen()
+	if err != nil {
+		return confedit.File{}, err
+	}
+	names, err := nginx.RenderNames(s.Domain, s.Aliases)
+	if err != nil {
+		return confedit.File{}, err
+	}
+	acme, err := m.p.RenderACME()
+	if err != nil {
+		return confedit.File{}, err
+	}
+	tls, err := m.tlsBody(ctx, s)
+	if err != nil {
+		return confedit.File{}, err
+	}
+	type part struct {
+		name string
+		body []byte
+	}
+	parts := []part{{nginx.BlockListen, listen}, {nginx.BlockNames, names}, {nginx.BlockACME, acme}, {nginx.BlockTLS, tls}}
+	if s.Kind == KindPHP {
+		phpBody, err := m.renderPHPInclude(s)
+		if err != nil {
+			return confedit.File{}, err
+		}
+		parts = append(parts, part{nginx.BlockPHP, phpBody})
+	}
+	for _, pt := range parts {
+		var ok bool
+		if b, ok = nginx.ReplaceBlock(b, pt.name, pt.body); !ok {
+			return confedit.File{}, fmt.Errorf("sites: the site template has no %s block", pt.name)
+		}
+	}
 	return confedit.File{Path: m.p.SiteFile(s.Domain), Content: b}, nil
 }
 
-// allFiles is every file a site owns: the include files and the site file.
+// allFiles is every file a site owns: the site file and the proxy include.
 func (m *Manager) allFiles(ctx context.Context, s Site) ([]confedit.File, error) {
-	files, err := m.includeFiles(ctx, s)
+	files, err := m.includeFiles(s)
 	if err != nil {
 		return nil, err
 	}
-	sf, err := m.siteFile(s)
+	sf, err := m.siteFile(ctx, s)
 	if err != nil {
 		return nil, err
 	}

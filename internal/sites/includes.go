@@ -24,6 +24,17 @@ const (
 	FeaturePHP    Feature = "php"
 )
 
+// featureBlock names the marked block a feature lives in inside the site file.
+// The proxy has none: it stays an include file.
+var featureBlock = map[Feature]string{
+	FeatureListen: nginx.BlockListen,
+	FeatureNames:  nginx.BlockNames,
+	FeatureACME:   nginx.BlockACME,
+	FeatureTLS:    nginx.BlockTLS,
+	FeaturePHP:    nginx.BlockPHP,
+}
+
+// featureFile is the include file a feature used before blocks, and the proxy's.
 var featureFile = map[Feature]string{
 	FeatureListen: nginx.IncludeListen,
 	FeatureNames:  nginx.IncludeNames,
@@ -91,10 +102,15 @@ func (m *Manager) scan(s Site) (Detail, error) {
 	}
 	for _, f := range m.featuresOf(s) {
 		inc := m.p.SiteInclude(s.Domain, featureFile[f])
-		st := FeatureStatus{Feature: f, Include: inc, Attached: !d.SiteFileMissing && nginx.HasIncludeLine(content, inc)}
+		block, hasBlockName := featureBlock[f]
+		inBlock := hasBlockName && nginx.HasBlock(content, block)
+		st := FeatureStatus{Feature: f, Include: inc, Attached: !d.SiteFileMissing && (inBlock || nginx.HasIncludeLine(content, inc))}
 		switch {
 		case d.SiteFileMissing:
 			st.Reason = "the site file does not exist; regenerate it"
+		case !st.Attached && hasBlockName:
+			begin, end := nginx.BlockMarkers(block)
+			st.Reason = "the site file has no `" + begin + "` and `" + end + "` lines; restore them or regenerate the site file"
 		case !st.Attached:
 			st.Reason = "the site file has no `include " + inc + ";` line; restore it or regenerate the site file"
 		}
@@ -133,8 +149,8 @@ type UpdateResult struct {
 	Apply confedit.Result
 }
 
-// Update changes a site's aliases or proxy target. Each rewrites only its own
-// include file; the site file is never touched. A control the site file has
+// Update changes a site's aliases or proxy target. The aliases are rewritten in
+// their block of the site file, the proxy target in the proxy include file. A control the site file has
 // detached is refused with a DetachedError instead of being written into a file
 // nothing reads.
 func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (UpdateResult, error) {
@@ -156,7 +172,10 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 
 	next := prev
 	next.Aliases = append([]string(nil), prev.Aliases...)
-	var files []confedit.File
+	patch, err := m.newPatch(prev)
+	if err != nil {
+		return UpdateResult{}, err
+	}
 
 	if in.Aliases != nil {
 		if err := detail.require(FeatureNames); err != nil {
@@ -169,7 +188,7 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 		if err != nil {
 			return UpdateResult{}, err
 		}
-		files = append(files, confedit.File{Path: m.p.SiteInclude(next.Domain, nginx.IncludeNames), Content: b})
+		patch.set(FeatureNames, b)
 	}
 	if in.ProxyTarget != nil {
 		if prev.Kind != KindProxy {
@@ -187,13 +206,13 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 		if err != nil {
 			return UpdateResult{}, err
 		}
-		files = append(files, confedit.File{Path: m.p.SiteInclude(next.Domain, nginx.IncludeProxy), Content: b})
+		patch.set(FeatureProxy, b)
 	}
 
 	if err := m.store(ctx, next); err != nil {
 		return UpdateResult{}, err
 	}
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "edit site " + next.Domain})
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: patch.files(), Services: []confedit.Service{m.svc}, Reason: "edit site " + next.Domain})
 	if err != nil {
 		if rbErr := m.store(context.WithoutCancel(ctx), prev); rbErr != nil {
 			err = errors.Join(err, fmt.Errorf("sites: restoring %s in the database: %w", prev.Domain, rbErr))
@@ -236,9 +255,9 @@ func (m *Manager) Regenerate(ctx context.Context, domain string) (confedit.Resul
 	return m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "regenerate site file " + s.Domain})
 }
 
-// RefreshTLS re-renders a site's tls.conf from the certificate store, so a
-// newly issued, renewed or removed certificate reaches nginx. Only that one
-// include file is rewritten, validated and reloaded. A site file that no longer
+// RefreshTLS re-renders a site's TLS block from the certificate store, so a
+// newly issued, renewed or removed certificate reaches nginx. Only that block is
+// rewritten, validated and reloaded. A site file that no longer
 // includes it is refused with a DetachedError: writing the file would change
 // nothing nginx reads, and the caller must not report a certificate as live.
 func (m *Manager) RefreshTLS(ctx context.Context, domain string) (confedit.Result, error) {
@@ -256,11 +275,16 @@ func (m *Manager) RefreshTLS(ctx context.Context, domain string) (confedit.Resul
 	if err := detail.require(FeatureTLS); err != nil {
 		return confedit.Result{}, err
 	}
-	f, err := m.tlsFile(ctx, s)
+	body, err := m.tlsBody(ctx, s)
 	if err != nil {
 		return confedit.Result{}, err
 	}
-	return m.ap.Apply(ctx, confedit.Change{Files: []confedit.File{f}, Services: []confedit.Service{m.svc}, Reason: "refresh TLS " + s.Domain})
+	patch, err := m.newPatch(s)
+	if err != nil {
+		return confedit.Result{}, err
+	}
+	patch.set(FeatureTLS, body)
+	return m.ap.Apply(ctx, confedit.Change{Files: patch.files(), Services: []confedit.Service{m.svc}, Reason: "refresh TLS " + s.Domain})
 }
 
 func trimPrefix(err error) string {
@@ -269,4 +293,96 @@ func trimPrefix(err error) string {
 		return s[len(p):]
 	}
 	return err.Error()
+}
+
+// sitePatch is an edit of one site's configuration in progress: the site file as
+// it is on disk, with managed parts replaced in place. A part whose block is not
+// in the file but whose include line is (a site made before blocks) is written to
+// its include file instead, so older sites keep working untouched.
+type sitePatch struct {
+	m       *Manager
+	s       Site
+	content []byte
+	changed bool
+	extra   []confedit.File
+}
+
+func (m *Manager) newPatch(s Site) (*sitePatch, error) {
+	content, err := m.fs.ReadFile(m.p.SiteFile(s.Domain))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("sites: read %s: %w", m.p.SiteFile(s.Domain), err)
+	}
+	return &sitePatch{m: m, s: s, content: content}, nil
+}
+
+// set replaces one feature's managed part with body.
+func (p *sitePatch) set(f Feature, body []byte) {
+	if block, ok := featureBlock[f]; ok {
+		if next, found := nginx.ReplaceBlock(p.content, block, body); found {
+			p.content, p.changed = next, true
+			return
+		}
+	}
+	inc := p.m.p.SiteInclude(p.s.Domain, featureFile[f])
+	// A block feature whose markers and include line are both gone is detached:
+	// writing its include file would leave a file nothing reads.
+	if _, isBlock := featureBlock[f]; isBlock && len(p.content) > 0 && !nginx.HasIncludeLine(p.content, inc) {
+		return
+	}
+	p.extra = append(p.extra, confedit.File{Path: inc, Content: body})
+}
+
+// files is everything the patch wants written.
+func (p *sitePatch) files() []confedit.File {
+	out := append([]confedit.File(nil), p.extra...)
+	if p.changed {
+		out = append(out, confedit.File{Path: p.m.p.SiteFile(p.s.Domain), Content: p.content})
+	}
+	return out
+}
+
+// managedFiles is what the panel wants on disk for a site's managed parts, each
+// written where the site keeps it: in its block of the site file, or in its
+// include file for a site made before blocks. The boot reconcile writes only the
+// files that differ.
+func (m *Manager) managedFiles(ctx context.Context, s Site) ([]confedit.File, error) {
+	patch, err := m.newPatch(s)
+	if err != nil {
+		return nil, err
+	}
+	listen, err := nginx.RenderListen()
+	if err != nil {
+		return nil, err
+	}
+	names, err := nginx.RenderNames(s.Domain, s.Aliases)
+	if err != nil {
+		return nil, err
+	}
+	acme, err := m.p.RenderACME()
+	if err != nil {
+		return nil, err
+	}
+	tls, err := m.tlsBody(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	patch.set(FeatureListen, listen)
+	patch.set(FeatureNames, names)
+	patch.set(FeatureACME, acme)
+	patch.set(FeatureTLS, tls)
+	switch s.Kind {
+	case KindProxy:
+		proxy, err := nginx.RenderProxy(s.ProxyTarget)
+		if err != nil {
+			return nil, err
+		}
+		patch.set(FeatureProxy, proxy)
+	case KindPHP:
+		body, err := m.renderPHPInclude(s)
+		if err != nil {
+			return nil, err
+		}
+		patch.set(FeaturePHP, body)
+	}
+	return patch.files(), nil
 }

@@ -215,13 +215,22 @@ func TestCreateStaticSite(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/www/panel/nginx/sites/a.test.conf",
-		"/www/panel/nginx/includes/a.test/listen.conf",
-		"/www/panel/nginx/includes/a.test/names.conf",
-		"/www/panel/nginx/includes/a.test/acme.conf",
 	} {
 		if !r.fs.has(p) {
 			t.Errorf("%s was not written", p)
 		}
+	}
+	for _, p := range []string{"listen", "names", "acme", "tls"} {
+		if r.fs.has("/www/panel/nginx/includes/a.test/" + p + ".conf") {
+			t.Errorf("%s.conf was written; those parts are blocks of the site file now", p)
+		}
+	}
+	site, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
+	if b := blockOf(t, string(site), "names"); !strings.Contains(b, "server_name a.test www.a.test;") {
+		t.Errorf("names block = %q", b)
+	}
+	if b := blockOf(t, string(site), "listen"); !strings.Contains(b, "listen 80;") {
+		t.Errorf("listen block = %q", b)
 	}
 	if r.fs.has("/www/panel/nginx/includes/a.test/proxy.conf") {
 		t.Error("a static site got a proxy.conf")
@@ -430,11 +439,12 @@ func TestDetachedWhenAnIncludeLineIsRemoved(t *testing.T) {
 		}
 	}
 
-	// The operator deletes the proxy include and comments out the names one.
+	// The operator deletes the proxy include and removes the names block's markers.
 	file := "/www/panel/nginx/sites/a.test.conf"
 	b, _ := r.fs.ReadFile(file)
 	edited := strings.Replace(string(b), "    include /www/panel/nginx/includes/a.test/proxy.conf;\n", "", 1)
-	edited = strings.Replace(edited, "    include /www/panel/nginx/includes/a.test/names.conf;", "    # include /www/panel/nginx/includes/a.test/names.conf;", 1)
+	edited = strings.Replace(edited, "    # >>> pb:names\n", "", 1)
+	edited = strings.Replace(edited, "    # <<< pb:names\n", "", 1)
 	r.fs.files[file] = []byte(edited + "\n# my own note\n")
 
 	d, _ = r.m.Detail(ctx, "a.test")
@@ -462,6 +472,11 @@ func TestDetachedWhenAnIncludeLineIsRemoved(t *testing.T) {
 	}
 	if len(r.ap.applied) != before {
 		t.Error("a detached control still wrote a file")
+	}
+	for _, f := range d.Features {
+		if f.Feature == FeatureNames && !strings.Contains(f.Reason, "pb:names") {
+			t.Errorf("names reason = %q, want it to name the markers", f.Reason)
+		}
 	}
 	if s, _ := r.m.Get(ctx, "a.test"); s.ProxyTarget != "http://127.0.0.1:3000" || len(s.Aliases) != 0 {
 		t.Errorf("a refused update changed the database: %+v", s)
@@ -499,13 +514,62 @@ func TestMissingSiteFileDetachesEverything(t *testing.T) {
 	}
 }
 
-func TestUpdateRewritesOnlyItsIncludeFile(t *testing.T) {
+// blockOf returns the text between a block's marker lines, or fails the test
+// when the block is not there.
+func blockOf(t *testing.T, content, name string) string {
+	t.Helper()
+	begin, end := nginx.BlockMarkers(name)
+	lines := strings.Split(content, "\n")
+	from := -1
+	for i, l := range lines {
+		switch tl := strings.TrimSpace(l); {
+		case from < 0 && tl == begin:
+			from = i
+		case from >= 0 && tl == end:
+			return strings.Join(lines[from+1:i], "\n")
+		}
+	}
+	t.Fatalf("no %q block in:\n%s", name, content)
+	return ""
+}
+
+// legacySite replaces a site's one-file config by the layout older versions
+// wrote: a site file with include lines and no blocks, and one file per part.
+// Returns the include path of each part.
+func legacySite(t *testing.T, r *rig, domain string, aliases []string) map[string]string {
+	t.Helper()
+	dir := "/www/panel/nginx/includes/" + domain + "/"
+	inc := map[string]string{}
+	for _, n := range []string{"listen", "names", "acme", "tls", "proxy"} {
+		inc[n] = dir + n + ".conf"
+	}
+	names, _ := nginx.RenderNames(domain, aliases)
+	r.fs.files[inc["names"]] = names
+	r.fs.files[inc["tls"]] = []byte("# Managed by PB panel\n")
+	r.fs.files[inc["listen"]] = []byte("listen 80;\n")
+	r.fs.files[inc["acme"]] = []byte("# acme\n")
+	r.fs.files[inc["proxy"]] = []byte("proxy_pass http://127.0.0.1:3000;\n")
+	site := "# Managed by PB panel for " + domain + ".\nserver {\n"
+	for _, n := range []string{"listen", "names", "acme", "tls"} {
+		site += "    include " + inc[n] + ";\n"
+	}
+	site += "\n    include " + inc["proxy"] + ";\n}\n"
+	r.fs.files["/www/panel/nginx/sites/"+domain+".conf"] = []byte(site)
+	return inc
+}
+
+func TestUpdateRewritesOnlyItsOwnPart(t *testing.T) {
 	r := newRig(t)
 	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Aliases: []string{"old.a.test"}, Kind: KindProxy, ProxyTarget: "http://127.0.0.1:3000"}); err != nil {
 		t.Fatal(err)
 	}
+	const siteFile = "/www/panel/nginx/sites/a.test.conf"
+	// The operator's own lines around the blocks must survive an edit.
+	b, _ := r.fs.ReadFile(siteFile)
+	custom := strings.Replace(string(b), "    access_log", "    # my own directive\n    client_max_body_size 50m;\n    access_log", 1)
+	custom = "# header note\n" + custom
+	r.fs.files[siteFile] = []byte(custom)
 	r.ap.applied = nil
-	siteBefore, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
 
 	aliases := []string{"new.a.test", "B.test"}
 	res, err := r.m.Update(ctx, "a.test", UpdateInput{Aliases: &aliases})
@@ -515,16 +579,20 @@ func TestUpdateRewritesOnlyItsIncludeFile(t *testing.T) {
 	if !slices.Equal(res.Site.Aliases, []string{"new.a.test", "b.test"}) {
 		t.Errorf("aliases = %v", res.Site.Aliases)
 	}
-	if got := r.ap.paths(); !slices.Equal(got, []string{"/www/panel/nginx/includes/a.test/names.conf"}) {
-		t.Errorf("an alias edit wrote %v, want only names.conf", got)
+	if got := r.ap.paths(); !slices.Equal(got, []string{siteFile}) {
+		t.Errorf("an alias edit wrote %v, want only the site file", got)
 	}
-	names, _ := r.fs.ReadFile("/www/panel/nginx/includes/a.test/names.conf")
-	if !strings.Contains(string(names), "server_name a.test new.a.test b.test;") {
-		t.Errorf("names.conf = %q", names)
+	after, _ := r.fs.ReadFile(siteFile)
+	if got := blockOf(t, string(after), "names"); !strings.Contains(got, "server_name a.test new.a.test b.test;") || strings.Contains(got, "old.a.test") {
+		t.Errorf("names block = %q", got)
 	}
-	siteAfter, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
-	if string(siteBefore) != string(siteAfter) {
-		t.Error("the site file changed")
+	// Only the names block moved: swap it back and the file is byte-identical.
+	oldNames := blockOf(t, custom, "names")
+	if got := strings.Replace(string(after), blockOf(t, string(after), "names"), oldNames, 1); got != custom {
+		t.Errorf("something besides the names block changed:\n%s", after)
+	}
+	if r.fs.has("/www/panel/nginx/includes/a.test/names.conf") {
+		t.Error("names.conf was written for a site that keeps its names in a block")
 	}
 
 	r.ap.applied = nil
@@ -534,6 +602,43 @@ func TestUpdateRewritesOnlyItsIncludeFile(t *testing.T) {
 	}
 	if got := r.ap.paths(); !slices.Equal(got, []string{"/www/panel/nginx/includes/a.test/proxy.conf"}) {
 		t.Errorf("a target edit wrote %v, want only proxy.conf", got)
+	}
+}
+
+// A site file from before blocks has include lines and no markers: an alias edit
+// keeps writing names.conf and leaves the site file alone.
+func TestUpdateOfALegacySiteWritesItsNamesInclude(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindProxy, ProxyTarget: "http://127.0.0.1:3000"}); err != nil {
+		t.Fatal(err)
+	}
+	inc := legacySite(t, r, "a.test", nil)
+	siteBefore, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
+	r.ap.applied = nil
+
+	d, err := r.m.Detail(ctx, "a.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range d.Features {
+		if !f.Attached {
+			t.Errorf("%s of a legacy site is detached: %s", f.Feature, f.Reason)
+		}
+	}
+	aliases := []string{"www.a.test"}
+	if _, err := r.m.Update(ctx, "a.test", UpdateInput{Aliases: &aliases}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ap.paths(); !slices.Equal(got, []string{inc["names"]}) {
+		t.Errorf("an alias edit of a legacy site wrote %v, want only names.conf", got)
+	}
+	names, _ := r.fs.ReadFile(inc["names"])
+	if !strings.Contains(string(names), "server_name a.test www.a.test;") {
+		t.Errorf("names.conf = %q", names)
+	}
+	siteAfter, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
+	if string(siteBefore) != string(siteAfter) {
+		t.Error("the legacy site file changed")
 	}
 }
 
@@ -613,12 +718,14 @@ func TestReconcileRestoresMissingContainerAndFiles(t *testing.T) {
 	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Aliases: []string{"www.a.test"}, Kind: KindStatic}); err != nil {
 		t.Fatal(err)
 	}
-	// A fresh host after a restore: no nginx.conf, no panel files, an include gone.
-	delete(r.fs.files, "/www/panel/nginx/includes/a.test/names.conf")
+	// A fresh host after a restore: no nginx.conf, no panel files, and the names
+	// block of the site file damaged, next to a line of the operator's.
+	const siteConf = "/www/panel/nginx/sites/a.test.conf"
 	rt := &fakeRuntime{present: true, action: docker.ActionCreate}
 	rec, live := newReconciler(t, r, rt)
-	siteFile, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
-	r.fs.files["/www/panel/nginx/sites/a.test.conf"] = append(siteFile, []byte("# operator edit\n")...)
+	cur, _ := r.fs.ReadFile(siteConf)
+	damaged := strings.Replace(string(cur), "server_name a.test www.a.test;", "server_name stale.test;", 1)
+	r.fs.files[siteConf] = append([]byte(damaged), []byte("# operator edit\n")...)
 	r.ap.applied = nil
 
 	st := rec.Run(ctx)
@@ -630,16 +737,16 @@ func TestReconcileRestoresMissingContainerAndFiles(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/www/panel/nginx/nginx.conf", "/www/panel/nginx/panel-main.conf", "/www/panel/nginx/panel-http.conf",
-		"/www/panel/nginx/includes/a.test/names.conf",
 	} {
 		if !r.fs.has(p) {
 			t.Errorf("%s was not restored", p)
 		}
 	}
-	if slices.Contains(r.ap.paths(), "/www/panel/nginx/sites/a.test.conf") {
-		t.Error("reconcile rewrote the raw site file")
+	got, _ := r.fs.ReadFile(siteConf)
+	if b := blockOf(t, string(got), "names"); !strings.Contains(b, "server_name a.test www.a.test;") || strings.Contains(b, "stale.test") {
+		t.Errorf("the damaged names block was not restored: %q", b)
 	}
-	if got, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf"); !strings.HasSuffix(string(got), "# operator edit\n") {
+	if !strings.HasSuffix(string(got), "# operator edit\n") {
 		t.Error("the operator's edit to the site file was lost")
 	}
 	if live.reloads != 0 {

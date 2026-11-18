@@ -32,24 +32,33 @@ function DialogOverlay({
   )
 }
 
+/**
+ * How many dialogs are open above this one. A first-level dialog is 500px wide; a
+ * dialog opened from inside another (a confirmation, a job log) keeps the smaller
+ * default so it reads as belonging to the one under it. A caller's own width wins.
+ */
+const DialogDepth = React.createContext(0)
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & { showCloseButton?: boolean }) {
+  const depth = React.useContext(DialogDepth)
   return (
     <DialogPrimitive.Portal>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2.5rem)] -translate-x-1/2 -translate-y-1/2 gap-3 rounded-lg border p-4 shadow-xl sm:max-w-md",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2.5rem)] -translate-x-1/2 -translate-y-1/2 gap-3 rounded-lg border p-4 shadow-xl",
+          depth === 0 ? "sm:max-w-[500px]" : "sm:max-w-md",
           className,
         )}
         {...props}
       >
-        {children}
+        <DialogDepth.Provider value={depth + 1}>{children}</DialogDepth.Provider>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

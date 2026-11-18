@@ -218,6 +218,17 @@ func TestTLSKeysValidate(t *testing.T) {
 			t.Errorf("directory %q has no label", v)
 		}
 	}
+	for _, v := range []string{"nobody", "a b@example.com", "A <a@b.c>", "a@b.c,d@e.f"} {
+		if err := r.Set(ctx, KeyTLSACMEEmail, v); err == nil {
+			t.Errorf("email %q accepted", v)
+		}
+	}
+	if err := r.Set(ctx, KeyTLSACMEEmail, "ops@example.com"); err != nil {
+		t.Errorf("email rejected: %v", err)
+	}
+	if err := r.Set(ctx, KeyTLSACMEEmail, ""); err != nil {
+		t.Errorf("email cannot be cleared: %v", err)
+	}
 	// EAB credentials may be empty (Let's Encrypt) and are set for Google.
 	for _, k := range []string{KeyTLSACMEEABKid, KeyTLSACMEEABHMACKey} {
 		if err := r.Set(ctx, k, "abc"); err != nil {
@@ -525,7 +536,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"PHP":     {"php.versions"},
 		"Files": {"fm.editor.max_bytes", "fm.upload.chunk_max_bytes", "fm.upload.sweep_age",
 			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
-		"TLS": {"tls.acme.directory", "tls.acme.eab_kid", "tls.acme.eab_hmac_key",
+		"TLS": {"tls.acme.directory", "tls.acme.email", "tls.acme.eab_kid", "tls.acme.eab_hmac_key",
 			"tls.renew.days_before", "tls.panel.auto_ip"},
 		"Cron": {"cron.allow_shell"},
 		"Logs": {"logs.rotate.max_bytes", "logs.rotate.keep"},

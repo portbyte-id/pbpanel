@@ -68,6 +68,12 @@ func newTLS(st *store.Store, reg *settings.Registry, layout install.Layout, audi
 		},
 		// Read when an account is first registered at a CA that needs
 		// External Account Binding (Google Public CA).
+		Email: func() string {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			v, _ := reg.Str(ctx, settings.KeyTLSACMEEmail)
+			return v
+		},
 		EAB: func() (string, string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

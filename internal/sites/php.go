@@ -277,10 +277,13 @@ func (m *Manager) SwitchPHP(ctx context.Context, domain, ver string) (UpdateResu
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	files = append(files,
-		confedit.File{Path: m.php.Paths().PoolFile(old, prev.PHPPool), Delete: true},
-		confedit.File{Path: m.p.SiteInclude(prev.Domain, nginx.IncludePHP), Content: inc},
-	)
+	patch, err := m.newPatch(prev)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	patch.set(FeaturePHP, inc)
+	files = append(files, confedit.File{Path: m.php.Paths().PoolFile(old, prev.PHPPool), Delete: true})
+	files = append(files, patch.files()...)
 
 	if err := m.storeVersion(ctx, prev.Domain, ver); err != nil {
 		return UpdateResult{}, fmt.Errorf("sites: update %s: %w", prev.Domain, err)

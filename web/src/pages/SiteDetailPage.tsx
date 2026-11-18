@@ -1,6 +1,5 @@
 import { SkeletonRows } from "@/components/ui/skeleton"
-import { Link, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft } from "lucide-react"
+import { useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
@@ -20,76 +19,88 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type SiteDetail } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { useDeleteSite, useRegenerateSite, useSite, useUpdateSite } from "@/lib/queries"
 import { kindLabel } from "@/pages/SitesPage"
 
-/** One site: what the panel controls, the raw file, and where the logs are. */
-export function SiteDetailPage({ domain }: { domain: string }) {
+type Section = "domains" | "config" | "ssl" | "php" | "logs" | "delete"
+
+/**
+ * One site, as a dialog over the sites list: a rail of sections on the left, the
+ * section on the right. It replaces the old page; `/sites/<domain>` still opens
+ * it, so a link to a site keeps working.
+ */
+export function SiteDetailDialog({ domain, onClose }: { domain: string; onClose: () => void }) {
   const { data, isPending, error } = useSite(domain)
+  const [section, setSection] = useState<Section>("domains")
 
-  if (isPending) {
-    return <SkeletonRows label="Loading {domain}…" />
-  }
-  if (error) {
-    return (
-      <div className="flex flex-col gap-3">
-        <BackLink />
-        <p role="alert" className="text-destructive text-sm">
-          {error instanceof ApiError ? error.detail : "The site could not be loaded."}
-        </p>
-      </div>
-    )
-  }
+  const sections: { id: Section; label: string }[] = [
+    { id: "domains", label: data?.kind === "proxy" ? "Domains & proxy" : "Domain manager" },
+    { id: "config", label: "Config" },
+    { id: "ssl", label: "SSL" },
+    ...(data?.kind === "php" ? [{ id: "php" as const, label: "PHP version" }] : []),
+    { id: "logs", label: "Response log" },
+    { id: "delete", label: "Reset or delete" },
+  ]
 
   return (
-    <div className="flex max-w-4xl flex-col gap-4">
-      <BackLink />
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-semibold tracking-tight">{data.domain}</h2>
-        <Badge variant="secondary">{kindLabel(data.kind)}</Badge>
-      </div>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="h-[min(760px,90dvh)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[880px]">
+        <DialogHeader className="border-b px-4 py-3 pr-12">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            <span>Site modification [{domain}]</span>
+            {data && <Badge variant="secondary">{kindLabel(data.kind)}</Badge>}
+          </DialogTitle>
+          <DialogDescription>
+            {data ? `Added ${new Date(data.created_at).toLocaleString()}` : "Loading the site…"}
+          </DialogDescription>
+        </DialogHeader>
 
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          {data.kind === "php" && <TabsTrigger value="php">PHP</TabsTrigger>}
-          <TabsTrigger value="tls">TLS</TabsTrigger>
-          <TabsTrigger value="config">Config</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
-        </TabsList>
-        <TabsContent value="overview">
-          <Overview detail={data} />
-        </TabsContent>
-        {data.kind === "php" && (
-          <TabsContent value="php">
-            <SitePHP detail={data} />
-          </TabsContent>
+        {isPending ? (
+          <div className="p-4">
+            <SkeletonRows label={`Loading ${domain}…`} />
+          </div>
+        ) : error ? (
+          <p role="alert" className="text-destructive p-4 text-sm">
+            {error instanceof ApiError ? error.detail : "The site could not be loaded."}
+          </p>
+        ) : (
+          <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[11.5rem_minmax(0,1fr)] sm:grid-rows-1">
+            <nav
+              aria-label="Site sections"
+              className="bg-muted/30 flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
+            >
+              {sections.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-current={section === s.id ? "page" : undefined}
+                  onClick={() => setSection(s.id)}
+                  className={cn(
+                    "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
+                    section === s.id
+                      ? "bg-accent text-foreground font-medium"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </nav>
+
+            <div className="min-h-0 overflow-y-auto p-4">
+              {section === "domains" && <Overview detail={data} />}
+              {section === "config" && <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />}
+              {section === "ssl" && <SiteTLS detail={data} />}
+              {section === "php" && data.kind === "php" && <SitePHP detail={data} />}
+              {section === "logs" && <Logs domain={data.domain} php={data.kind === "php"} />}
+              {section === "delete" && <DangerZone detail={data} onGone={onClose} />}
+            </div>
+          </div>
         )}
-        <TabsContent value="tls">
-          <SiteTLS detail={data} />
-        </TabsContent>
-        <TabsContent value="config">
-          <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />
-        </TabsContent>
-        <TabsContent value="logs">
-          <Logs domain={data.domain} php={data.kind === "php"} />
-        </TabsContent>
-      </Tabs>
-    </div>
-  )
-}
-
-function BackLink() {
-  return (
-    <Link
-      to="/sites"
-      className="text-muted-foreground hover:text-foreground flex w-fit items-center gap-1 text-sm"
-    >
-      <ArrowLeft className="size-4" aria-hidden="true" />
-      All sites
-    </Link>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -128,13 +139,11 @@ function Overview({ detail }: { detail: SiteDetail }) {
         error={update.error}
         onSave={(input) => update.mutate(input)}
       />
-
-      <DangerZone detail={detail} />
     </div>
   )
 }
 
-function DangerZone({ detail }: { detail: SiteDetail }) {
+function DangerZone({ detail, onGone }: { detail: SiteDetail; onGone: () => void }) {
   const navigate = useNavigate()
   const regenerate = useRegenerateSite(detail.domain)
   const remove = useDeleteSite()
@@ -154,6 +163,10 @@ function DangerZone({ detail }: { detail: SiteDetail }) {
       <h3 id="danger-heading" className="text-sm font-semibold">
         Reset or remove
       </h3>
+      <p className="text-muted-foreground text-sm">
+        Regenerating rewrites the site's configuration file from the panel's template. Deleting
+        stops nginx answering for the site and removes its configuration.
+      </p>
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="outline" onClick={() => setDialog("regenerate")}>
           Regenerate site file
@@ -228,7 +241,10 @@ function DangerZone({ detail }: { detail: SiteDetail }) {
               disabled={typed.trim() !== detail.domain || remove.isPending}
               onClick={() =>
                 remove.mutate(detail.domain, {
-                  onSuccess: () => void navigate({ to: "/sites" }),
+                  onSuccess: () => {
+                    onGone()
+                    void navigate({ to: "/sites" })
+                  },
                 })
               }
             >

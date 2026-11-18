@@ -299,3 +299,108 @@ func TestACMEServesTheWebrootWithTheFullURI(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceBlock(t *testing.T) {
+	content := "# header" + NL + "server {" + NL +
+		"    # >>> pb:names" + NL + "    server_name old.test;" + NL + "    # <<< pb:names" + NL +
+		"    # >>> pb:tls" + NL + "    # <<< pb:tls" + NL +
+		"" + NL + "\troot /x;   " + NL + "}" + NL + "# footer, no newline"
+
+	if !HasBlock([]byte(content), BlockNames) || !HasBlock([]byte(content), BlockTLS) {
+		t.Fatal("HasBlock misses a block that is there")
+	}
+	for _, name := range []string{BlockPHP, BlockACME, "nope"} {
+		if HasBlock([]byte(content), name) {
+			t.Errorf("HasBlock(%q) = true for a block that is not there", name)
+		}
+		got, ok := ReplaceBlock([]byte(content), name, []byte("x;"+NL))
+		if ok || string(got) != content {
+			t.Errorf("ReplaceBlock(%q) = %v, changed=%v; want false and the content untouched", name, ok, string(got) != content)
+		}
+	}
+
+	// The body is indented like the begin marker, blank lines stay empty, and the
+	// leading "# Managed by PB panel" comment is dropped.
+	body := "# Managed by PB panel for a.test." + NL + "server_name a.test www.a.test;" + NL + NL + "location / {" + NL + "    return 204;" + NL + "}" + NL
+	got, ok := ReplaceBlock([]byte(content), BlockNames, []byte(body))
+	if !ok {
+		t.Fatal("ReplaceBlock did not find the names block")
+	}
+	want := strings.Replace(content, "    server_name old.test;", "    server_name a.test www.a.test;"+NL+NL+"    location / {"+NL+"        return 204;"+NL+"    }", 1)
+	if string(got) != want {
+		t.Errorf("ReplaceBlock:%s%s%swant:%s%s", NL, got, NL, NL, want)
+	}
+	if strings.Contains(string(got), "Managed by PB panel for a.test") || strings.Contains(string(got), "old.test") {
+		t.Error("the managed comment survived or the old body was kept")
+	}
+
+	// Filling an empty block, then emptying it again, leaves everything outside
+	// the markers byte for byte as it was (trailing spaces, tab, no final newline).
+	filled, ok := ReplaceBlock([]byte(content), BlockTLS, []byte("listen 443 ssl;"+NL))
+	if !ok || !strings.Contains(string(filled), "    # >>> pb:tls"+NL+"    listen 443 ssl;"+NL+"    # <<< pb:tls"+NL) {
+		t.Fatalf("filled = %q", filled)
+	}
+	// A comment-only body (what an empty TLS block renders as) leaves the block empty.
+	emptied, _ := ReplaceBlock(filled, BlockTLS, []byte("# Managed by PB panel"+NL))
+	if !strings.Contains(string(emptied), "    # >>> pb:tls"+NL+"    # <<< pb:tls"+NL) {
+		t.Errorf("a comment-only body did not leave the block empty: %q", emptied)
+	}
+	outside := func(s string) string {
+		var out []string
+		in := false
+		for _, l := range strings.Split(s, NL) {
+			tl := strings.TrimSpace(l)
+			switch {
+			case tl == "# >>> pb:tls":
+				in = true
+			case tl == "# <<< pb:tls":
+				in = false
+			case !in:
+				out = append(out, l)
+			}
+		}
+		return strings.Join(out, NL)
+	}
+	if outside(string(filled)) != outside(content) || outside(string(emptied)) != outside(content) {
+		t.Errorf("text outside the tls block changed:%s%s", NL, filled)
+	}
+
+	// A begin marker without its end, or an end before the begin, is not a block.
+	for name, c := range map[string]string{
+		"no end":       "    # >>> pb:names" + NL + "x" + NL,
+		"end first":    "    # <<< pb:names" + NL + "    # >>> pb:names" + NL,
+		"only the end": "    # <<< pb:names" + NL,
+	} {
+		if HasBlock([]byte(c), BlockNames) {
+			t.Errorf("%s: HasBlock = true", name)
+		}
+		if _, ok := ReplaceBlock([]byte(c), BlockNames, []byte("y;")); ok {
+			t.Errorf("%s: ReplaceBlock reported a block", name)
+		}
+	}
+}
+
+func TestRenderSiteFileHasEveryBlockEmpty(t *testing.T) {
+	p := Paths{Root: "/www"}
+	for _, s := range []Site{
+		{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test"},
+		{Domain: "a.test", Kind: KindPHP, Root: "/www/services/sites/a.test"},
+	} {
+		b, err := p.RenderSiteFile(s)
+		if err != nil {
+			t.Fatalf("%v: %v", s.Kind, err)
+		}
+		names := []string{BlockListen, BlockNames, BlockACME, BlockTLS}
+		if s.Kind == KindPHP {
+			names = append(names, BlockPHP)
+		}
+		for _, n := range names {
+			if !HasBlock(b, n) {
+				t.Errorf("%v site file lacks the %s block:%s%s", s.Kind, n, NL, b)
+			}
+		}
+	}
+}
+
+// NL keeps the multi-line fixtures above readable.
+const NL = "\n"

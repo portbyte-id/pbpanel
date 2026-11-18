@@ -22,8 +22,10 @@ import {
 import {
   queryKeys,
   useActivateNginxImageBuild,
+  useNginxContainerAction,
   useNginxImage,
   useNginxService,
+  useSetNginxVersion,
   useNginxSettings,
   useSaveNginxSettings,
   useUpdateNginxImage,
@@ -77,7 +79,10 @@ export function describeContainer(c: NginxServiceStatus["container"]): {
 }
 
 function ServiceStatus() {
+  const client = useQueryClient()
   const { data, isPending, error } = useNginxService()
+  const action = useNginxContainerAction()
+  const [jobId, setJobId] = useState<string | null>(null)
 
   return (
     <Card>
@@ -92,9 +97,45 @@ function ServiceStatus() {
             {error instanceof ApiError ? error.detail : "The status could not be loaded."}
           </p>
         ) : (
-          <StatusBody status={data} />
+          <>
+            <StatusBody status={data} />
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                disabled={action.isPending || data.container.running}
+                onClick={() => action.mutate("start", { onSuccess: (job: JobRef) => setJobId(job.id) })}
+              >
+                Start
+              </Button>
+              <Button
+                variant="outline"
+                disabled={action.isPending || !data.container.running}
+                onClick={() => action.mutate("stop", { onSuccess: (job: JobRef) => setJobId(job.id) })}
+              >
+                Stop
+              </Button>
+              <Button
+                variant="outline"
+                disabled={action.isPending || !data.container.running}
+                onClick={() => action.mutate("restart", { onSuccess: (job: JobRef) => setJobId(job.id) })}
+              >
+                Restart
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Stopping nginx takes every site offline. A stop made here is kept when the panel
+              restarts; use Start to bring nginx back.
+            </p>
+            <ApplyError error={action.error} fallback="The action could not be started." />
+          </>
         )}
       </CardContent>
+      <JobsDrawer
+        jobId={jobId}
+        onClose={() => {
+          setJobId(null)
+          void client.invalidateQueries({ queryKey: queryKeys.nginxService })
+        }}
+      />
     </Card>
   )
 }
@@ -150,7 +191,9 @@ export function ImageCard() {
   const { data, isPending, error } = useNginxImage()
   const update = useUpdateNginxImage()
   const activate = useActivateNginxImageBuild()
+  const setVersion = useSetNginxVersion()
   const [jobId, setJobId] = useState<string | null>(null)
+  const [pick, setPick] = useState<string | null>(null)
 
   return (
     <Card>
@@ -175,6 +218,47 @@ export function ImageCard() {
                   ? "The nginx image is on this host."
                   : "The nginx image is not on this host."}
               </span>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nginx-version">nginx version</Label>
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  id="nginx-version"
+                  value={pick ?? data.version}
+                  onChange={(e) => setPick(e.target.value)}
+                  className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                >
+                  {data.versions.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                      {v === data.version ? " (running)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="outline"
+                  disabled={
+                    data.busy || setVersion.isPending || pick === null || pick === data.version
+                  }
+                  onClick={() =>
+                    setVersion.mutate(pick ?? "", {
+                      onSuccess: (job: JobRef) => {
+                        setJobId(job.id)
+                        setPick(null)
+                      },
+                    })
+                  }
+                >
+                  {setVersion.isPending ? "Starting…" : "Switch version"}
+                </Button>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                The new version is built, your current configuration is checked against it with
+                nginx -t, and only then is nginx swapped over. If it fails, the running version
+                stays.
+              </p>
+              <ApplyError error={setVersion.error} fallback="The version could not be changed." />
             </div>
 
             <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[max-content_1fr]">

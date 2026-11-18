@@ -170,6 +170,12 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 		_ = step("render", "all panel-owned files are current", nil)
 	}
 
+	// An operator who stopped nginx from the panel meant it: the files are
+	// current and validated, and the container is left as it was left.
+	if s, ok := r.Runtime.(interface{ Stopped(context.Context) bool }); ok && s.Stopped(ctx) {
+		return step("container", "nginx was stopped from the panel and stays stopped; start it there", nil)
+	}
+
 	// 4. The container.
 	ens, err := r.Runtime.EnsureContainer(ctx)
 	if err := step("container", string(ens.Action)+": "+ens.Reason, err); err != nil {
@@ -195,7 +201,7 @@ func (r *Reconciler) run(ctx context.Context, st *Status) error {
 func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 	var files []confedit.File
 
-	if _, err := r.Sites.fs.ReadFile(r.Sites.p.ConfPath()); errors.Is(err, fs.ErrNotExist) {
+	if have, err := r.Sites.fs.ReadFile(r.Sites.p.ConfPath()); errors.Is(err, fs.ErrNotExist) {
 		b, err := r.Sites.p.RenderMainConf()
 		if err != nil {
 			return nil, err
@@ -203,6 +209,8 @@ func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 		files = append(files, confedit.File{Path: r.Sites.p.ConfPath(), Content: b})
 	} else if err != nil {
 		return nil, err
+	} else if up, changed := nginx.UpgradeMainConf(have); changed {
+		files = append(files, confedit.File{Path: r.Sites.p.ConfPath(), Content: up})
 	}
 
 	s, err := r.Global.Settings(ctx)
@@ -220,7 +228,7 @@ func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 		return nil, err
 	}
 	for _, site := range sites {
-		inc, err := r.Sites.includeFiles(ctx, site)
+		inc, err := r.Sites.managedFiles(ctx, site)
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", site.Domain, err)
 		}

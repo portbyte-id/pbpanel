@@ -1,6 +1,6 @@
 import { createRoute } from "@tanstack/react-router"
 
-import { SiteDetailPage } from "@/pages/SiteDetailPage"
+import { SitesPage } from "@/pages/SitesPage"
 import { appRoute } from "@/routes/_app"
 
 export const siteRoute = createRoute({
@@ -16,5 +16,5 @@ export const siteRoute = createRoute({
  */
 function SiteRoute() {
   const { domain } = siteRoute.useParams()
-  return <SiteDetailPage key={domain} domain={domain} />
+  return <SitesPage openDomain={domain} />
 }

@@ -24,8 +24,21 @@ func OpenPanelPort(ctx context.Context, cmd Cmd, port int, ipv6 bool) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("firewall: panel port %d is out of range", port)
 	}
-	spec := []string{"-p", "tcp", "-m", "tcp", "--dport", strconv.Itoa(port),
-		"-m", "comment", "--comment", PanelPortComment, "-j", "ACCEPT"}
+	return openPorts(ctx, cmd, PanelPortComment, []portSpec{{"tcp", port}}, ipv6)
+}
+
+// WebPortsComment tags the INPUT rules that keep HTTP, HTTPS and QUIC reachable while
+// the managed ruleset is off.
+const WebPortsComment = "panel:web"
+
+// OpenWebPorts opens TCP 80, TCP 443 and UDP 443 from anywhere, like OpenPanelPort.
+func OpenWebPorts(ctx context.Context, cmd Cmd, ipv6 bool) error {
+	return openPorts(ctx, cmd, WebPortsComment, webPorts, ipv6)
+}
+
+// openPorts replaces every INPUT rule carrying comment with one ACCEPT rule per spec,
+// in each family.
+func openPorts(ctx context.Context, cmd Cmd, comment string, specs []portSpec, ipv6 bool) error {
 	var errs []error
 	for _, fc := range families(ipv6) {
 		rules, err := cmd.Output(ctx, fc.bin, "-S", "INPUT")
@@ -35,15 +48,19 @@ func OpenPanelPort(ctx context.Context, cmd Cmd, port int, ipv6 bool) error {
 		}
 		for line := range strings.SplitSeq(string(rules), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) < 3 || fields[0] != "-A" || fields[1] != "INPUT" || !hasComment(fields, PanelPortComment) {
+			if len(fields) < 3 || fields[0] != "-A" || fields[1] != "INPUT" || !hasComment(fields, comment) {
 				continue
 			}
 			if err := cmd.RunStdin(ctx, "", fc.bin, append([]string{"-D", "INPUT"}, fields[2:]...)...); err != nil {
 				errs = append(errs, err)
 			}
 		}
-		if err := cmd.RunStdin(ctx, "", fc.bin, append([]string{"-I", "INPUT", "1"}, spec...)...); err != nil {
-			errs = append(errs, err)
+		for _, sp := range specs {
+			args := []string{"-I", "INPUT", "1", "-p", sp.proto, "-m", sp.proto, "--dport", strconv.Itoa(sp.port),
+				"-m", "comment", "--comment", comment, "-j", "ACCEPT"}
+			if err := cmd.RunStdin(ctx, "", fc.bin, args...); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)

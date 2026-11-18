@@ -71,7 +71,7 @@ http {
 
     include {{.HTTPInclude}};
 
-    # Requests for a host no site claims get no answer instead of the first site.
+    # Requests for a host no site claims get a landing page instead of the first site.
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
@@ -84,9 +84,7 @@ http {
             default_type text/plain;
             try_files $uri =404;
         }
-        location / {
-            return 444;
-        }
+` + landingLocation + `
     }
 
     include {{.SitesGlob}};
@@ -112,14 +110,13 @@ gzip_types text/plain text/css text/xml text/javascript application/json applica
 `
 
 const siteTemplate = `# Managed by PB panel for {{.Domain}}.
-# This file is yours to edit. The panel rewrites only the files in
-# {{.IncludesDir}}/ and expects the include lines below to stay:
-# remove one and the panel disables the matching control instead of fighting you.
+# This is the site's one configuration file and all of it is yours to edit.
+# The panel keeps the blocks between "# >>> pb:<name>" and "# <<< pb:<name>" up
+# to date (domains, certificate, PHP version). Edit inside one and the next change
+# made in the panel replaces your edit; delete the marker lines and the panel
+# disables the matching control instead of fighting you.
 server {
-    include {{.Listen}};
-    include {{.Names}};
-    include {{.ACME}};
-    include {{.TLS}};
+{{.Blocks}}
 
     access_log {{.AccessLog}};
     error_log {{.ErrorLog}};
@@ -136,7 +133,7 @@ server {
     root {{.Root}};
     index index.php index.html index.htm;
 
-    include {{.PHP}};
+{{.PHPBlock}}
 {{- else}}
 
     include {{.Proxy}};
@@ -292,26 +289,46 @@ func RenderHTTPInclude(s HTTPSettings) ([]byte, error) {
 	}{s, onOff(s.Gzip), onOff(s.ServerTokens)})
 }
 
-// RenderSiteFile renders a site's own file.
+// Block names: the parts of a site file the panel keeps up to date in place.
+const (
+	BlockListen = "listen"
+	BlockNames  = "names"
+	BlockACME   = "acme"
+	BlockTLS    = "tls"
+	BlockPHP    = "php"
+)
+
+// BlockMarkers are the two marker lines of a block, without indentation.
+func BlockMarkers(name string) (begin, end string) {
+	return "# >>> pb:" + name, "# <<< pb:" + name
+}
+
+func emptyBlock(name string) string {
+	begin, end := BlockMarkers(name)
+	return "    " + begin + "\n    " + end
+}
+
+// RenderSiteFile renders a site's own file: the whole server block, with an empty
+// managed block for each part the panel keeps current. Fill them with
+// ReplaceBlock.
 func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 	if err := checkSite(p, s); err != nil {
 		return nil, err
 	}
+	blocks := strings.Join([]string{
+		emptyBlock(BlockListen), emptyBlock(BlockNames), emptyBlock(BlockACME), emptyBlock(BlockTLS),
+	}, "\n")
 	return execute("site", struct {
-		Domain, IncludesDir        string
-		Listen, Names, ACME, Proxy string
-		TLS                        string
-		AccessLog, ErrorLog, Root  string
-		Static                     bool
-		PHPSite                    bool
-		PHP                        string
+		Domain, Blocks, PHPBlock  string
+		Proxy                     string
+		AccessLog, ErrorLog, Root string
+		Static                    bool
+		PHPSite                   bool
 	}{
-		s.Domain, p.SiteIncludesDir(s.Domain),
-		p.SiteInclude(s.Domain, IncludeListen), p.SiteInclude(s.Domain, IncludeNames),
-		p.SiteInclude(s.Domain, IncludeACME), p.SiteInclude(s.Domain, IncludeProxy),
-		p.SiteInclude(s.Domain, IncludeTLS),
+		s.Domain, blocks, emptyBlock(BlockPHP),
+		p.SiteInclude(s.Domain, IncludeProxy),
 		p.AccessLog(s.Domain), p.ErrorLog(s.Domain), s.Root,
-		s.Kind == KindStatic, s.Kind == KindPHP, p.SiteInclude(s.Domain, IncludePHP),
+		s.Kind == KindStatic, s.Kind == KindPHP,
 	})
 }
 
@@ -459,4 +476,53 @@ func HasIncludeLine(content []byte, file string) bool {
 		}
 	}
 	return false
+}
+
+// HasBlock reports whether content has both marker lines of the named block, in
+// order. Like HasIncludeLine it is a literal line match, not a parse.
+func HasBlock(content []byte, name string) bool {
+	_, _, ok := findBlock(strings.Split(string(content), "\n"), name)
+	return ok
+}
+
+func findBlock(lines []string, name string) (begin, end int, ok bool) {
+	b, e := BlockMarkers(name)
+	begin = -1
+	for i, l := range lines {
+		switch t := strings.TrimSpace(l); {
+		case begin < 0 && t == b:
+			begin = i
+		case begin >= 0 && t == e:
+			return begin, i, true
+		}
+	}
+	return 0, 0, false
+}
+
+// ReplaceBlock puts body between the named block's markers, indented like the
+// begin marker, and reports whether the block was there. Everything outside the
+// markers is returned byte for byte. A leading "# Managed by PB panel" comment
+// of the body is dropped: the markers already say it.
+func ReplaceBlock(content []byte, name string, body []byte) ([]byte, bool) {
+	lines := strings.Split(string(content), "\n")
+	begin, end, ok := findBlock(lines, name)
+	if !ok {
+		return content, false
+	}
+	indent := lines[begin][:len(lines[begin])-len(strings.TrimLeft(lines[begin], " \t"))]
+	var inner []string
+	for i, l := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+		if i == 0 && strings.HasPrefix(l, "# Managed by PB panel") {
+			continue
+		}
+		if strings.TrimSpace(l) == "" {
+			inner = append(inner, "")
+			continue
+		}
+		inner = append(inner, indent+l)
+	}
+	out := append([]string{}, lines[:begin+1]...)
+	out = append(out, inner...)
+	out = append(out, lines[end:]...)
+	return []byte(strings.Join(out, "\n")), true
 }

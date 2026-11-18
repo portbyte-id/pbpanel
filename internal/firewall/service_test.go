@@ -131,7 +131,7 @@ func TestDirtyAfterRuleChange(t *testing.T) {
 	ctx := context.Background()
 	p, _ := s.Enable(ctx)
 	_ = s.Confirm(ctx, p.Token)
-	if _, err := s.AddRule(ctx, Rule{PortStart: 80, PortEnd: 80, Protocol: ProtoTCP, Enabled: true}); err != nil {
+	if _, err := s.AddRule(ctx, Rule{PortStart: 8080, PortEnd: 8080, Protocol: ProtoTCP, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := s.State(ctx)
@@ -190,7 +190,7 @@ func TestRestoreConfirmedBootAndIdempotent(t *testing.T) {
 	h := newHarness(t)
 	s := newService(t, h, false, &fakeMasker{})
 	ctx := context.Background()
-	if _, err := s.AddRule(ctx, Rule{PortStart: 80, PortEnd: 80, Protocol: ProtoTCP, Enabled: true}); err != nil {
+	if _, err := s.AddRule(ctx, Rule{PortStart: 8080, PortEnd: 8080, Protocol: ProtoTCP, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Enable(ctx)
@@ -202,7 +202,7 @@ func TestRestoreConfirmedBootAndIdempotent(t *testing.T) {
 	if err := RestoreConfirmed(ctx, h.st, h.fake); err != nil {
 		t.Fatal(err)
 	}
-	if !h.has("iptables", "80") || !h.has("iptables", "8443") || !h.fake.hook["iptables"] {
+	if !h.has("iptables", "8080") || !h.has("iptables", "8443") || !h.fake.hook["iptables"] {
 		t.Fatal("boot restore did not rebuild the confirmed ruleset and its jump")
 	}
 	// Running it again must not insert a second jump.
@@ -234,5 +234,35 @@ func TestParsePublishedPorts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
+	}
+}
+
+func TestAllowlistCRUD(t *testing.T) {
+	h := newHarness(t)
+	s := newService(t, h, false, &fakeMasker{})
+	ctx := context.Background()
+	e, err := s.AddAllow(ctx, AllowEntry{Addr: "198.51.100.9", Comment: "office"})
+	if err != nil || e.Addr != "198.51.100.9/32" {
+		t.Fatalf("%+v %v", e, err)
+	}
+	if _, err := s.AddAllow(ctx, AllowEntry{Addr: "198.51.100.9/32"}); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := s.AddAllow(ctx, AllowEntry{Addr: "bad"}); !errors.Is(err, ErrAddr) {
+		t.Fatalf("got %v", err)
+	}
+	list, err := s.Allowlist(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("%+v %v", list, err)
+	}
+	in, err := s.input(ctx)
+	if err != nil || len(in.Allowlist) != 1 {
+		t.Fatalf("input: %+v %v", in.Allowlist, err)
+	}
+	if err := s.DeleteAllow(ctx, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAllow(ctx, e.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -5,6 +5,7 @@
 -F PANEL-BLOCK
 -A PANEL-BLOCK -s 2001:db8:bad::/48 -j DROP
 -A PANEL-INPUT -i lo -j ACCEPT
+-A PANEL-INPUT -s 2001:db8:600d::/48 -j ACCEPT
 -A PANEL-INPUT -j PANEL-BLOCK
 -A PANEL-INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 -A PANEL-INPUT -p ipv6-icmp --icmpv6-type 1 -j ACCEPT
@@ -19,6 +20,9 @@
 -A PANEL-INPUT -p tcp --dport 22 -m comment --comment "panel:builtin" -j ACCEPT
 -A PANEL-INPUT -p tcp --dport 2222 -m comment --comment "panel:builtin" -j ACCEPT
 -A PANEL-INPUT -p tcp --dport 8443 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 80 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p tcp --dport 443 -m comment --comment "panel:builtin" -j ACCEPT
+-A PANEL-INPUT -p udp --dport 443 -m comment --comment "panel:builtin" -j ACCEPT
 -A PANEL-INPUT -p tcp --dport 80 -m comment --comment "http" -j ACCEPT
 -A PANEL-INPUT -p tcp --dport 443 -j ACCEPT
 -A PANEL-INPUT -p udp --dport 443 -j ACCEPT

@@ -17,6 +17,7 @@ const (
 type RenderInput struct {
 	Rules     []Rule
 	Blocklist []BlockEntry
+	Allowlist []AllowEntry
 	SSHPorts  []int
 	PanelPort int
 	// HookV4 and HookV6 add the jump from INPUT to PANEL-INPUT. The applier sets each only
@@ -65,6 +66,14 @@ func renderFamily(in RenderInput, f family) string {
 
 	// Built-in rules, generated and never stored.
 	line("-A %s -i lo -j ACCEPT", ChainInput)
+	// Allowed addresses come before the blocklist jump so a block never overrides them.
+	for _, e := range in.Allowlist {
+		p, err := ParsePrefix(e.Addr)
+		if err != nil || (p.Addr().Is4()) != (f == fam4) {
+			continue
+		}
+		line("-A %s -s %s%s -j ACCEPT", ChainInput, p, commentArg(e.Comment))
+	}
 	line("-A %s -j %s", ChainInput, ChainBlock)
 	line("-A %s -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", ChainInput)
 	for _, t := range icmpTypes(f) {
@@ -76,6 +85,11 @@ func renderFamily(in RenderInput, f family) string {
 	}
 	for _, p := range builtinPorts(in) {
 		line("-A %s -p tcp --dport %d%s -j ACCEPT", ChainInput, p, commentArg("panel:builtin"))
+	}
+
+	// Web ports, always open: sites and ACME challenges need them.
+	for _, w := range webPorts {
+		line("-A %s -p %s --dport %d%s -j ACCEPT", ChainInput, w.proto, w.port, commentArg("panel:builtin"))
 	}
 
 	// User rules, in the order given.
@@ -116,6 +130,15 @@ func icmpTypes(f family) []int {
 	}
 	return []int{1, 2, 3, 4, 128, 133, 134, 135, 136}
 }
+
+// portSpec is one protocol and port pair.
+type portSpec struct {
+	proto string
+	port  int
+}
+
+// webPorts are opened by default: HTTP, HTTPS and QUIC (HTTP/3).
+var webPorts = []portSpec{{"tcp", 80}, {"tcp", 443}, {"udp", 443}}
 
 func builtinPorts(in RenderInput) []int {
 	seen := map[int]bool{}

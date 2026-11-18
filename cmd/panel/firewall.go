@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,7 +59,11 @@ func openPanelPort(ctx context.Context, port int) error {
 	if runtime.GOOS != "linux" {
 		return nil
 	}
-	return firewall.OpenPanelPort(ctx, firewall.ExecCmd{}, port, firewall.HostHasIPv6())
+	v6 := firewall.HostHasIPv6()
+	return errors.Join(
+		firewall.OpenPanelPort(ctx, firewall.ExecCmd{}, port, v6),
+		firewall.OpenWebPorts(ctx, firewall.ExecCmd{}, v6),
+	)
 }
 
 // firewallRestore replays the last confirmed ruleset and re-opens the panel port.
