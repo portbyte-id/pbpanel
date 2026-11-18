@@ -27,6 +27,7 @@ import {
   type UpdateSiteInput,
 } from "@/lib/api"
 import type { CronJobInput } from "@/lib/cron"
+import { isActiveJob } from "@/lib/jobs"
 import type { DockerAction } from "@/lib/docker"
 import {
   HISTORY_CAP,
@@ -80,6 +81,7 @@ export const queryKeys = {
   dockerLogs: (id: string, tail: number) => ["docker", "containers", id, "logs", tail] as const,
   cron: ["cron"] as const,
   cronRuns: (id: number) => ["cron", id, "runs"] as const,
+  jobs: (active: boolean) => ["jobs", active ? "active" : "all"] as const,
   cronRun: (id: number, runId: number) => ["cron", id, "runs", runId] as const,
 }
 
@@ -970,6 +972,18 @@ export function useCronJobs() {
     queryKey: queryKeys.cron,
     queryFn: () => api.cronJobs(),
     refetchInterval: 10_000,
+  })
+}
+
+/**
+ * The job list. It polls every 2 seconds while any listed job is live, so progress
+ * shows without a reload, and every 10 seconds once the list is quiet.
+ */
+export function useJobs({ active = false }: { active?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.jobs(active),
+    queryFn: () => api.jobs({ active }),
+    refetchInterval: (q) => (q.state.data?.some(isActiveJob) ? 2_000 : 10_000),
   })
 }
 

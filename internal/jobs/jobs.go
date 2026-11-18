@@ -339,31 +339,103 @@ func (m *Manager) Get(ctx context.Context, id string) (Job, error) {
 	const q = `SELECT id, kind, state, created_at, started_at, finished_at,
 	                  exit_code, error, last_seq, dropped, truncated
 	           FROM jobs WHERE id = ?`
-	var (
-		j                 Job
-		created           string
-		started, finished sql.NullString
-		truncated         int
-	)
-	err := m.store.DB().QueryRowContext(ctx, q, id).Scan(
-		&j.ID, &j.Kind, &j.State, &created, &started, &finished,
-		&j.ExitCode, &j.Err, &j.LastSeq, &j.Dropped, &truncated,
-	)
+	j, err := scanJob(m.store.DB().QueryRowContext(ctx, q, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
 	if err != nil {
 		return Job{}, fmt.Errorf("jobs: read %s: %w", id, err)
 	}
+	return j, nil
+}
 
+// ListOptions narrows List.
+type ListOptions struct {
+	// Active keeps only queued and running jobs.
+	Active bool
+	// Limit caps the result. Zero means DefaultListLimit; larger values are
+	// clamped to MaxListLimit.
+	Limit int
+}
+
+const (
+	// DefaultListLimit is how many jobs List returns when the caller names no limit.
+	DefaultListLimit = 100
+	// MaxListLimit is the most jobs one List call returns.
+	MaxListLimit = 500
+)
+
+// List returns jobs newest first. With Active set, only queued and running jobs
+// are returned, so a long job is never pushed out of the page by newer short ones.
+func (m *Manager) List(ctx context.Context, opts ListOptions) ([]Job, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+
+	q := `SELECT id, kind, state, created_at, started_at, finished_at,
+	             exit_code, error, last_seq, dropped, truncated
+	      FROM jobs`
+	args := make([]any, 0, 3)
+	if opts.Active {
+		q += ` WHERE state IN (?, ?)`
+		args = append(args, string(StateQueued), string(StateRunning))
+	}
+	q += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := m.store.DB().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: list: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: list: %w", err)
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: list: %w", err)
+	}
+	return out, nil
+}
+
+// rowScanner is the part of *sql.Row and *sql.Rows that scanJob reads.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanJob reads one row in the column order Get and List select.
+func scanJob(s rowScanner) (Job, error) {
+	var (
+		j                 Job
+		created           string
+		started, finished sql.NullString
+		truncated         int
+	)
+	if err := s.Scan(
+		&j.ID, &j.Kind, &j.State, &created, &started, &finished,
+		&j.ExitCode, &j.Err, &j.LastSeq, &j.Dropped, &truncated,
+	); err != nil {
+		return Job{}, err
+	}
+
+	var err error
 	if j.CreatedAt, err = parseTime(created); err != nil {
-		return Job{}, fmt.Errorf("jobs: read %s: %w", id, err)
+		return Job{}, err
 	}
 	if j.StartedAt, err = parseNullTime(started); err != nil {
-		return Job{}, fmt.Errorf("jobs: read %s: %w", id, err)
+		return Job{}, err
 	}
 	if j.FinishedAt, err = parseNullTime(finished); err != nil {
-		return Job{}, fmt.Errorf("jobs: read %s: %w", id, err)
+		return Job{}, err
 	}
 	j.Truncated = truncated == 1
 	return j, nil

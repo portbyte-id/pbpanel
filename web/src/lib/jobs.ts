@@ -129,3 +129,61 @@ function parseJSON<T>(raw: string): T | null {
     return null
   }
 }
+
+/** A job as `GET /api/jobs` lists it (internal/jobs `Job`). */
+export type JobState = "queued" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+
+export interface JobRecord {
+  id: string
+  kind: string
+  state: JobState
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  exit_code: number
+  error: string
+  /** The highest output sequence number issued; it keeps counting past dropped lines. */
+  last_seq: number
+  dropped: number
+  truncated: boolean
+}
+
+export const JOB_STATE_LABELS: Record<JobState, string> = {
+  queued: "Queued",
+  running: "Running",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  canceled: "Canceled",
+  interrupted: "Interrupted",
+}
+
+/** Queued and running jobs are live: their output can still grow. */
+export function isActiveJob(job: { state: JobState }): boolean {
+  return job.state === "queued" || job.state === "running"
+}
+
+/**
+ * How long a job has run, in milliseconds: up to `now` while it is live, up to its
+ * finish otherwise. Null when a timestamp is missing or unreadable.
+ */
+export function jobElapsedMs(
+  job: Pick<JobRecord, "state" | "created_at" | "started_at" | "finished_at">,
+  now: number,
+): number | null {
+  const start = Date.parse(job.started_at ?? job.created_at)
+  if (Number.isNaN(start)) return null
+  const end = job.finished_at ? Date.parse(job.finished_at) : isActiveJob(job) ? now : Number.NaN
+  if (Number.isNaN(end)) return null
+  return Math.max(0, end - start)
+}
+
+/** A compact duration for a table cell: `42s`, `3m 05s`, `1h 02m`. */
+export function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  if (total < 60) return `${total}s`
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`
+}
