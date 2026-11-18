@@ -122,6 +122,16 @@ func (r *Renewer) window() time.Duration {
 	return time.Duration(d) * 24 * time.Hour
 }
 
+// windowFor is how long before expiry c is renewed. A short-lived certificate
+// (an IP one lasts about six days) is renewed with a third of its life left,
+// since the configured number of days would put it permanently inside the window.
+func (r *Renewer) windowFor(c Cert) time.Duration {
+	if life := c.NotAfter.Sub(c.NotBefore); life > 0 && life < shortLivedMax {
+		return life / 3
+	}
+	return r.window()
+}
+
 func (r *Renewer) contact() string {
 	if r.email == nil {
 		return ""
@@ -195,7 +205,7 @@ func (r *Renewer) scan(ctx context.Context, c Cert) Outcome {
 		return r.reapply(ctx, c)
 	}
 	now := r.now()
-	if c.NotAfter.Sub(now) > r.window() {
+	if c.NotAfter.Sub(now) > r.windowFor(c) {
 		return Outcome{Domain: c.Domain, Result: OutcomeNotDue}
 	}
 	if c.LastRenewalResult == RenewalFailed && !c.LastRenewalAt.IsZero() && now.Sub(c.LastRenewalAt) < failureBackoff {

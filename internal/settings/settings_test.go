@@ -510,7 +510,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"PHP":     {"php.versions"},
 		"Files": {"fm.editor.max_bytes", "fm.upload.chunk_max_bytes", "fm.upload.sweep_age",
 			"fm.trash.max_bytes", "fm.trash.retention_days", "fm.archive.max_bytes", "fm.archive.max_entries"},
-		"TLS":  {"tls.acme.directory", "tls.renew.days_before"},
+		"TLS":  {"tls.acme.directory", "tls.renew.days_before", "tls.panel.auto_ip"},
 		"Cron": {"cron.allow_shell"},
 		"Logs": {"logs.rotate.max_bytes", "logs.rotate.keep"},
 	}

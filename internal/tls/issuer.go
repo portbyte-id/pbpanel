@@ -17,7 +17,9 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/http/webroot"
 	"github.com/go-acme/lego/v4/registration"
@@ -145,19 +147,28 @@ func (i *Issuer) IssueHTTP01(ctx context.Context, domain string, names []string,
 	if err != nil {
 		return Result{}, err
 	}
-	if err := EnsureACMEWebroot(i.root); err != nil {
-		return Result{}, err
+	// An IP name has no server block of its own in nginx, whose default server
+	// refuses it, so when nothing holds port 80 the panel answers the challenge
+	// itself. With port 80 taken the webroot path is the only one left.
+	var provider challenge.Provider
+	if anyIP(names) && port80Free() {
+		provider = http01.NewProviderServer("", "80")
+	} else {
+		if err := EnsureACMEWebroot(i.root); err != nil {
+			return Result{}, err
+		}
+		// Before the CA: a name that does not reach this server would burn a
+		// failed-validation allowance for nothing.
+		if err := i.preflight(ctx, names); err != nil {
+			return Result{}, err
+		}
+		wp, err := webroot.NewHTTPProvider(filepath.FromSlash(ACMEWebroot(i.root)))
+		if err != nil {
+			return Result{}, fmt.Errorf("tls: http-01 provider: %w", err)
+		}
+		provider = wp
 	}
-	// Before the CA: a name that does not reach this server would burn a
-	// failed-validation allowance for nothing.
-	if err := i.preflight(ctx, names); err != nil {
-		return Result{}, err
-	}
-	provider, err := webroot.NewHTTPProvider(filepath.FromSlash(ACMEWebroot(i.root)))
-	if err != nil {
-		return Result{}, fmt.Errorf("tls: http-01 provider: %w", err)
-	}
-	return i.issue(ctx, domain, names, email, SourceHTTP01, "", func(c *lego.Client) error {
+	return i.issue(ctx, domain, names, email, SourceHTTP01, "", profileFor(names), func(c *lego.Client) error {
 		return c.Challenge.SetHTTP01Provider(provider)
 	})
 }
@@ -169,6 +180,9 @@ func (i *Issuer) IssueDNS01(ctx context.Context, domain string, names []string, 
 	if err != nil {
 		return Result{}, err
 	}
+	if anyIP(names) {
+		return Result{}, fmt.Errorf("%w: an IP address cannot be validated with DNS-01", ErrInvalid)
+	}
 	rec, err := i.st.GetProvider(ctx, providerName)
 	if err != nil {
 		return Result{}, err
@@ -177,7 +191,7 @@ func (i *Issuer) IssueDNS01(ctx context.Context, domain string, names []string, 
 	if err != nil {
 		return Result{}, fmt.Errorf("tls: DNS provider %s: %w", providerName, err)
 	}
-	return i.issue(ctx, domain, names, email, SourceDNS01, providerName, func(c *lego.Client) error {
+	return i.issue(ctx, domain, names, email, SourceDNS01, providerName, "", func(c *lego.Client) error {
 		var opts []dns01.ChallengeOption
 		if i.skipDNS {
 			opts = append(opts, dns01.WrapPreCheck(func(string, string, string, dns01.PreCheckFunc) (bool, error) {
@@ -217,7 +231,7 @@ func checkNames(domain string, names []string, wildcards bool) ([]string, error)
 }
 
 // issue is the shared tail of both challenges: account, order, persist.
-func (i *Issuer) issue(ctx context.Context, domain string, names []string, email, source, provider string,
+func (i *Issuer) issue(ctx context.Context, domain string, names []string, email, source, provider, profile string,
 	setSolver func(*lego.Client) error) (Result, error) {
 	dir := strings.TrimSpace(i.directory())
 	if dir == "" {
@@ -247,7 +261,7 @@ func (i *Issuer) issue(ctx context.Context, domain string, names []string, email
 	done := make(chan outcome, 1)
 	go func() {
 		res, err := client.Certificate.Obtain(certificate.ObtainRequest{
-			Domains: names, Bundle: true, PrivateKey: certKey,
+			Domains: names, Bundle: true, PrivateKey: certKey, Profile: profile,
 		})
 		done <- outcome{res, err}
 	}()
