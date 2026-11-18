@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react"
 import { ErrorState } from "@/components/ErrorState"
 import { Sparkline } from "@/components/Sparkline"
 import { TrafficChart } from "@/components/TrafficChart"
+import { FirewallActivity, percent, PostureBar, ResponseMix } from "@/components/TrafficPanels"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,10 +21,11 @@ import {
   type TrafficRange,
   type TrafficRequest,
   type TrafficSummary,
+  type WafEventSummary,
   type WafMode,
   type WafOverviewSite,
 } from "@/lib/waf"
-import { useRequestFeed, useWafOverview, useWafTraffic } from "@/lib/wafQueries"
+import { useRequestFeed, useWafEventSummary, useWafOverview, useWafTraffic } from "@/lib/wafQueries"
 
 const RANGES: { value: TrafficRange; label: string }[] = [
   { value: "5m", label: "Last 5 minutes" },
@@ -64,6 +66,7 @@ export function TrafficPage() {
   const [site, setSite] = useState("")
   const [range, setRange] = useState<TrafficRange>("15m")
   const traffic = useWafTraffic(site, range)
+  const events = useWafEventSummary(site, range)
 
   const modes = useMemo(
     () => new Map((overview.data?.sites ?? []).map((s) => [s.domain, s])),
@@ -104,6 +107,8 @@ export function TrafficPage() {
         </p>
       </div>
 
+      {overview.data && <PostureBar overview={overview.data} site={site} />}
+
       {traffic.isPending ? (
         <SkeletonRows label="Loading traffic…" />
       ) : traffic.error ? (
@@ -113,7 +118,15 @@ export function TrafficPage() {
           onRetry={() => void traffic.refetch()}
         />
       ) : (
-        <Summary data={traffic.data} site={site} modes={modes} onPickSite={setSite} />
+        <Summary
+          data={traffic.data}
+          site={site}
+          modes={modes}
+          onPickSite={setSite}
+          events={events.data}
+          eventsFailed={events.isError}
+          eventsPending={events.isPending}
+        />
       )}
 
       <RequestFeed site={site} />
@@ -160,14 +173,21 @@ function Summary({
   site,
   modes,
   onPickSite,
+  events,
+  eventsFailed,
+  eventsPending,
 }: {
   data: TrafficSummary
   site: string
   modes: Map<string, WafOverviewSite>
   onPickSite: (domain: string) => void
+  events: WafEventSummary | undefined
+  eventsFailed: boolean
+  eventsPending: boolean
 }) {
   const t = data.totals
   const series = data.series
+  const errors = t.s4xx + t.s5xx
   return (
     <div className="flex flex-col gap-6">
       <dl className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -178,12 +198,24 @@ function Summary({
           hint={formatBytes(t.bytes)}
           spark={series.map((p) => p.requests)}
         />
-        <Tile label="4xx errors" value={compactCount(t.s4xx)} tone={t.s4xx > 0 ? "warning" : undefined} />
-        <Tile label="5xx errors" value={compactCount(t.s5xx)} tone={t.s5xx > 0 ? "destructive" : undefined} />
+        <Tile
+          label="Error rate"
+          value={percent(errors, t.requests)}
+          hint={`${t.s4xx.toLocaleString("en-US")} 4xx · ${t.s5xx.toLocaleString("en-US")} 5xx`}
+          tone={t.s5xx > 0 ? "destructive" : t.s4xx > 0 ? "warning" : undefined}
+          spark={series.map((p) => p.s4xx + p.s5xx)}
+        />
         <Tile
           label="WAF events"
           value={compactCount(t.waf_events)}
+          hint={t.requests > 0 ? `${percent(t.waf_events, t.requests)} of requests` : undefined}
           spark={series.map((p) => p.waf_events)}
+        />
+        <Tile
+          label="Blocked by the firewall"
+          value={events ? compactCount(events.by_action.blocked) : "—"}
+          hint={events ? `${events.by_action.detected.toLocaleString("en-US")} detected only` : undefined}
+          tone={events && events.by_action.blocked > 0 ? "destructive" : undefined}
         />
         <Tile
           label="Average latency"
@@ -197,6 +229,11 @@ function Summary({
         <h2 className="mb-2 text-sm font-semibold">Requests over time</h2>
         <TrafficChart series={series} stepSeconds={data.step_seconds} />
       </section>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <FirewallActivity summary={events} failed={eventsFailed} pending={eventsPending} />
+        <ResponseMix totals={t} />
+      </div>
 
       {site === "" && (
         <section aria-label="Sites" className="flex flex-col gap-2">
@@ -212,8 +249,10 @@ function Summary({
                     <th scope="col" className="px-3 py-1.5 font-medium">Site</th>
                     <th scope="col" className="px-3 py-1.5 text-right font-medium">Requests</th>
                     <th scope="col" className="px-3 py-1.5 text-right font-medium">Errors</th>
+                    <th scope="col" className="px-3 py-1.5 text-right font-medium">Error rate</th>
                     <th scope="col" className="px-3 py-1.5 text-right font-medium">WAF events</th>
                     <th scope="col" className="px-3 py-1.5 font-medium">ModSecurity</th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">Also on</th>
                   </tr>
                 </thead>
                 <tbody className="divide-border divide-y">
@@ -232,16 +271,26 @@ function Summary({
                         </td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString("en-US")}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString("en-US")}</td>
+                        <td className="text-muted-foreground px-3 py-1.5 text-right text-xs tabular-nums">
+                          {percent(s.errors, s.requests)}
+                        </td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{s.waf_events.toLocaleString("en-US")}</td>
                         <td className="px-3 py-1.5">
                           {m ? (
-                            <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "outline"}>
+                            <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "destructive"}>
                               {MODE_LABEL[m.mode as WafMode]}
                               {m.mode !== "off" && ` · level ${m.paranoia}`}
                             </Badge>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <span className="flex flex-wrap gap-1">
+                            {m?.rate_limit && <Badge variant="outline">Rate limit</Badge>}
+                            {m?.challenge && <Badge variant="outline">Challenge</Badge>}
+                            {m && !m.rate_limit && !m.challenge && <span className="text-muted-foreground">—</span>}
+                          </span>
                         </td>
                       </tr>
                     )
@@ -293,6 +342,7 @@ function TopTable({
   rows: (string | number)[][]
   mono?: boolean
 }) {
+  const peak = Math.max(1, ...rows.map((r) => (typeof r[1] === "number" ? r[1] : 0)))
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-2">
       <h2 className="text-sm font-semibold">{title}</h2>
@@ -325,6 +375,14 @@ function TopTable({
                       }
                     >
                       {typeof cell === "number" ? cell.toLocaleString("en-US") : cell}
+                      {i === 0 && typeof r[1] === "number" && (
+                        <div aria-hidden="true" className="bg-muted mt-1 h-0.5 rounded-full">
+                          <div
+                            className="bg-primary/60 h-0.5 rounded-full"
+                            style={{ width: `${(Number(r[1]) / peak) * 100}%` }}
+                          />
+                        </div>
+                      )}
                     </td>
                   ))}
                 </tr>

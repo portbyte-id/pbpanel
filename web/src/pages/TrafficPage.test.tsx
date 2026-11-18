@@ -12,7 +12,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return {
     ...actual,
-    api: { sites: vi.fn(), wafOverview: vi.fn(), wafTraffic: vi.fn(), wafRequests: vi.fn() },
+    api: { sites: vi.fn(), wafOverview: vi.fn(), wafTraffic: vi.fn(), wafRequests: vi.fn(), wafEventSummary: vi.fn() },
   }
 })
 
@@ -103,6 +103,13 @@ beforeEach(() => {
   })
   vi.mocked(api.wafTraffic).mockResolvedValue(summary())
   vi.mocked(api.wafRequests).mockResolvedValue({ requests: [req(2), req(1)], latest_seq: 2 })
+  vi.mocked(api.wafEventSummary).mockResolvedValue({
+    top_rules: [
+      { rule_id: 942100, message: "SQL Injection Attack", severity: "CRITICAL", count: 5, last: "2026-11-18T10:00:00Z" },
+    ],
+    by_site: [{ domain: "a.test", count: 7 }],
+    by_action: { blocked: 4, detected: 3 },
+  })
 })
 
 afterEach(() => {
@@ -144,6 +151,34 @@ describe("TrafficPage", () => {
     expect(within(rowA).getByText(/Blocking · level 2/)).toBeInTheDocument()
     const rowB = within(sitesTable).getByRole("row", { name: /b\.test/ })
     expect(within(rowB).getByText("Off")).toBeInTheDocument()
+  })
+
+  it("shows the protection posture, firewall activity and response mix", async () => {
+    renderPage()
+
+    const posture = await screen.findByRole("region", { name: "Protection" })
+    expect(posture).toHaveTextContent("1 of 2 sites are not protected")
+    expect(posture).toHaveTextContent("Blocking · 1")
+    expect(posture).toHaveTextContent("Rate limit · 1")
+
+    const fw = await screen.findByRole("region", { name: "Firewall activity" })
+    expect(await within(fw).findByText("SQL Injection Attack")).toBeInTheDocument()
+    expect(within(fw).getByText("942100")).toBeInTheDocument()
+    expect(fw).toHaveTextContent("4 blocked")
+    expect(fw).toHaveTextContent("3 detected only")
+
+    const mix = screen.getByRole("region", { name: "Response mix" })
+    expect(mix).toHaveTextContent("2xx success")
+    expect(mix).toHaveTextContent("11,000")
+    // The tile comes first; the sites table has a column of the same name.
+    expect(screen.getAllByText("Error rate")[0].closest("div")).toHaveTextContent("8.5%")
+  })
+
+  it("keeps the page working when the firewall audit is unavailable", async () => {
+    vi.mocked(api.wafEventSummary).mockRejectedValue(new ApiError(503, "unavailable", "no audit log"))
+    renderPage()
+    expect(await screen.findByText(/firewall audit is not available/)).toBeInTheDocument()
+    expect(screen.getByText("12.3k")).toBeInTheDocument()
   })
 
   it("narrows to one site from the site table and asks the server for that site", async () => {
