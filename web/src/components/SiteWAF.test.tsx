@@ -86,9 +86,92 @@ describe("SiteWAF", () => {
         path_blocklist: ["/wp-admin", "/.git"],
         ip_rules: { allow: ["203.0.113.7"], deny: ["198.51.100.0/24"] },
         exclusions: [{ kind: "rule_arg", rule_id: 942100, path: "/comment", arg: "body", note: "markdown editor" }],
+        challenge: DEFAULT_WAF_CONFIG.challenge,
       },
     ])
   }, 30_000)
+
+  it("switches on the proof-of-work challenge with an exempt path", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.siteWaf).mockResolvedValue(respond())
+    vi.mocked(api.saveSiteWaf).mockResolvedValue(respond())
+    renderTab()
+
+    await user.click(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ }))
+    expect(screen.getByRole("radio", { name: "Proof of work" })).toBeChecked()
+    await user.selectOptions(screen.getByLabelText("Puzzle difficulty"), "20")
+    await user.selectOptions(screen.getByLabelText("Let a visitor through for"), "1440")
+    await user.type(screen.getByLabelText("Never check these paths"), "/api/{Enter}")
+    await user.type(screen.getByLabelText("Never check these IPs"), "203.0.113.0/24{Enter}")
+    expect(screen.getByText(/drop out of search results/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Save and apply" }))
+    await waitFor(() => expect(api.saveSiteWaf).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveSiteWaf).mock.calls[0][1].challenge).toEqual({
+      ...DEFAULT_WAF_CONFIG.challenge,
+      enabled: true,
+      difficulty: 20,
+      clearance_minutes: 1440,
+      exempt_paths: ["/api/"],
+      exempt_ips: ["203.0.113.0/24"],
+    })
+  }, 30_000)
+
+  it("needs both Turnstile keys, and sends the secret only when one is typed", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.siteWaf).mockResolvedValue(respond())
+    vi.mocked(api.saveSiteWaf).mockResolvedValue(respond())
+    renderTab()
+
+    await user.click(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ }))
+    await user.click(screen.getByRole("radio", { name: "Cloudflare Turnstile" }))
+    const save = screen.getByRole("button", { name: "Save and apply" })
+    expect(save).toBeDisabled()
+    expect(screen.getByText("Enter the site key from the Cloudflare dashboard.")).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText("Turnstile site key"), "0x4AAAAAAAsite")
+    await user.type(screen.getByLabelText("Turnstile secret key"), "0x4AAAAAAAsecret")
+    expect(save).toBeEnabled()
+    await user.click(save)
+    await waitFor(() => expect(api.saveSiteWaf).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.saveSiteWaf).mock.calls[0][1].challenge).toMatchObject({
+      enabled: true,
+      provider: "turnstile",
+      turnstile_site_key: "0x4AAAAAAAsite",
+      turnstile_secret: "0x4AAAAAAAsecret",
+    })
+  }, 30_000)
+
+  it("keeps a stored Turnstile secret when the box is left blank", async () => {
+    const user = userEvent.setup()
+    const stored = {
+      ...DEFAULT_WAF_CONFIG.challenge,
+      enabled: true,
+      provider: "turnstile" as const,
+      turnstile_site_key: "0x4AAAAAAAsite",
+      turnstile_secret_set: true,
+    }
+    vi.mocked(api.siteWaf).mockResolvedValue(respond({ challenge: stored }))
+    vi.mocked(api.saveSiteWaf).mockResolvedValue(respond({ challenge: stored }))
+    renderTab()
+
+    const secret = await screen.findByLabelText("Turnstile secret key")
+    expect(secret).toHaveAttribute("placeholder", "Stored. Leave blank to keep it.")
+    expect(secret).toHaveValue("")
+    await user.selectOptions(screen.getByLabelText("Let a visitor through for"), "240")
+    await user.click(screen.getByRole("button", { name: "Save and apply" }))
+    await waitFor(() => expect(api.saveSiteWaf).toHaveBeenCalledTimes(1))
+    const sent = vi.mocked(api.saveSiteWaf).mock.calls[0][1].challenge
+    expect(sent.clearance_minutes).toBe(240)
+    expect(sent).not.toHaveProperty("turnstile_secret")
+  }, 30_000)
+
+  it("says why the challenge cannot be switched on without the panel's key", async () => {
+    vi.mocked(api.siteWaf).mockResolvedValue(respond({}, { ...available, challenge_available: false }))
+    renderTab()
+    expect(await screen.findByRole("checkbox", { name: /Check visitors before the site opens/ })).toBeDisabled()
+    expect(screen.getByText(/needs the panel's secret key/)).toBeInTheDocument()
+  })
 
   it("refuses an entry the server would refuse, in the place it was typed", async () => {
     const user = userEvent.setup()

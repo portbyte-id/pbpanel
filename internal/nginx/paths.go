@@ -141,6 +141,15 @@ func (p Paths) WAFModuleFile() string { return path.Join(p.WAFMainDir(), "modsec
 // RunDir holds the PHP-FPM sockets, shared with the PHP containers.
 func (p Paths) RunDir() string { return path.Join(p.Root, "panel", "run") }
 
+// GuardDir holds the challenge pages nginx serves, one per site that has one.
+func (p Paths) GuardDir() string { return path.Join(p.WAFDir(), "guard") }
+
+// GuardPage is a site's challenge page.
+func (p Paths) GuardPage(domain string) string { return path.Join(p.GuardDir(), domain+".html") }
+
+// GuardSocket is where the panel answers the challenge page's requests.
+func (p Paths) GuardSocket() string { return path.Join(p.RunDir(), "guard.sock") }
+
 // SSLDir holds the panel's own certificate, the ACME account key and the site
 // certificates. It is never mounted into a container as a whole.
 func (p Paths) SSLDir() string { return path.Join(p.Root, "panel", "ssl") }

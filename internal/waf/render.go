@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
@@ -41,9 +42,24 @@ func names(domain string) (zone, ip, acme, ipdeny, path string) {
 		"$pbwaf_" + id + "_ipdeny", "$pbwaf_" + id + "_path"
 }
 
+// challengeNames are the variables the challenge reads: the exempt paths, the
+// exempt addresses, whether the request is the page itself, and the verdict.
+func challengeNames(domain string) (cpath, cip, page, verdict string) {
+	id := SiteID(domain)
+	return "$pbwaf_" + id + "_cpath", "$pbwaf_" + id + "_cip", "$pbwaf_" + id + "_cpage", "$pbwaf_" + id + "_challenge"
+}
+
+// CookieName is the clearance cookie of a site.
+func CookieName(domain string) string { return "pbg_" + SiteID(domain) }
+
 // BlockBody is what goes in the site file's waf block: the server-context
-// directives. A config that asks for nothing renders a comment only.
+// directives. A config that asks for nothing renders a comment only. It leaves
+// the challenge out, which needs the site's secret: see Engine.RenderConfig.
 func BlockBody(p nginx.Paths, domain string, c Config) []byte {
+	return blockBody(p, domain, c, "")
+}
+
+func blockBody(p nginx.Paths, domain string, c Config, secret string) []byte {
 	zone, _, _, ipdeny, path := names(domain)
 	var b strings.Builder
 	b.WriteString("# Managed by PB panel (firewall).\n")
@@ -67,7 +83,80 @@ func BlockBody(p nginx.Paths, domain string, c Config) []byte {
 		b.WriteString("modsecurity_transaction_id \"$request_id\";\n")
 		fmt.Fprintf(&b, "modsecurity_rules_file %s;\n", p.WAFRulesFile(domain))
 	}
+	if c.Challenge.Enabled && secret != "" {
+		writeChallengeBlock(&b, p, domain, c.Challenge, secret)
+	}
 	return []byte(b.String())
+}
+
+// writeChallengeBlock renders the challenge. nginx checks the clearance cookie
+// itself (secure_link), so a visitor who passed never reaches the panel. One who
+// has not gets the static page with 403: error_page with a URI turns any method
+// into GET, which the static file can answer. The page's own requests go to the
+// panel over its socket.
+//
+// The locations are exact and ^~ prefix matches, so a site's own regex
+// locations, a `location ~ /\.` that denies dotfiles for one, cannot take them.
+func writeChallengeBlock(b *strings.Builder, p nginx.Paths, domain string, ch Challenge, secret string) {
+	_, _, _, verdict := challengeNames(domain)
+	b.WriteString("# Challenge page: a visitor without a valid clearance cookie is checked first.\n")
+	fmt.Fprintf(b, "secure_link $cookie_%s;\n", CookieName(domain))
+	fmt.Fprintf(b, "secure_link_md5 \"%s\";\n", guard.SecureLinkMD5(secret))
+	fmt.Fprintf(b, "if (%s) { return 418; }\n", verdict)
+	fmt.Fprintf(b, "error_page 418 =403 %s;\n", guard.PagePath)
+	fmt.Fprintf(b, "location = %s {\n", guard.PagePath)
+	b.WriteString("    internal;\n")
+	fmt.Fprintf(b, "    alias %s;\n", p.GuardPage(domain))
+	b.WriteString("    default_type text/html;\n")
+	b.WriteString("    add_header Cache-Control \"no-store\" always;\n")
+	fmt.Fprintf(b, "    add_header Content-Security-Policy \"%s\" always;\n", guard.CSP(ch.Provider))
+	b.WriteString("    add_header X-Frame-Options \"DENY\" always;\n")
+	b.WriteString("    add_header Referrer-Policy \"no-referrer\" always;\n")
+	b.WriteString("    add_header X-Content-Type-Options \"nosniff\" always;\n")
+	b.WriteString("}\n")
+	fmt.Fprintf(b, "location ^~ %s {\n", guard.Prefix)
+	fmt.Fprintf(b, "    proxy_pass http://unix:%s;\n", p.GuardSocket())
+	b.WriteString("    proxy_http_version 1.1;\n")
+	b.WriteString("    proxy_set_header Connection \"\";\n")
+	b.WriteString("    proxy_set_header Host $host;\n")
+	fmt.Fprintf(b, "    proxy_set_header %s \"%s\";\n", guard.HeaderSite, domain)
+	fmt.Fprintf(b, "    proxy_set_header %s $remote_addr;\n", guard.HeaderClient)
+	fmt.Fprintf(b, "    proxy_set_header %s $scheme;\n", guard.HeaderScheme)
+	b.WriteString("    proxy_set_header User-Agent $http_user_agent;\n")
+	b.WriteString("    proxy_set_header Cookie \"\";\n")
+	b.WriteString("    client_max_body_size 16k;\n")
+	b.WriteString("    add_header Cache-Control \"no-store\" always;\n")
+	b.WriteString("}\n")
+}
+
+// writeChallengeHTTP renders the challenge's http-context variables. The
+// verdict is 1 only for a request that is neither exempt nor carrying a valid
+// cookie: $secure_link is empty for a missing or forged cookie, "0" for an
+// expired one and "1" for a valid one.
+//
+// nginx caches a map's value for the whole request, internal redirects
+// included, and the server-level `if` runs again after each one. That is what
+// the exemption wants: /api/x that a site rewrites to /index.php stays exempt.
+// The verdict cannot be cached, though: the redirect to the page would find the
+// cached 1, challenge the page itself, and nginx would give up with a bare 418.
+// So the verdict is volatile and reads a volatile "this is the page" flag.
+func writeChallengeHTTP(b *strings.Builder, domain string, ch Challenge) {
+	cpath, cip, page, verdict := challengeNames(domain)
+	fmt.Fprintf(b, "geo $remote_addr %s {\n    default 0;\n", cip)
+	for _, a := range ch.ExemptIPs {
+		fmt.Fprintf(b, "    %s 1;\n", a)
+	}
+	b.WriteString("}\n")
+	fmt.Fprintf(b, "map $uri %s {\n    default 0;\n", cpath)
+	b.WriteString("    ~^/\\.well-known/acme-challenge/ 1;\n")
+	fmt.Fprintf(b, "    ~^%s 1;\n", strings.ReplaceAll(guard.Prefix, ".", `\.`))
+	fmt.Fprintf(b, "    %s 1;\n", guard.PagePath)
+	for _, p := range ch.ExemptPaths {
+		fmt.Fprintf(b, "    ~*^%s 1;\n", strings.ReplaceAll(p, ".", `\.`))
+	}
+	b.WriteString("}\n")
+	fmt.Fprintf(b, "map $uri %s {\n    volatile;\n    default 0;\n    %s 1;\n}\n", page, guard.PagePath)
+	fmt.Fprintf(b, "map \"$secure_link:%s%s%s\" %s {\n    volatile;\n    default 0;\n    \":000\" 1;\n    \"0:000\" 1;\n}\n", cpath, cip, page, verdict)
 }
 
 // HTTPInclude is the site's http-context file: the rate-limit zone and the
@@ -111,6 +200,10 @@ func HTTPInclude(domain string, c Config) []byte {
 			fmt.Fprintf(&b, "    ~*^%s 1;\n", strings.ReplaceAll(p, ".", `\.`))
 		}
 		b.WriteString("}\n")
+	}
+
+	if c.Challenge.Enabled {
+		writeChallengeHTTP(&b, domain, c.Challenge)
 	}
 	return []byte(b.String())
 }

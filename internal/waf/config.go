@@ -14,6 +14,8 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+
+	"github.com/portbyte-id/server-panel/internal/guard"
 )
 
 // Mode is what ModSecurity does with a request the rules flag.
@@ -77,6 +79,45 @@ type Exclusion struct {
 	Note   string `json:"note"`
 }
 
+// Challenge limits and defaults.
+const (
+	MinDifficulty     = 8
+	MaxDifficulty     = 24
+	DefaultDifficulty = 16
+
+	MinClearanceMinutes     = 5
+	MaxClearanceMinutes     = 7 * 24 * 60
+	DefaultClearanceMinutes = 60
+
+	maxSiteKey = 128
+	// maxSecret bounds the stored value, which is the sealed form of the key.
+	maxSecret = 1024
+)
+
+// Challenge is the page a visitor has to pass before the site opens: a
+// proof of work solved in the browser, or Cloudflare Turnstile.
+type Challenge struct {
+	Enabled  bool           `json:"enabled"`
+	Provider guard.Provider `json:"provider"`
+	// Difficulty is the number of leading zero bits the proof of work needs.
+	// Each extra bit doubles the average work: 16 takes well under a second.
+	Difficulty int `json:"difficulty"`
+	// ClearanceMinutes is how long a visitor who passed is let through.
+	ClearanceMinutes int    `json:"clearance_minutes"`
+	TurnstileSiteKey string `json:"turnstile_site_key"`
+	// TurnstileSecret is write-only over the API: a request sets it, an empty
+	// one keeps the stored key, and a response never carries it. In the
+	// database it is sealed with the panel's secret key.
+	TurnstileSecret string `json:"turnstile_secret,omitempty"`
+	// TurnstileSecretSet tells the UI a key is stored.
+	TurnstileSecretSet bool `json:"turnstile_secret_set"`
+	// ExemptPaths are path prefixes that are never challenged: APIs, webhooks,
+	// feeds, anything a program and not a browser requests.
+	ExemptPaths []string `json:"exempt_paths"`
+	// ExemptIPs are addresses and networks that are never challenged.
+	ExemptIPs []string `json:"exempt_ips"`
+}
+
 // Config is one site's firewall.
 type Config struct {
 	Mode          Mode        `json:"mode"`
@@ -85,6 +126,18 @@ type Config struct {
 	PathBlocklist []string    `json:"path_blocklist"`
 	IPRules       IPRules     `json:"ip_rules"`
 	Exclusions    []Exclusion `json:"exclusions"`
+	Challenge     Challenge   `json:"challenge"`
+}
+
+// DefaultChallenge is a challenge that is off.
+func DefaultChallenge() Challenge {
+	return Challenge{
+		Provider:         guard.ProviderPoW,
+		Difficulty:       DefaultDifficulty,
+		ClearanceMinutes: DefaultClearanceMinutes,
+		ExemptPaths:      []string{},
+		ExemptIPs:        []string{},
+	}
 }
 
 // Default is a site with the firewall off.
@@ -96,6 +149,7 @@ func Default() Config {
 		PathBlocklist: []string{},
 		IPRules:       IPRules{Allow: []string{}, Deny: []string{}},
 		Exclusions:    []Exclusion{},
+		Challenge:     DefaultChallenge(),
 	}
 }
 
@@ -116,9 +170,91 @@ func (c Config) UsesModSecurity() bool { return c.Mode == ModeDetect || c.Mode =
 
 // IsDefault reports whether the config asks nginx for nothing at all.
 func (c Config) IsDefault() bool {
-	return !c.UsesModSecurity() && !c.RateLimit.Enabled &&
+	return !c.UsesModSecurity() && !c.RateLimit.Enabled && !c.Challenge.Enabled &&
 		len(c.PathBlocklist) == 0 && len(c.IPRules.Allow) == 0 && len(c.IPRules.Deny) == 0
 }
+
+// normalizeChallenge validates the challenge. It does not check that a
+// Turnstile secret is present: that is known only once the stored one is
+// merged in, which the sites layer does.
+func normalizeChallenge(ch Challenge) (Challenge, error) {
+	def := DefaultChallenge()
+	switch ch.Provider {
+	case "":
+		ch.Provider = def.Provider
+	case guard.ProviderPoW, guard.ProviderTurnstile:
+	default:
+		return Challenge{}, invalid("challenge.provider", "must be pow or turnstile")
+	}
+	if ch.Difficulty == 0 {
+		ch.Difficulty = def.Difficulty
+	}
+	if ch.Difficulty < MinDifficulty || ch.Difficulty > MaxDifficulty {
+		return Challenge{}, invalid("challenge.difficulty", "must be between %d and %d", MinDifficulty, MaxDifficulty)
+	}
+	if ch.ClearanceMinutes == 0 {
+		ch.ClearanceMinutes = def.ClearanceMinutes
+	}
+	if ch.ClearanceMinutes < MinClearanceMinutes || ch.ClearanceMinutes > MaxClearanceMinutes {
+		return Challenge{}, invalid("challenge.clearance_minutes", "must be between %d and %d", MinClearanceMinutes, MaxClearanceMinutes)
+	}
+	ch.TurnstileSiteKey = strings.TrimSpace(ch.TurnstileSiteKey)
+	if ch.TurnstileSiteKey != "" && !validKey(ch.TurnstileSiteKey, maxSiteKey) {
+		return Challenge{}, invalid("challenge.turnstile_site_key", "must be 1-%d letters, digits, _ or -", maxSiteKey)
+	}
+	if ch.Enabled && ch.Provider == guard.ProviderTurnstile && ch.TurnstileSiteKey == "" {
+		return Challenge{}, invalid("challenge.turnstile_site_key", "is required for Turnstile")
+	}
+	ch.TurnstileSecret = strings.TrimSpace(ch.TurnstileSecret)
+	if len(ch.TurnstileSecret) > maxSecret {
+		return Challenge{}, invalid("challenge.turnstile_secret", "is too long")
+	}
+
+	paths := make([]string, 0, len(ch.ExemptPaths))
+	seen := map[string]bool{}
+	for _, p := range ch.ExemptPaths {
+		p = strings.TrimSpace(p)
+		if err := checkPath("challenge.exempt_paths", p); err != nil {
+			return Challenge{}, err
+		}
+		if p == "/" {
+			return Challenge{}, invalid("challenge.exempt_paths", "/ would exempt the whole site; turn the challenge off instead")
+		}
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) > MaxBlocklist {
+		return Challenge{}, invalid("challenge.exempt_paths", "at most %d paths", MaxBlocklist)
+	}
+	ch.ExemptPaths = paths
+	ips, err := normalizeAddrs("challenge.exempt_ips", ch.ExemptIPs)
+	if err != nil {
+		return Challenge{}, err
+	}
+	ch.ExemptIPs = ips
+	return ch, nil
+}
+
+// validKey is a Turnstile key: Cloudflare's are 0x followed by base64url-ish text.
+func validKey(s string, max int) bool {
+	if s == "" || len(s) > max {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		switch {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '_', b == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ValidTurnstileSecret reports whether a plain secret key looks like one.
+func ValidTurnstileSecret(s string) bool { return validKey(s, maxSiteKey) }
 
 // Normalize validates c and returns its canonical form: lists are never nil,
 // entries are trimmed and de-duplicated, addresses are written as masked
@@ -181,6 +317,12 @@ func (c Config) Normalize() (Config, error) {
 		return Config{}, err
 	}
 	c.Exclusions = ex
+
+	ch, err := normalizeChallenge(c.Challenge)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Challenge = ch
 	return c, nil
 }
 

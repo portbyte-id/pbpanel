@@ -8,6 +8,7 @@ import (
 	"io/fs"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
+	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/waf"
 )
@@ -21,6 +22,9 @@ type WAFStatus struct {
 	// Attached is whether the site file carries the firewall block. A site made
 	// before the block existed gets it the first time something is switched on.
 	Attached bool `json:"attached"`
+	// ChallengeAvailable is whether the challenge page can be switched on: it
+	// needs the panel's secret key.
+	ChallengeAvailable bool `json:"challenge_available"`
 }
 
 // WAFResult is what SetWAF did.
@@ -39,6 +43,8 @@ type WAFSummary struct {
 	PathBlocklist int      `json:"path_blocklist"`
 	IPRules       int      `json:"ip_rules"`
 	Exclusions    int      `json:"exclusions"`
+	// Challenge is the provider of the challenge page, or "" when it is off.
+	Challenge guard.Provider `json:"challenge"`
 }
 
 // WAFOverview is every site's firewall and whether ModSecurity can be used.
@@ -61,7 +67,15 @@ func (m *Manager) WAFConfig(ctx context.Context, domain string) (waf.Config, WAF
 		return waf.Config{}, WAFStatus{}, err
 	}
 	st, err := m.wafStatus(ctx, s)
-	return c, st, err
+	return redactWAF(c), st, err
+}
+
+// redactWAF drops the sealed Turnstile secret from a config on its way out and
+// says whether one is stored.
+func redactWAF(c waf.Config) waf.Config {
+	c.Challenge.TurnstileSecretSet = c.Challenge.TurnstileSecret != ""
+	c.Challenge.TurnstileSecret = ""
+	return c
 }
 
 func (m *Manager) wafStatus(ctx context.Context, s Site) (WAFStatus, error) {
@@ -69,7 +83,35 @@ func (m *Manager) wafStatus(ctx context.Context, s Site) (WAFStatus, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return WAFStatus{}, fmt.Errorf("sites: read %s: %w", m.p.SiteFile(s.Domain), err)
 	}
-	return WAFStatus{Availability: m.waf.Availability(ctx), Attached: nginx.HasBlock(content, nginx.BlockWAF)}, nil
+	return WAFStatus{
+		Availability:       m.waf.Availability(ctx),
+		Attached:           nginx.HasBlock(content, nginx.BlockWAF),
+		ChallengeAvailable: m.waf.ChallengeAvailable(),
+	}, nil
+}
+
+// mergeTurnstileSecret turns the secret a request carries into the one to
+// store: a new key is checked and sealed, an empty one keeps the stored key,
+// and Turnstile switched on with no key anywhere is refused.
+func (m *Manager) mergeTurnstileSecret(domain string, c *waf.Config, prev waf.Config) error {
+	ch := &c.Challenge
+	if ch.TurnstileSecret == "" {
+		ch.TurnstileSecret = prev.Challenge.TurnstileSecret
+	} else {
+		if !waf.ValidTurnstileSecret(ch.TurnstileSecret) {
+			return invalid("challenge.turnstile_secret", "must be the secret key from the Cloudflare dashboard: letters, digits, _ and -")
+		}
+		sealed, err := m.waf.SealTurnstileSecret(domain, ch.TurnstileSecret)
+		if err != nil {
+			return invalid("challenge.enabled", "%s", trimPrefix(err))
+		}
+		ch.TurnstileSecret = sealed
+	}
+	if ch.Enabled && ch.Provider == guard.ProviderTurnstile && ch.TurnstileSecret == "" {
+		return invalid("challenge.turnstile_secret", "is required for Turnstile")
+	}
+	ch.TurnstileSecretSet = false
+	return nil
 }
 
 // WAFOverview lists every site's firewall.
@@ -91,10 +133,14 @@ func (m *Manager) WAFOverview(ctx context.Context) (WAFOverview, error) {
 		if !ok {
 			c = waf.Default()
 		}
-		out.Sites = append(out.Sites, WAFSummary{
+		sum := WAFSummary{
 			Domain: s.Domain, Mode: c.Mode, Paranoia: c.Paranoia, RateLimit: c.RateLimit.Enabled,
 			PathBlocklist: len(c.PathBlocklist), IPRules: len(c.IPRules.Allow) + len(c.IPRules.Deny), Exclusions: len(c.Exclusions),
-		})
+		}
+		if c.Challenge.Enabled {
+			sum.Challenge = c.Challenge.Provider
+		}
+		out.Sites = append(out.Sites, sum)
 	}
 	return out, nil
 }
@@ -115,6 +161,9 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 		if errors.Is(err, waf.ErrModuleMissing) {
 			return WAFResult{}, invalid("mode", "%s", trimPrefix(err))
 		}
+		if errors.Is(err, waf.ErrNoChallenge) {
+			return WAFResult{}, invalid("challenge.enabled", "%s", trimPrefix(err))
+		}
 		return WAFResult{}, err
 	}
 
@@ -127,6 +176,9 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 	}
 	prev, err := m.waf.Get(ctx, s.Domain)
 	if err != nil {
+		return WAFResult{}, err
+	}
+	if err := m.mergeTurnstileSecret(s.Domain, &c, prev); err != nil {
 		return WAFResult{}, err
 	}
 
@@ -181,7 +233,7 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 	if err != nil {
 		return WAFResult{}, err
 	}
-	return WAFResult{Config: c, Status: st, Apply: res}, nil
+	return WAFResult{Config: redactWAF(c), Status: st, Apply: res}, nil
 }
 
 // wafInvalid turns the firewall's validation error into the sites one, so the
