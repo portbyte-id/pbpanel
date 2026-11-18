@@ -542,6 +542,11 @@ export interface NginxServiceStatus {
 export interface NginxImage {
   base: string
   repo: string
+  /** The nginx version that serves, and the versions the page offers. */
+  version: string
+  versions: string[]
+  /** True when nginx was stopped from the panel and is left stopped. */
+  stopped: boolean
   present: boolean
   /** True while an image build is running. */
   busy: boolean
@@ -584,6 +589,12 @@ export interface FirewallRule {
 export type FirewallRuleInput = Omit<FirewallRule, "id">
 
 export interface BlocklistEntry {
+  id: string
+  addr: string
+  comment?: string
+}
+
+export interface AllowlistEntry {
   id: string
   addr: string
   comment?: string
@@ -862,6 +873,18 @@ export class ApiClient {
     return res.job_id
   }
 
+  async panelIP(): Promise<{ detected: string; reason?: string; current: string }> {
+    return this.request("/api/panel/cert/ip")
+  }
+
+  async issuePanelIPCert(input: { ip: string; email?: string }): Promise<string> {
+    const res = await this.request<{ job_id: string }>("/api/panel/cert/ip", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job_id
+  }
+
   async nginxSettings(): Promise<NginxSettings> {
     return this.request<NginxSettings>("/api/nginx/settings")
   }
@@ -895,6 +918,21 @@ export class ApiClient {
   /** Builds a new image from the newest nginx base and swaps it in once `nginx -t` passes. */
   async updateNginxImage(): Promise<JobRef> {
     const res = await this.request<{ job: JobRef }>("/api/nginx/image/update", { method: "POST" })
+    return res.job
+  }
+
+  /** Starts, stops or restarts the nginx container as a job. */
+  async nginxContainerAction(action: "start" | "stop" | "restart"): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>(`/api/nginx/container/${action}`, { method: "POST" })
+    return res.job
+  }
+
+  /** Switches nginx to another version: builds it, checks the live config, swaps. */
+  async setNginxVersion(version: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/nginx/image/version", {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    })
     return res.job
   }
 
@@ -1352,6 +1390,23 @@ export class ApiClient {
 
   async removeBlocklistEntry(id: string): Promise<void> {
     return this.request<void>(`/api/firewall/blocklist/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    })
+  }
+
+  async firewallAllowlist(): Promise<AllowlistEntry[]> {
+    return (await this.request<{ entries: AllowlistEntry[] }>("/api/firewall/allowlist")).entries
+  }
+
+  async addAllowlistEntry(input: { addr: string; comment?: string }): Promise<AllowlistEntry> {
+    return this.request<AllowlistEntry>("/api/firewall/allowlist", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  async removeAllowlistEntry(id: string): Promise<void> {
+    return this.request<void>(`/api/firewall/allowlist/${encodeURIComponent(id)}`, {
       method: "DELETE",
     })
   }

@@ -32,6 +32,8 @@ type nginxStack struct {
 	PHP        *php.Manager
 	// Images is the nginx image family: builds, the one that serves, rollback.
 	Images *nginx.Images
+	// Runtime starts, stops and restarts the container.
+	Runtime *nginx.Runtime
 
 	phpMu    sync.Mutex
 	phpSteps []sites.PHPStep
@@ -90,13 +92,17 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		return nil
 	}
 
+	// A stop made from the panel survives a panel restart: the flag lives beside
+	// the image catalogue.
+	runtime := nginx.NewRuntime(eng, paths, imgs.ImageFunc()).WithFlags(images.NewCatalog(st))
+
 	return &nginxStack{
-		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs,
+		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs, Runtime: runtime,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
 			Boot:    nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()),
-			Live:    live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
+			Live:    live, Runtime: runtime,
 			BuildImage: buildImage, Logger: logger,
 		},
 	}, nil
@@ -152,6 +158,6 @@ func (n *nginxStack) deps() *httpapi.NginxDeps {
 	return &httpapi.NginxDeps{
 		Sites: n.Sites, Global: n.Global, History: n.Editor,
 		Service: n.Service, Reconciler: n.Reconciler, Paths: n.Paths,
-		PHP: n.PHP, PHPReconcile: n.phpReconcile, Images: n.Images,
+		PHP: n.PHP, PHPReconcile: n.phpReconcile, Images: n.Images, Container: n.Runtime,
 	}
 }

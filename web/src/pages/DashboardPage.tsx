@@ -329,7 +329,7 @@ function Tile({
             className="hover:bg-accent/40 focus-visible:ring-ring/50 absolute inset-0 rounded-[inherit] outline-none focus-visible:ring-2"
           />
           <Dialog open={open} onOpenChange={setOpen}>
-            <DialogContent className="sm:max-w-xl">
+            <DialogContent>
               <DialogHeader>
                 <DialogTitle>{label}</DialogTitle>
                 <DialogDescription>The last {detail.values.length} samples, oldest on the left.</DialogDescription>

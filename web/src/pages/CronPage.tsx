@@ -258,7 +258,7 @@ export function CronPage() {
 function HistoryDialog({ job, onClose }: { job: CronJob | null; onClose: () => void }) {
   return (
     <Dialog open={job !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{job ? `${job.name}: run history` : "Run history"}</DialogTitle>
           <DialogDescription>Newest first. Choose a run to read the end of its output.</DialogDescription>

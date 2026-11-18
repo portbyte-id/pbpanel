@@ -2,6 +2,7 @@ package settings
 
 import (
 	"errors"
+	"net/mail"
 	"regexp"
 	"strings"
 )
@@ -55,6 +56,7 @@ const (
 	// KeyTLSACMEEABKid and KeyTLSACMEEABHMACKey are the External Account
 	// Binding credentials a CA such as Google Public CA requires at account
 	// registration. They are read when an account is first registered.
+	KeyTLSACMEEmail      = "tls.acme.email"
 	KeyTLSACMEEABKid     = "tls.acme.eab_kid"
 	KeyTLSACMEEABHMACKey = "tls.acme.eab_hmac_key"
 
@@ -69,6 +71,16 @@ const (
 	// ACMEDirectoryGoogleStaging is Google Public CA's test endpoint. It needs EAB.
 	ACMEDirectoryGoogleStaging = "https://dv.acme-v02.test-api.pki.goog/directory"
 )
+
+func validateOptionalEmail(value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := mail.ParseAddress(value); err != nil || strings.ContainsAny(value, "<> ,;") {
+		return errors.New("must be an email address such as ops@example.com")
+	}
+	return nil
+}
 
 // acmeDirectoryLabels names each offered CA endpoint on the Settings page.
 var acmeDirectoryLabels = map[string]string{
@@ -238,6 +250,16 @@ func defaultKeys() []key {
 				Description: "Certificate authority certificates are ordered from. The default is the Let's Encrypt staging endpoint, whose certificates browsers do not trust; choose a production CA to issue real ones. Google Public CA needs the two EAB settings below and does not issue IP-address certificates.",
 				Group:       groupTLS,
 			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSACMEEmail,
+				Type:        TypeString,
+				Optional:    true,
+				Description: "Contact email registered with the CA when the panel creates an account. Required by Google Public CA; optional for Let's Encrypt. An email typed on a single certificate order takes precedence.",
+				Group:       groupTLS,
+			},
+			check: validateOptionalEmail,
 		},
 		{
 			meta: Meta{

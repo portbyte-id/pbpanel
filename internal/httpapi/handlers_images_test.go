@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
@@ -102,8 +103,41 @@ func TestRemoveAVersionNobodyUses(t *testing.T) {
 
 // fakeNginxImages answers the nginx image routes without Docker.
 type fakeNginxImages struct {
-	builds []images.Build
+	builds   []images.Build
+	version  string
+	switched chan string
 }
+
+func (f *fakeNginxImages) Version() string {
+	if f.version == "" {
+		return "1.29"
+	}
+	return f.version
+}
+
+func (f *fakeNginxImages) SetVersion(_ context.Context, v string, _ docker.Progress) (images.Build, error) {
+	if f.switched != nil {
+		f.switched <- v
+	}
+	return images.Build{}, nil
+}
+
+// fakeNginxContainer records which action ran.
+type fakeNginxContainer struct {
+	ran     chan string
+	stopped bool
+}
+
+func (f *fakeNginxContainer) Start(context.Context) (docker.EnsureResult, error) {
+	f.ran <- "start"
+	return docker.EnsureResult{}, nil
+}
+func (f *fakeNginxContainer) Stop(context.Context) error { f.ran <- "stop"; return nil }
+func (f *fakeNginxContainer) Restart(context.Context) (docker.EnsureResult, error) {
+	f.ran <- "restart"
+	return docker.EnsureResult{}, nil
+}
+func (f *fakeNginxContainer) Stopped(context.Context) bool { return f.stopped }
 
 func (f *fakeNginxImages) Idle() error { return nil }
 func (f *fakeNginxImages) Builds(context.Context) ([]images.Build, error) {
@@ -160,5 +194,78 @@ func TestNginxImageShowsCurrentAndPrevious(t *testing.T) {
 	code, _ = h.call(http.MethodPost, "/api/nginx/image/builds/20260101000000-cccccc/activate", map[string]any{})
 	if code != http.StatusNotFound {
 		t.Errorf("activating an unknown build = %d, want 404", code)
+	}
+}
+
+func imagesHarness(t *testing.T, imgs *fakeNginxImages, c *fakeNginxContainer) *nginxHarness {
+	t.Helper()
+	h := newPHPHarness(t, phpEngine{})
+	h.deps.Nginx.Images = imgs
+	if c != nil {
+		h.deps.Nginx.Container = c
+	}
+	var err error
+	h.handler, err = New(h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func waitRan(t *testing.T, ch chan string) string {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatal("the job never ran")
+		return ""
+	}
+}
+
+func TestNginxContainerActions(t *testing.T) {
+	c := &fakeNginxContainer{ran: make(chan string, 1)}
+	h := imagesHarness(t, &fakeNginxImages{}, c)
+	for _, action := range []string{"stop", "start", "restart"} {
+		code, out := h.call(http.MethodPost, "/api/nginx/container/"+action, map[string]any{})
+		if code != http.StatusAccepted {
+			t.Fatalf("%s = %d %v", action, code, out)
+		}
+		if got := waitRan(t, c.ran); got != action {
+			t.Errorf("ran %q, want %q", got, action)
+		}
+	}
+	if code, _ := h.call(http.MethodPost, "/api/nginx/container/explode", map[string]any{}); code != http.StatusNotFound {
+		t.Errorf("unknown action = %d, want 404", code)
+	}
+}
+
+func TestNginxContainerUnavailableWithoutRuntime(t *testing.T) {
+	h := imagesHarness(t, &fakeNginxImages{}, nil)
+	if code, _ := h.call(http.MethodPost, "/api/nginx/container/stop", map[string]any{}); code != http.StatusServiceUnavailable {
+		t.Errorf("stop without a runtime = %d, want 503", code)
+	}
+}
+
+func TestNginxVersionSwitch(t *testing.T) {
+	imgs := &fakeNginxImages{switched: make(chan string, 1)}
+	h := imagesHarness(t, imgs, &fakeNginxContainer{ran: make(chan string, 1), stopped: true})
+
+	code, out := h.call(http.MethodGet, "/api/nginx/image", nil)
+	if code != http.StatusOK || out["version"] != "1.29" || out["stopped"] != true {
+		t.Fatalf("GET image = %d %v", code, out)
+	}
+	if code, _ := h.call(http.MethodPost, "/api/nginx/image/version", map[string]any{"version": "latest"}); code != http.StatusBadRequest {
+		t.Errorf("bad version = %d, want 400", code)
+	}
+	if code, _ := h.call(http.MethodPost, "/api/nginx/image/version", map[string]any{"version": "1.29"}); code != http.StatusConflict {
+		t.Errorf("same version = %d, want 409", code)
+	}
+	code, out = h.call(http.MethodPost, "/api/nginx/image/version", map[string]any{"version": "1.28"})
+	if code != http.StatusAccepted {
+		t.Fatalf("switch = %d %v", code, out)
+	}
+	if got := waitRan(t, imgs.switched); got != "1.28" {
+		t.Errorf("switched to %q", got)
 	}
 }

@@ -185,7 +185,7 @@ export function AppsPage() {
       />
 
       <Dialog open={logsFor !== null} onOpenChange={(open) => !open && setLogsFor(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>{logsFor} log</DialogTitle>
             <DialogDescription>Output and errors, newest at the bottom.</DialogDescription>

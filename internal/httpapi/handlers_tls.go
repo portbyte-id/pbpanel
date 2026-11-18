@@ -258,6 +258,8 @@ func (s *server) tlsRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/panel/cert", h(s.panelCertGet))
 	mux.Handle("POST /api/panel/cert/upload", h(s.panelCertUpload))
 	mux.Handle("POST /api/panel/cert/issue", h(s.panelCertIssue))
+	mux.Handle("GET /api/panel/cert/ip", h(s.panelCertIPGet))
+	mux.Handle("POST /api/panel/cert/ip", h(s.panelCertIPIssue))
 }
 
 // tlsFail maps an error from the tls package, then from sites and confedit.

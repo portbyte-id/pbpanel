@@ -1,12 +1,16 @@
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useMemo, useState } from "react"
 
+import { PanelCertCard } from "@/components/PanelCert"
 import { SettingField } from "@/components/SettingsField"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type SettingKey, type SettingWrite } from "@/lib/api"
 import { useSaveSettings, useSettings } from "@/lib/queries"
+
+/** The one tab that is not a registry group: the panel's own certificate. */
+const PANEL_CERT_TAB = "Panel certificate"
 
 /**
  * The Settings page, generated from the registry.
@@ -81,10 +85,12 @@ export function SettingsPage() {
         : "The settings could not be saved."
       : null
 
+  const activeTab = tab ?? data?.groups[0]?.name ?? PANEL_CERT_TAB
+
   return (
     <div className="flex max-w-3xl flex-col gap-4">
-      {(data?.groups ?? []).length > 0 && (
-        <Tabs value={tab ?? data?.groups[0]?.name} onValueChange={setTab} className="gap-3">
+      {(
+        <Tabs value={activeTab} onValueChange={setTab} className="gap-3">
           <TabsList className="flex-wrap">
             {(data?.groups ?? []).map((group) => {
               const unsaved = group.keys.some((k) => dirty.some((d) => d.name === k.name))
@@ -101,6 +107,7 @@ export function SettingsPage() {
                 </TabsTrigger>
               )
             })}
+            <TabsTrigger value={PANEL_CERT_TAB}>{PANEL_CERT_TAB}</TabsTrigger>
           </TabsList>
           {(data?.groups ?? []).map((group) => (
             <TabsContent key={group.name} value={group.name}>
@@ -125,6 +132,9 @@ export function SettingsPage() {
               </Card>
             </TabsContent>
           ))}
+          <TabsContent value={PANEL_CERT_TAB}>
+            <PanelCertCard />
+          </TabsContent>
         </Tabs>
       )}
 
@@ -134,7 +144,7 @@ export function SettingsPage() {
         </p>
       )}
 
-      <div className="flex items-center gap-3">
+      <div className={activeTab === PANEL_CERT_TAB ? "hidden" : "flex items-center gap-3"}>
         <Button onClick={submit} disabled={dirty.length === 0 || save.isPending}>
           {save.isPending ? "Saving…" : "Save changes"}
         </Button>

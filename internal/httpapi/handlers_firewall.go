@@ -20,6 +20,9 @@ type FirewallService interface {
 	Blocklist(ctx context.Context) ([]firewall.BlockEntry, error)
 	AddBlock(ctx context.Context, e firewall.BlockEntry) (firewall.BlockEntry, error)
 	DeleteBlock(ctx context.Context, id int64) error
+	Allowlist(ctx context.Context) ([]firewall.AllowEntry, error)
+	AddAllow(ctx context.Context, e firewall.AllowEntry) (firewall.AllowEntry, error)
+	DeleteAllow(ctx context.Context, id int64) error
 	Enable(ctx context.Context) (firewall.Pending, error)
 	Apply(ctx context.Context) (firewall.Pending, error)
 	Confirm(ctx context.Context, token string) error
@@ -58,6 +61,9 @@ func (s *server) firewallRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/firewall/blocklist", h(s.fwBlocklist))
 	mux.Handle("POST /api/firewall/blocklist", h(s.fwAddBlock))
 	mux.Handle("DELETE /api/firewall/blocklist/{id}", h(s.fwDeleteBlock))
+	mux.Handle("GET /api/firewall/allowlist", h(s.fwAllowlist))
+	mux.Handle("POST /api/firewall/allowlist", h(s.fwAddAllow))
+	mux.Handle("DELETE /api/firewall/allowlist/{id}", h(s.fwDeleteAllow))
 	mux.Handle("POST /api/firewall/enable", h(s.fwEnable))
 	mux.Handle("POST /api/firewall/apply", h(s.fwApply))
 	mux.Handle("POST /api/firewall/confirm", h(s.fwConfirm))
@@ -75,7 +81,7 @@ func (s *server) fwFail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: errInvalidRule, Detail: err.Error(), Field: "protocol"})
 	case errors.Is(err, firewall.ErrAddr), errors.Is(err, firewall.ErrEmptyNet):
 		field := "source"
-		if r.URL.Path == "/api/firewall/blocklist" {
+		if r.URL.Path == "/api/firewall/blocklist" || r.URL.Path == "/api/firewall/allowlist" {
 			field = "addr"
 		}
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: errInvalidRule, Detail: err.Error(), Field: field})
@@ -191,6 +197,41 @@ func (s *server) fwDeleteBlock(f FirewallService, w http.ResponseWriter, r *http
 		return
 	}
 	if err := f.DeleteBlock(r.Context(), id); err != nil {
+		s.fwFail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) fwAllowlist(f FirewallService, w http.ResponseWriter, r *http.Request) {
+	entries, err := f.Allowlist(r.Context())
+	if err != nil {
+		s.fwFail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (s *server) fwAddAllow(f FirewallService, w http.ResponseWriter, r *http.Request) {
+	var in firewall.AllowEntry
+	if err := decodeJSON(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, errBadRequest, decodeErrorDetail(err))
+		return
+	}
+	out, err := f.AddAllow(r.Context(), in)
+	if err != nil {
+		s.fwFail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *server) fwDeleteAllow(f FirewallService, w http.ResponseWriter, r *http.Request) {
+	id, ok := fwID(w, r)
+	if !ok {
+		return
+	}
+	if err := f.DeleteAllow(r.Context(), id); err != nil {
 		s.fwFail(w, r, err)
 		return
 	}

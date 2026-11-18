@@ -81,10 +81,13 @@ func Spec(p Paths, image string) docker.Spec {
 
 // Dockerfile is the derived image: the official one plus the `www` group and
 // user at the fixed IDs. The base is a Debian image, which has groupadd.
-func Dockerfile() []byte {
+func Dockerfile() []byte { return DockerfileFor(Version) }
+
+// DockerfileFor is the derived image for one nginx version.
+func DockerfileFor(version string) []byte {
 	return fmt.Appendf(nil,
 		"FROM %s\nRUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
-		BaseImage, WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
+		BaseImageFor(version), WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
 }
 
 // Service is nginx as a confedit.Service: it validates with `nginx -t`,
@@ -256,6 +259,7 @@ type Runtime struct {
 	eng   Engine
 	p     Paths
 	image ImageFunc
+	flags FlagStore
 }
 
 // NewRuntime returns the nginx runtime.
@@ -301,4 +305,81 @@ func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
 		return docker.Container{}, false, err
 	}
 	return c, true, nil
+}
+
+// stopTimeout is how long a graceful stop (SIGQUIT) lets nginx finish its requests.
+const stopTimeout = 25 * time.Second
+
+// StoppedKey is the stored flag that says the operator stopped nginx from the
+// panel. While it is set the boot reconcile leaves the container stopped.
+const StoppedKey = "nginx.stopped"
+
+// FlagStore keeps the stopped flag. *images.Catalog satisfies it.
+type FlagStore interface {
+	Setting(ctx context.Context, name string) (string, bool, error)
+	SetSetting(ctx context.Context, name, value string) error
+}
+
+// Stopped reports whether the operator stopped nginx from the panel.
+func (r *Runtime) Stopped(ctx context.Context) bool {
+	if r.flags == nil {
+		return false
+	}
+	v, ok, err := r.flags.Setting(ctx, StoppedKey)
+	return err == nil && ok && v == "1"
+}
+
+func (r *Runtime) setStopped(ctx context.Context, stopped bool) error {
+	if r.flags == nil {
+		return nil
+	}
+	v := "0"
+	if stopped {
+		v = "1"
+	}
+	return r.flags.SetSetting(ctx, StoppedKey, v)
+}
+
+// WithFlags makes the runtime remember a stop across panel restarts.
+func (r *Runtime) WithFlags(f FlagStore) *Runtime {
+	r.flags = f
+	return r
+}
+
+// Start brings the container up on the build that serves: it is created if it is
+// missing, and started if it is stopped. It clears the stopped flag first, so a
+// start that fails part-way still leaves the reconcile free to retry it.
+func (r *Runtime) Start(ctx context.Context) (docker.EnsureResult, error) {
+	if err := r.setStopped(ctx, false); err != nil {
+		return docker.EnsureResult{}, err
+	}
+	return r.EnsureContainer(ctx)
+}
+
+// Stop shuts nginx down gracefully and records that this was the operator's
+// choice, so the next panel start does not undo it. Stopping a container that is
+// already stopped, or does not exist, only records the choice.
+func (r *Runtime) Stop(ctx context.Context) error {
+	if err := r.setStopped(ctx, true); err != nil {
+		return err
+	}
+	c, err := r.eng.ContainerInspect(ctx, ContainerName)
+	if errors.Is(err, docker.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !c.State.Running && !c.State.Restarting {
+		return nil
+	}
+	return r.eng.ContainerStop(ctx, ContainerName, stopTimeout)
+}
+
+// Restart stops nginx and starts it again.
+func (r *Runtime) Restart(ctx context.Context) (docker.EnsureResult, error) {
+	if err := r.Stop(ctx); err != nil {
+		return docker.EnsureResult{}, err
+	}
+	return r.Start(ctx)
 }

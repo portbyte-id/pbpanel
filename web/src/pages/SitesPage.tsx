@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { type CertView, type Site } from "@/lib/api"
+import { SiteDetailDialog } from "@/pages/SiteDetailPage"
 import { useApps, useSites, useTLSCerts } from "@/lib/queries"
 
 export function kindLabel(kind: Site["kind"]): string {
@@ -25,7 +26,7 @@ function TLSCell({ cert }: { cert: CertView | undefined }) {
 }
 
 /** The sites list. A row leads to the site; the button adds one. */
-export function SitesPage() {
+export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
   const { data, isPending, error, refetch } = useSites()
   // Certificates are a nicety here: if they fail to load the list still works.
   const certs = useTLSCerts()
@@ -180,6 +181,14 @@ export function SitesPage() {
         }}
         onCreated={(domain) => void navigate({ to: "/sites/$domain", params: { domain } })}
       />
+
+      {openDomain !== undefined && (
+        <SiteDetailDialog
+          key={openDomain}
+          domain={openDomain}
+          onClose={() => void navigate({ to: "/sites" })}
+        />
+      )}
     </div>
   )
 }

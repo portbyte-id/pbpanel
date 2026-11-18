@@ -193,3 +193,26 @@ func nonNil(s []string) []string {
 	}
 	return s
 }
+
+// Setting reads one small piece of panel state kept beside the catalogue, such as
+// which version of a family is active. ok is false when it was never set.
+func (c *Catalog) Setting(ctx context.Context, name string) (string, bool, error) {
+	return c.st.LoadSetting(ctx, name)
+}
+
+// SetSetting stores one such value.
+func (c *Catalog) SetSetting(ctx context.Context, name, value string) error {
+	return c.st.SaveSetting(ctx, name, value)
+}
+
+func activeKey(kind Kind) string { return "images." + string(kind) + ".active" }
+
+// ActiveVersion is the version of a family the operator last chose to serve.
+func (c *Catalog) ActiveVersion(ctx context.Context, kind Kind) (string, bool, error) {
+	return c.st.LoadSetting(ctx, activeKey(kind))
+}
+
+// SetActiveVersion records the version of a family that serves.
+func (c *Catalog) SetActiveVersion(ctx context.Context, kind Kind, version string) error {
+	return c.st.SaveSetting(ctx, activeKey(kind), version)
+}

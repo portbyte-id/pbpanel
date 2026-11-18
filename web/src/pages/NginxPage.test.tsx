@@ -14,6 +14,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       nginxImage: vi.fn(),
       updateNginxImage: vi.fn(),
       activateNginxImageBuild: vi.fn(),
+      setNginxVersion: vi.fn(),
     },
   }
 })
@@ -37,6 +38,9 @@ const build = (over: Partial<ImageBuild> = {}): ImageBuild => ({
 const image = (over: Partial<NginxImage> = {}): NginxImage => ({
   base: "nginx:1.29",
   repo: "panel/nginx:1.29",
+  version: "1.29",
+  versions: ["1.30", "1.29", "1.28"],
+  stopped: false,
   present: true,
   busy: false,
   current: build({ id: "current-build", current: true }),
@@ -70,6 +74,20 @@ describe("nginx image card", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it("switches version only after another one is picked", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.nginxImage).mockResolvedValue(image())
+    vi.mocked(api.setNginxVersion).mockResolvedValue({ id: "job-v", kind: "nginx.version", state: "running" })
+    renderCard()
+
+    const button = await screen.findByRole("button", { name: "Switch version" })
+    expect(button).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText("nginx version"), "1.28")
+    expect(button).toBeEnabled()
+    await user.click(button)
+    await waitFor(() => expect(api.setNginxVersion).toHaveBeenCalledWith("1.28"))
   })
 
   it("disables Update image while a build is running", async () => {

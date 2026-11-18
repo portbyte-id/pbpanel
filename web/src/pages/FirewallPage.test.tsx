@@ -7,6 +7,7 @@ import { FirewallPage } from "@/pages/FirewallPage"
 import {
   api,
   ApiError,
+  type AllowlistEntry,
   type BlocklistEntry,
   type FirewallRule,
   type FirewallState,
@@ -20,6 +21,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
       firewall: vi.fn(),
       firewallRules: vi.fn(),
       firewallBlocklist: vi.fn(),
+      firewallAllowlist: vi.fn(),
+      addAllowlistEntry: vi.fn(),
+      removeAllowlistEntry: vi.fn(),
       createFirewallRule: vi.fn(),
       updateFirewallRule: vi.fn(),
       deleteFirewallRule: vi.fn(),
@@ -59,10 +63,12 @@ function setup(
   state: FirewallState,
   rules: FirewallRule[] = [],
   blocklist: BlocklistEntry[] = [],
+  allowlist: AllowlistEntry[] = [],
 ) {
   vi.mocked(api.firewall).mockResolvedValue(state)
   vi.mocked(api.firewallRules).mockResolvedValue(rules)
   vi.mocked(api.firewallBlocklist).mockResolvedValue(blocklist)
+  vi.mocked(api.firewallAllowlist).mockResolvedValue(allowlist)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
@@ -257,6 +263,31 @@ describe("FirewallPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Unblock 198.51.100.7" }))
     await waitFor(() => expect(api.removeBlocklistEntry).toHaveBeenCalledWith("b1"))
+  })
+
+  it("adds and removes allow list entries", async () => {
+    setup(baseState(), [], [], [{ id: "a1", addr: "198.51.100.9/32", comment: "office" }])
+    vi.mocked(api.addAllowlistEntry).mockResolvedValue({ id: "a2", addr: "203.0.113.20" })
+    vi.mocked(api.removeAllowlistEntry).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("tab", { name: "Allow list" }))
+    expect(await screen.findByText("198.51.100.9/32")).toBeInTheDocument()
+    await user.type(screen.getByLabelText("Address or CIDR"), "203.0.113.20")
+    await user.click(screen.getByRole("button", { name: "Allow address" }))
+    await waitFor(() =>
+      expect(api.addAllowlistEntry).toHaveBeenCalledWith({ addr: "203.0.113.20" }),
+    )
+
+    await user.click(screen.getByRole("button", { name: "Remove 198.51.100.9/32 from the allow list" }))
+    await waitFor(() => expect(api.removeAllowlistEntry).toHaveBeenCalledWith("a1"))
+  })
+
+  it("shows an empty allow list", async () => {
+    setup(baseState())
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("tab", { name: "Allow list" }))
+    expect(await screen.findByText("No allowed addresses.")).toBeInTheDocument()
   })
 
   it("asks before disabling", async () => {

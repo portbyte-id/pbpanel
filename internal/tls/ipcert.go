@@ -99,3 +99,26 @@ var port80Free = func() bool {
 	_ = l.Close()
 	return true
 }
+
+// IsPublicIP reports whether s is an IP address literal an IP certificate can
+// name: a globally routable IPv4 or IPv6 address. Private, loopback, link-local
+// and documentation ranges are refused, since the CA could never reach them.
+func IsPublicIP(s string) bool {
+	ip := net.ParseIP(s)
+	switch {
+	case ip == nil:
+		return false
+	case ip.To4() != nil:
+		return isPublicIPv4(ip)
+	default:
+		return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
+	}
+}
+
+// CanonicalIP is the one spelling of an IP literal used as a certificate name.
+func CanonicalIP(s string) string {
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.String()
+	}
+	return s
+}

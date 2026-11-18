@@ -47,6 +47,9 @@ type IssuerOptions struct {
 	// both empty when none is configured. nil means never. It is read only when
 	// an account is first registered at a directory.
 	EAB func() (kid, hmacKey string)
+	// Email returns the default ACME contact, used when an order names none
+	// (renewals and the panel's own certificate). nil means no default.
+	Email func() string
 	// HTTPClient talks to the CA. nil means a client with a two-minute timeout.
 	// Tests and Pebble inject one that trusts a private CA.
 	HTTPClient *http.Client
@@ -85,6 +88,7 @@ type Issuer struct {
 	root        string
 	directory   func() string
 	eab         func() (string, string)
+	defEmail    func() string
 	hc          *http.Client
 	probeClient *http.Client
 	providers   func(string, []byte) (DNSProvider, error)
@@ -102,7 +106,7 @@ func NewIssuer(o IssuerOptions) (*Issuer, error) {
 		return nil, errors.New("tls: Store, Root and Directory are required")
 	}
 	i := &Issuer{
-		st: o.Store, root: o.Root, directory: o.Directory, eab: o.EAB, hc: o.HTTPClient,
+		st: o.Store, root: o.Root, directory: o.Directory, eab: o.EAB, defEmail: o.Email, hc: o.HTTPClient,
 		probeClient: o.ProbeClient, providers: o.Providers, skipDNS: o.SkipDNSPropagationCheck, now: o.Now,
 	}
 	if i.hc == nil {
@@ -406,6 +410,12 @@ func requiresEAB(dir string) bool {
 // before the registration call so a crash between the two leaves a key to retry
 // with rather than an orphaned account at the CA that nothing can use.
 func (i *Issuer) register(ctx context.Context, dir string, u *acmeUser) (*acmeUser, error) {
+	if u.email == "" && i.defEmail != nil {
+		u.email = strings.TrimSpace(i.defEmail())
+	}
+	if u.email == "" && requiresEAB(dir) {
+		return nil, fmt.Errorf("%w: %s needs a contact email; set tls.acme.email", ErrInvalid, dir)
+	}
 	keyPEM := certcrypto.PEMEncode(u.key)
 	if err := i.st.PutAccount(ctx, Account{DirectoryURL: dir, Email: u.email, Key: keyPEM}); err != nil {
 		return nil, err

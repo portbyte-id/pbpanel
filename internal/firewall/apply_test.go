@@ -169,21 +169,21 @@ func TestApplyConfirmKeeps(t *testing.T) {
 	m := h.manager(t, true)
 	ctx := context.Background()
 
-	p, err := m.Apply(ctx, input(80))
+	p, err := m.Apply(ctx, input(8080))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !p.Deadline.Equal(h.now.Add(time.Minute)) {
 		t.Fatalf("deadline %v", p.Deadline)
 	}
-	if !h.has("iptables", "80") || !h.has("ip6tables", "80") || !h.fake.hook["iptables"] || !h.fake.hook["ip6tables"] {
+	if !h.has("iptables", "8080") || !h.has("ip6tables", "8080") || !h.fake.hook["iptables"] || !h.fake.hook["ip6tables"] {
 		t.Fatal("ruleset not live and hooked in both families")
 	}
 	if err := m.Confirm(ctx, p.Token); err != nil {
 		t.Fatal(err)
 	}
 	h.tm.fireAll() // the timer was stopped; firing must change nothing
-	if !h.has("iptables", "80") {
+	if !h.has("iptables", "8080") {
 		t.Fatal("confirmed rules were rolled back")
 	}
 	if _, err := m.Pending(ctx); !errors.Is(err, ErrNoPending) {
@@ -204,7 +204,7 @@ func TestTimeoutRestoresPrevious(t *testing.T) {
 	m := h.manager(t, true)
 	ctx := context.Background()
 
-	first, err := m.Apply(ctx, input(80))
+	first, err := m.Apply(ctx, input(8080))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,11 +214,11 @@ func TestTimeoutRestoresPrevious(t *testing.T) {
 	if _, err := m.Apply(ctx, input(9000)); err != nil {
 		t.Fatal(err)
 	}
-	if !h.has("iptables", "9000") || h.has("iptables", "80") {
+	if !h.has("iptables", "9000") || h.has("iptables", "8080") {
 		t.Fatal("second ruleset not live")
 	}
 	h.tm.fireAll() // 60 s pass without a confirm
-	if !h.has("iptables", "80") || h.has("iptables", "9000") || !h.has("ip6tables", "80") {
+	if !h.has("iptables", "8080") || h.has("iptables", "9000") || !h.has("ip6tables", "8080") {
 		t.Fatalf("previous rules not restored: %v", h.fake.chains)
 	}
 	if !h.fake.hook["iptables"] {
@@ -232,7 +232,7 @@ func TestTimeoutRestoresPrevious(t *testing.T) {
 func TestFirstEnableRollbackUnhooksAndEmpties(t *testing.T) {
 	h := newHarness(t)
 	m := h.manager(t, true)
-	if _, err := m.Apply(context.Background(), input(80)); err != nil {
+	if _, err := m.Apply(context.Background(), input(8080)); err != nil {
 		t.Fatal(err)
 	}
 	h.tm.fireAll()
@@ -248,7 +248,7 @@ func TestSecondApplyDoesNotStackJump(t *testing.T) {
 	h := newHarness(t)
 	m := h.manager(t, false)
 	ctx := context.Background()
-	p, err := m.Apply(ctx, input(80))
+	p, err := m.Apply(ctx, input(8080))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestSecondApplyDoesNotStackJump(t *testing.T) {
 func TestOnlyOnePending(t *testing.T) {
 	h := newHarness(t)
 	m := h.manager(t, false)
-	if _, err := m.Apply(context.Background(), input(80)); err != nil {
+	if _, err := m.Apply(context.Background(), input(8080)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Apply(context.Background(), input(81)); !errors.Is(err, ErrPending) {
@@ -282,7 +282,7 @@ func TestConfirmWrongTokenAndNone(t *testing.T) {
 	if err := m.Confirm(ctx, "x"); !errors.Is(err, ErrNoPending) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := m.Apply(ctx, input(80)); err != nil {
+	if _, err := m.Apply(ctx, input(8080)); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Confirm(ctx, "wrong"); !errors.Is(err, ErrToken) {
@@ -297,7 +297,7 @@ func TestConfirmAfterDeadlineRollsBack(t *testing.T) {
 	h := newHarness(t)
 	m := h.manager(t, false)
 	ctx := context.Background()
-	p, err := m.Apply(ctx, input(80))
+	p, err := m.Apply(ctx, input(8080))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestConfirmAfterDeadlineRollsBack(t *testing.T) {
 	if err := m.Confirm(ctx, p.Token); !errors.Is(err, ErrExpired) {
 		t.Fatalf("got %v", err)
 	}
-	if h.has("iptables", "80") || h.fake.hook["iptables"] {
+	if h.has("iptables", "8080") || h.fake.hook["iptables"] {
 		t.Fatal("late confirm kept the rules")
 	}
 }
@@ -314,7 +314,7 @@ func TestRestartWithPendingRollsBack(t *testing.T) {
 	h := newHarness(t)
 	m := h.manager(t, true)
 	ctx := context.Background()
-	if _, err := m.Apply(ctx, input(80)); err != nil {
+	if _, err := m.Apply(ctx, input(8080)); err != nil {
 		t.Fatal(err)
 	}
 	// Daemon dies: the timer is gone, the pending row and live rules remain.
@@ -323,7 +323,7 @@ func TestRestartWithPendingRollsBack(t *testing.T) {
 	if err := m2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if h.has("iptables", "80") || h.fake.hook["iptables"] || h.fake.hook["ip6tables"] {
+	if h.has("iptables", "8080") || h.fake.hook["iptables"] || h.fake.hook["ip6tables"] {
 		t.Fatal("restart did not roll back the unconfirmed apply")
 	}
 	if err := m2.Recover(ctx); err != nil {
@@ -338,13 +338,13 @@ func TestRevertNow(t *testing.T) {
 	if err := m.Revert(ctx); !errors.Is(err, ErrNoPending) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := m.Apply(ctx, input(80)); err != nil {
+	if _, err := m.Apply(ctx, input(8080)); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Revert(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if h.has("iptables", "80") {
+	if h.has("iptables", "8080") {
 		t.Fatal("revert left rules")
 	}
 }
@@ -353,10 +353,10 @@ func TestRejectedRulesetTouchesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.fake.rejectV6 = true
 	m := h.manager(t, true)
-	if _, err := m.Apply(context.Background(), input(80)); err == nil {
+	if _, err := m.Apply(context.Background(), input(8080)); err == nil {
 		t.Fatal("expected rejection")
 	}
-	if h.has("iptables", "80") || h.fake.hook["iptables"] {
+	if h.has("iptables", "8080") || h.fake.hook["iptables"] {
 		t.Fatal("v4 was applied although v6 failed --test")
 	}
 	if _, err := m.Pending(context.Background()); !errors.Is(err, ErrNoPending) {
@@ -368,10 +368,10 @@ func TestPartialApplyRollsBackFirstFamily(t *testing.T) {
 	h := newHarness(t)
 	h.fake.failApply["ip6tables-restore"] = true
 	m := h.manager(t, true)
-	if _, err := m.Apply(context.Background(), input(80)); err == nil {
+	if _, err := m.Apply(context.Background(), input(8080)); err == nil {
 		t.Fatal("expected failure")
 	}
-	if h.has("iptables", "80") || h.fake.hook["iptables"] {
+	if h.has("iptables", "8080") || h.fake.hook["iptables"] {
 		t.Fatal("v4 left applied after v6 failed")
 	}
 	if _, err := m.Pending(context.Background()); !errors.Is(err, ErrNoPending) {

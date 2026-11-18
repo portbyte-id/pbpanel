@@ -131,6 +131,7 @@ func builtins(in RenderInput) []Builtin {
 		{"ICMP and ICMPv6", "Echo, unreachable, time exceeded, parameter problem and IPv6 neighbour discovery"},
 		{"SSH", "TCP " + strings.Join(ssh, ", ") + " from anywhere"},
 		{"Panel", "TCP " + strconv.Itoa(in.PanelPort) + " from anywhere"},
+		{"Web", "TCP 80 and TCP/UDP 443 from anywhere"},
 	}
 }
 
@@ -151,8 +152,12 @@ func (s *Service) input(ctx context.Context) (RenderInput, error) {
 	if err != nil {
 		return RenderInput{}, err
 	}
+	allow, err := s.Allowlist(ctx)
+	if err != nil {
+		return RenderInput{}, err
+	}
 	return RenderInput{
-		Rules: rules, Blocklist: block,
+		Rules: rules, Blocklist: block, Allowlist: allow,
 		SSHPorts:  DetectSSHPorts(ctx, s.cmd, s.root),
 		PanelPort: s.panelPort(),
 	}, nil
@@ -317,6 +322,47 @@ func (s *Service) AddBlock(ctx context.Context, e BlockEntry) (BlockEntry, error
 // DeleteBlock removes a blocklist entry.
 func (s *Service) DeleteBlock(ctx context.Context, id int64) error {
 	return s.deleteRow(ctx, `DELETE FROM fw_blocklist WHERE id = ?`, id)
+}
+
+// Allowlist lists the always-allowed addresses.
+func (s *Service) Allowlist(ctx context.Context) ([]AllowEntry, error) {
+	rows, err := s.st.DB().QueryContext(ctx, `SELECT id, addr, comment FROM fw_allowlist ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AllowEntry{}
+	for rows.Next() {
+		var e AllowEntry
+		if err := rows.Scan(&e.ID, &e.Addr, &e.Comment); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// AddAllow validates and stores an allow list entry.
+func (s *Service) AddAllow(ctx context.Context, e AllowEntry) (AllowEntry, error) {
+	if err := e.Validate(); err != nil {
+		return e, err
+	}
+	p, _ := ParsePrefix(e.Addr)
+	e.Addr = p.String()
+	res, err := s.st.DB().ExecContext(ctx, `INSERT INTO fw_allowlist (addr, comment) VALUES (?, ?)`, e.Addr, e.Comment)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return e, ErrDuplicate
+		}
+		return e, err
+	}
+	e.ID, err = res.LastInsertId()
+	return e, err
+}
+
+// DeleteAllow removes an allow list entry.
+func (s *Service) DeleteAllow(ctx context.Context, id int64) error {
+	return s.deleteRow(ctx, `DELETE FROM fw_allowlist WHERE id = ?`, id)
 }
 
 func (s *Service) deleteRow(ctx context.Context, q string, id int64) error {

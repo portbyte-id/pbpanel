@@ -23,6 +23,9 @@ type NginxImages interface {
 	Present(ctx context.Context) (bool, error)
 	Build(ctx context.Context, progress docker.Progress) (images.Build, error)
 	Activate(ctx context.Context, id string) (images.Build, error)
+	// Version is the nginx version that serves; SetVersion switches to another.
+	Version() string
+	SetVersion(ctx context.Context, version string, progress docker.Progress) (images.Build, error)
 }
 
 // extensionsRequest is the body of a PHP build: the extensions to compile in.
@@ -193,6 +196,7 @@ func (s *server) nginxImageRoutes(mux *http.ServeMux, h func(func(*NginxDeps, ht
 	mux.Handle("GET /api/nginx/image", h(s.handleGetNginxImage))
 	mux.Handle("POST /api/nginx/image/update", h(s.handleUpdateNginxImage))
 	mux.Handle("POST /api/nginx/image/builds/{id}/activate", h(s.handleActivateNginxBuild))
+	s.nginxContainerRoutes(mux, h)
 }
 
 // nginxImages resolves the nginx image manager, answering 503 when it is absent.
@@ -242,13 +246,17 @@ func (s *server) handleGetNginxImage(n *NginxDeps, w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, struct {
 		Base     string         `json:"base"`
 		Repo     string         `json:"repo"`
+		Version  string         `json:"version"`
+		Versions []string       `json:"versions"`
+		Stopped  bool           `json:"stopped"`
 		Present  bool           `json:"present"`
 		Busy     bool           `json:"busy"`
 		Current  *images.Build  `json:"current"`
 		Previous *images.Build  `json:"previous"`
 		Builds   []images.Build `json:"builds"`
 	}{
-		Base: nginx.BaseImage, Repo: nginx.Repo + ":" + nginx.Version, Present: present,
+		Base: nginx.BaseImageFor(imgs.Version()), Repo: nginx.Repo + ":" + imgs.Version(), Present: present,
+		Version: imgs.Version(), Versions: suggested(imgs.Version()), Stopped: n.Container != nil && n.Container.Stopped(ctx),
 		Busy: imgs.Idle() != nil, Current: current, Previous: previous, Builds: builds,
 	})
 }
@@ -317,4 +325,16 @@ func (s *server) handleActivateNginxBuild(n *NginxDeps, w http.ResponseWriter, r
 	writeJSON(w, http.StatusAccepted, struct {
 		Job jobs.Job `json:"job"`
 	}{job})
+}
+
+// suggested is the versions the page offers: the suggestions, plus the active one
+// when it is not among them (a version typed in earlier, or an older default).
+func suggested(active string) []string {
+	out := append([]string(nil), nginx.SuggestedVersions...)
+	for _, v := range out {
+		if v == active {
+			return out
+		}
+	}
+	return append(out, active)
 }

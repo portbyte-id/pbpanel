@@ -58,6 +58,7 @@ export const queryKeys = {
   firewallState: ["firewall", "state"] as const,
   firewallRules: ["firewall", "rules"] as const,
   firewallBlocklist: ["firewall", "blocklist"] as const,
+  firewallAllowlist: ["firewall", "allowlist"] as const,
   sitePool: (domain: string) => ["sites", domain, "pool"] as const,
   siteTLS: (domain: string) => ["sites", domain, "tls"] as const,
   tlsCerts: ["tls", "certs"] as const,
@@ -410,6 +411,16 @@ export function useUpdateNginxImage() {
   return useMutation({ mutationFn: () => api.updateNginxImage() })
 }
 
+export function useNginxContainerAction() {
+  return useMutation({
+    mutationFn: (action: "start" | "stop" | "restart") => api.nginxContainerAction(action),
+  })
+}
+
+export function useSetNginxVersion() {
+  return useMutation({ mutationFn: (version: string) => api.setNginxVersion(version) })
+}
+
 export function useActivateNginxImageBuild() {
   return useMutation({ mutationFn: (buildId: string) => api.activateNginxImageBuild(buildId) })
 }
@@ -478,6 +489,10 @@ export function useFirewallBlocklist() {
   return useQuery({ queryKey: queryKeys.firewallBlocklist, queryFn: () => api.firewallBlocklist() })
 }
 
+export function useFirewallAllowlist() {
+  return useQuery({ queryKey: queryKeys.firewallAllowlist, queryFn: () => api.firewallAllowlist() })
+}
+
 /** Rule and blocklist writes change `dirty`, so they refresh the status too. */
 function useFirewallInvalidate() {
   const client = useQueryClient()
@@ -519,6 +534,24 @@ export function useRemoveBlocklistEntry() {
   return useMutation({
     meta: { success: "Removed from the blocklist" },
     mutationFn: (id: string) => api.removeBlocklistEntry(id),
+    onSuccess: invalidate,
+  })
+}
+
+export function useAddAllowlistEntry() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    meta: { success: "Added to the allow list" },
+    mutationFn: (input: { addr: string; comment?: string }) => api.addAllowlistEntry(input),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRemoveAllowlistEntry() {
+  const invalidate = useFirewallInvalidate()
+  return useMutation({
+    meta: { success: "Removed from the allow list" },
+    mutationFn: (id: string) => api.removeAllowlistEntry(id),
     onSuccess: invalidate,
   })
 }
@@ -728,6 +761,18 @@ export function useUploadPanelCert() {
 
 export function useIssuePanelCert() {
   return useMutation({ mutationFn: (input: IssuePanelCertInput) => api.issuePanelCert(input) })
+}
+
+export function usePanelIP() {
+  return useQuery({
+    queryKey: [...queryKeys.panelCert, "ip"],
+    queryFn: () => api.panelIP(),
+    staleTime: 60_000,
+  })
+}
+
+export function useIssuePanelIPCert() {
+  return useMutation({ mutationFn: (input: { ip: string; email?: string }) => api.issuePanelIPCert(input) })
 }
 
 /* --- Dashboard, logs and cron (M7) -------------------------------------- */

@@ -183,6 +183,25 @@ func (h *tlsHarness) withPanel() *Listener {
 	return l
 }
 
+// tlsBlock is the text inside the TLS block of a site's file ("" when the site
+// file or the block is missing). A site keeps TLS there, not in a tls.conf.
+func (h *tlsHarness) tlsBlock(domain string) string {
+	var in []string
+	open := false
+	for _, l := range strings.Split(string(h.fs.files["/www/panel/nginx/sites/"+domain+".conf"]), "\n") {
+		switch tl := strings.TrimSpace(l); {
+		case !open && tl == "# >>> pb:tls":
+			open = true
+		case open && tl == "# <<< pb:tls":
+			return strings.Join(in, "\n")
+		case open:
+			in = append(in, l)
+		}
+	}
+	return ""
+}
+
+// tlsConf is the legacy include file, which a block site must never grow.
 func (h *tlsHarness) tlsConf(domain string) string {
 	return string(h.fs.files["/www/panel/nginx/includes/"+domain+"/tls.conf"])
 }
@@ -288,8 +307,8 @@ func TestUploadRejectsMismatchWithAMessage(t *testing.T) {
 	if _, err := h.cs.GetCert(context.Background(), "a.test"); !errors.Is(err, tlspkg.ErrNotFound) {
 		t.Errorf("a rejected upload left a row: %v", err)
 	}
-	if strings.Contains(h.tlsConf("a.test"), "ssl_certificate") {
-		t.Error("a rejected upload changed tls.conf")
+	if strings.Contains(h.tlsBlock("a.test"), "ssl_certificate") {
+		t.Error("a rejected upload changed the tls block")
 	}
 	if code, out := h.call(http.MethodPost, "/api/sites/a.test/tls/upload", map[string]any{"certificate": "", "private_key": k}); code != http.StatusBadRequest || out["field"] != "certificate" {
 		t.Errorf("empty certificate: %d %v", code, out)
@@ -317,8 +336,11 @@ func TestUploadStoresRendersAndWarns(t *testing.T) {
 	if cert["days_left"].(float64) >= 0 {
 		t.Errorf("days_left = %v for an expired certificate", cert["days_left"])
 	}
-	if !strings.Contains(h.tlsConf("a.test"), "ssl_certificate /www/panel/ssl/sites/a.test/fullchain.pem;") {
-		t.Errorf("tls.conf:\n%s", h.tlsConf("a.test"))
+	if !strings.Contains(h.tlsBlock("a.test"), "ssl_certificate /www/panel/ssl/sites/a.test/fullchain.pem;") {
+		t.Errorf("tls block:\n%s", h.tlsBlock("a.test"))
+	}
+	if h.tlsConf("a.test") != "" {
+		t.Error("a tls.conf was written for a site that keeps TLS in a block")
 	}
 	certFile, keyFile := tlspkg.SitePaths(h.root, "a.test")
 	for _, f := range []string{certFile, keyFile} {
@@ -398,11 +420,11 @@ func TestUploadRollsBackWhenNginxRejects(t *testing.T) {
 func TestUploadOnADetachedSiteIsRefusedAndRolledBack(t *testing.T) {
 	h := newTLSHarness(t)
 	h.mustCreate(map[string]any{"domain": "a.test", "kind": "static"})
-	// Detach: take the tls include line out of the site file.
+	// Detach: take the tls block's marker lines out of the site file.
 	site := h.fs.files["/www/panel/nginx/sites/a.test.conf"]
 	var kept []string
 	for _, l := range strings.Split(string(site), "\n") {
-		if !strings.Contains(l, "tls.conf") {
+		if tl := strings.TrimSpace(l); tl != "# >>> pb:tls" && tl != "# <<< pb:tls" {
 			kept = append(kept, l)
 		}
 	}
@@ -465,8 +487,8 @@ func TestIssueHTTP01RunsAsAJobAndRefreshesNginx(t *testing.T) {
 	if h.issuer.calls[0] != "http01 a.test " {
 		t.Errorf("issuer calls = %v", h.issuer.calls)
 	}
-	if !strings.Contains(h.tlsConf("a.test"), "listen 443 ssl") {
-		t.Errorf("nginx was not refreshed:\n%s", h.tlsConf("a.test"))
+	if !strings.Contains(h.tlsBlock("a.test"), "listen 443 ssl") {
+		t.Errorf("nginx was not refreshed:\n%s", h.tlsBlock("a.test"))
 	}
 	lines, err := h.deps.Jobs.Replay(context.Background(), done.ID, 0)
 	if err != nil || len(lines) < 3 {
@@ -577,15 +599,15 @@ func TestRedirectToggle(t *testing.T) {
 		t.Errorf("redirect without a certificate = %d, want 404", code)
 	}
 	h.upload("a.test", 1, "a.test")
-	if strings.Contains(h.tlsConf("a.test"), "return 301") {
+	if strings.Contains(h.tlsBlock("a.test"), "return 301") {
 		t.Fatal("redirect on by default")
 	}
 	code, out := h.call(http.MethodPut, "/api/sites/a.test/tls/redirect", map[string]any{"redirect_http": true})
 	if code != 200 || out["redirect_http"] != true || out["domain"] != "a.test" {
 		t.Fatalf("redirect on: %d %v", code, out)
 	}
-	if !strings.Contains(h.tlsConf("a.test"), "return 301 https://$host$request_uri;") {
-		t.Errorf("tls.conf:\n%s", h.tlsConf("a.test"))
+	if !strings.Contains(h.tlsBlock("a.test"), "return 301 https://$host$request_uri;") {
+		t.Errorf("tls.conf:\n%s", h.tlsBlock("a.test"))
 	}
 	if code, out := h.call(http.MethodPut, "/api/sites/a.test/tls/redirect", map[string]any{}); code != http.StatusBadRequest || out["field"] != "redirect_http" {
 		t.Errorf("missing field: %d %v", code, out)
@@ -603,7 +625,7 @@ func TestRedirectToggle(t *testing.T) {
 	if code, out := h.call(http.MethodPut, "/api/sites/a.test/tls/redirect", map[string]any{"redirect_http": false}); code != 200 || out["redirect_http"] != false {
 		t.Errorf("redirect off: %d %v", code, out)
 	}
-	if strings.Contains(h.tlsConf("a.test"), "return 301") {
+	if strings.Contains(h.tlsBlock("a.test"), "return 301") {
 		t.Error("redirect still rendered")
 	}
 }
@@ -633,8 +655,8 @@ func TestDeleteRevertsTheSiteToPlainHTTP(t *testing.T) {
 	if rec := h.do(http.MethodDelete, "/api/sites/a.test/tls", h.s.cookie, h.s.csrf, nil); rec.Code != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
 	}
-	if strings.Contains(h.tlsConf("a.test"), "ssl_certificate") || strings.Contains(h.tlsConf("a.test"), "listen") {
-		t.Errorf("tls.conf still has directives:\n%s", h.tlsConf("a.test"))
+	if strings.Contains(h.tlsBlock("a.test"), "ssl_certificate") || strings.Contains(h.tlsBlock("a.test"), "listen") {
+		t.Errorf("tls.conf still has directives:\n%s", h.tlsBlock("a.test"))
 	}
 	if _, err := h.cs.GetCert(context.Background(), "a.test"); !errors.Is(err, tlspkg.ErrNotFound) {
 		t.Errorf("row kept: %v", err)
@@ -905,8 +927,8 @@ func TestPanelCertIssueHTTP01WithASite(t *testing.T) {
 		t.Errorf("served serial = %d", got)
 	}
 	// The site shares the row, so it is HTTPS as well.
-	if !strings.Contains(h.tlsConf("panel.test"), "listen 443 ssl") {
-		t.Errorf("site tls.conf:\n%s", h.tlsConf("panel.test"))
+	if !strings.Contains(h.tlsBlock("panel.test"), "listen 443 ssl") {
+		t.Errorf("site tls.conf:\n%s", h.tlsBlock("panel.test"))
 	}
 	// Uploading a panel certificate keeps the row: the site still uses it.
 	c, k := goodCert(t, 5, "panel.test")
@@ -933,7 +955,7 @@ func TestApplyDispatchesToTheSiteAndTheListener(t *testing.T) {
 	if err := h.td.Apply(ctx, "a.test"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(h.tlsConf("a.test"), "listen 443 ssl") {
+	if !strings.Contains(h.tlsBlock("a.test"), "listen 443 ssl") {
 		t.Error("site not refreshed")
 	}
 	if dialSerialPort(t, l) != before {
@@ -966,7 +988,7 @@ func TestApplyDispatchesToTheSiteAndTheListener(t *testing.T) {
 	if err := h.td.Apply(ctx, "p2.test"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(h.tlsConf("p2.test"), "listen 443 ssl") {
+	if !strings.Contains(h.tlsBlock("p2.test"), "listen 443 ssl") {
 		t.Error("site not refreshed when it is also the panel's domain")
 	}
 

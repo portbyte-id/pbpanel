@@ -109,6 +109,7 @@ const (
 	poolFile83 = "/www/panel/php/8.3/pool.d/a_test.conf"
 	poolFile84 = "/www/panel/php/8.4/pool.d/a_test.conf"
 	phpInclude = "/www/panel/nginx/includes/a.test/php.conf"
+	siteConf   = "/www/panel/nginx/sites/a.test.conf"
 )
 
 func TestCreatePHPSite(t *testing.T) {
@@ -125,15 +126,18 @@ func TestCreatePHPSite(t *testing.T) {
 	}
 
 	siteFile, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
-	for _, want := range []string{"include " + phpInclude + ";", "root /www/services/sites/a.test;", "index index.php index.html index.htm;"} {
+	for _, want := range []string{"root /www/services/sites/a.test;", "index index.php index.html index.htm;"} {
 		if !strings.Contains(string(siteFile), want) {
 			t.Errorf("site file lacks %q:\n%s", want, siteFile)
 		}
 	}
-	inc, _ := r.fs.ReadFile(phpInclude)
-	if !strings.Contains(string(inc), "fastcgi_pass unix:/www/panel/run/php-8.3-a_test.sock;") ||
-		!strings.Contains(string(inc), "try_files $uri =404;") {
-		t.Errorf("php.conf:\n%s", inc)
+	if strings.Contains(string(siteFile), "include "+phpInclude) || r.fs.has(phpInclude) {
+		t.Error("the PHP part is a block of the site file now, not an include")
+	}
+	inc := blockOf(t, string(siteFile), "php")
+	if !strings.Contains(inc, "fastcgi_pass unix:/www/panel/run/php-8.3-a_test.sock;") ||
+		!strings.Contains(inc, "try_files $uri =404;") {
+		t.Errorf("php block:\n%s", inc)
 	}
 	pool, _ := r.fs.ReadFile(poolFile83)
 	if !strings.Contains(string(pool), "[a_test]") || !strings.Contains(string(pool), "chdir = /www/services/sites/a.test") {
@@ -320,7 +324,7 @@ func TestSwitchPHP(t *testing.T) {
 	if strings.Join(deleted, " ") != poolFile83 {
 		t.Errorf("deleted = %v", deleted)
 	}
-	for _, want := range []string{poolFile84, phpInclude} {
+	for _, want := range []string{poolFile84, siteConf} {
 		if !strings.Contains(strings.Join(written, " "), want) {
 			t.Errorf("written = %v, lacks %s", written, want)
 		}
@@ -328,9 +332,12 @@ func TestSwitchPHP(t *testing.T) {
 	if r.fs.has(poolFile83) || !r.fs.has(poolFile84) {
 		t.Error("the pool did not move to the new version")
 	}
-	inc, _ := r.fs.ReadFile(phpInclude)
-	if !strings.Contains(string(inc), "unix:/www/panel/run/php-8.4-a_test.sock;") {
-		t.Errorf("php.conf:\n%s", inc)
+	if strings.Contains(strings.Join(written, " "), phpInclude) {
+		t.Errorf("written = %v: a block site must not get a php.conf", written)
+	}
+	site, _ := r.fs.ReadFile(siteConf)
+	if inc := blockOf(t, string(site), "php"); !strings.Contains(inc, "unix:/www/panel/run/php-8.4-a_test.sock;") || strings.Contains(inc, "php-8.3") {
+		t.Errorf("php block:\n%s", inc)
 	}
 	// The pool's settings travel with the site.
 	if b, _ := r.fs.ReadFile(poolFile84); !strings.Contains(string(b), "pm.max_children = 9") {
@@ -345,7 +352,7 @@ func TestSwitchPHP(t *testing.T) {
 func TestFailedSwitchKeepsTheOldVersion(t *testing.T) {
 	r := newPHPRig(t)
 	r.create(t, "a.test", "8.3")
-	before, _ := r.fs.ReadFile(phpInclude)
+	before, _ := r.fs.ReadFile(siteConf)
 
 	r.ap.err = &confedit.ApplyError{Stage: confedit.StageValidate, Service: "php-8.4", Output: "bad", Err: errors.New("rejected")}
 	_, err := r.m.SwitchPHP(ctx, "a.test", "8.4")
@@ -356,7 +363,7 @@ func TestFailedSwitchKeepsTheOldVersion(t *testing.T) {
 	if got, _ := r.m.Get(ctx, "a.test"); *got.PHPVersion != "8.3" {
 		t.Errorf("stored version = %s after a failed switch, want 8.3", *got.PHPVersion)
 	}
-	after, _ := r.fs.ReadFile(phpInclude)
+	after, _ := r.fs.ReadFile(siteConf)
 	if string(after) != string(before) || !r.fs.has(poolFile83) || r.fs.has(poolFile84) {
 		t.Error("files changed although the switch failed")
 	}
@@ -373,9 +380,10 @@ func TestSwitchPHPRejections(t *testing.T) {
 		}
 	}
 
-	// With the include line gone the control is detached, not silently written.
+	// With the block's markers gone the control is detached, not silently written.
 	file, _ := r.m.ReadFile(ctx, "a.test")
-	edited := strings.Replace(file.Content, "include "+phpInclude+";", "", 1)
+	edited := strings.Replace(file.Content, "# >>> pb:php", "", 1)
+	edited = strings.Replace(edited, "# <<< pb:php", "", 1)
 	if _, err := r.m.WriteFile(ctx, "a.test", []byte(edited)); err != nil {
 		t.Fatal(err)
 	}

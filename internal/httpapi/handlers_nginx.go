@@ -52,6 +52,9 @@ type NginxDeps struct {
 	PHPReconcile func() []sites.PHPStep
 	// Images carries the nginx image builds. Nil answers the image routes 503.
 	Images NginxImages
+	// Container starts, stops and restarts the nginx container. Nil answers the
+	// container routes 503.
+	Container NginxContainer
 }
 
 // nginxRoutes registers the routes of development plan step 1.10. They are

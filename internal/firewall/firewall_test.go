@@ -133,6 +133,10 @@ func sampleInput() RenderInput {
 			{ID: 5, PortStart: 25, PortEnd: 25, Protocol: ProtoTCP, Enabled: false},
 			{ID: 6, PortStart: 22, PortEnd: 22, Protocol: ProtoTCP, Enabled: true, Source: "192.0.2.7"},
 		},
+		Allowlist: []AllowEntry{
+			{ID: 1, Addr: "198.51.100.9", Comment: "office"},
+			{ID: 2, Addr: "2001:db8:600d::/48"},
+		},
 		Blocklist: []BlockEntry{
 			{ID: 1, Addr: "203.0.113.0/24", Comment: "scanner"},
 			{ID: 2, Addr: "2001:db8:bad::/48"},

@@ -40,6 +40,13 @@ type BlockEntry struct {
 	Comment string `json:"comment,omitempty"`
 }
 
+// AllowEntry accepts all traffic from one address or CIDR, ahead of the blocklist.
+type AllowEntry struct {
+	ID      int64  `json:"id"`
+	Addr    string `json:"addr"`
+	Comment string `json:"comment,omitempty"`
+}
+
 // Validation errors. Callers match with errors.Is.
 var (
 	ErrPort     = errors.New("firewall: port must be between 1 and 65535")
@@ -80,6 +87,11 @@ func (b BlockEntry) Validate() error {
 		return err
 	}
 	return validateComment(b.Comment)
+}
+
+// Validate checks an allow list entry.
+func (a AllowEntry) Validate() error {
+	return BlockEntry{Addr: a.Addr, Comment: a.Comment}.Validate()
 }
 
 // ParsePrefix accepts a CIDR or a bare address and returns the masked prefix. A bare
