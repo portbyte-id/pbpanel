@@ -18,8 +18,20 @@ import (
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
+	"github.com/portbyte-id/server-panel/internal/waf"
 	"github.com/portbyte-id/server-panel/internal/webroots"
 )
+
+// wafAvailability says whether the nginx version that serves can run ModSecurity.
+func wafAvailability(version string) waf.Availability {
+	if nginx.IsPQC(version) {
+		return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+	}
+	return waf.Availability{
+		Flavor: "standard",
+		Reason: "ModSecurity is bundled only with the post-quantum nginx flavor; build it on the Nginx page and switch to it",
+	}
+}
 
 // nginxStack is everything the nginx and sites features run on. The HTTP routes
 // of step 1.10 take it from here.
@@ -73,7 +85,22 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := sites.New(sites.Options{Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState})
+	// The firewall's ModSecurity runs only on the post-quantum flavor, which is
+	// the one build that has the module and the Core Rule Set.
+	wafEngine := waf.New(st, paths, func(ctx context.Context) (waf.Availability, error) {
+		return wafAvailability(imgs.Version()), nil
+	})
+	mgr, err := sites.New(sites.Options{
+		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
+		WAF: wafEngine,
+		Settings: func(ctx context.Context) ([]confedit.File, error) {
+			s, err := global.Settings(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return global.SettingsFiles(s)
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -80,6 +80,9 @@ func (s *server) nginxRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/sites/{domain}/file", h(s.handleGetSiteFile))
 	mux.Handle("PUT /api/sites/{domain}/file", h(s.handlePutSiteFile))
 	mux.Handle("POST /api/sites/{domain}/regenerate", h(s.handleRegenerateSite))
+	mux.Handle("GET /api/sites/{domain}/waf", h(s.handleGetSiteWAF))
+	mux.Handle("PUT /api/sites/{domain}/waf", h(s.handlePutSiteWAF))
+	mux.Handle("GET /api/waf/status", h(s.handleWAFStatus))
 
 	mux.Handle("GET /api/nginx/settings", h(s.handleGetNginxSettings))
 	mux.Handle("PUT /api/nginx/settings", h(s.handlePutNginxSettings))
@@ -142,6 +145,8 @@ func (s *server) writeNginxError(w http.ResponseWriter, r *http.Request, err err
 		writeJSON(w, http.StatusUnprocessableEntity, errorEnvelope{Error: errInvalidInput, Detail: invalid.Error(), Field: invalid.Field})
 	case errors.As(err, &setting):
 		writeJSON(w, http.StatusUnprocessableEntity, errorEnvelope{Error: errInvalidInput, Detail: setting.Field + ": " + setting.Msg, Field: setting.Field})
+	case errors.Is(err, sites.ErrNoWAF):
+		writeError(w, http.StatusServiceUnavailable, errUnavailable, "the firewall is not available on this host; see the daemon log")
 	case errors.Is(err, sites.ErrNotFound):
 		writeError(w, http.StatusNotFound, errNotFound, "no such site")
 	case errors.Is(err, confedit.ErrNoVersion):

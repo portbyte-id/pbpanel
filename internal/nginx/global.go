@@ -70,11 +70,11 @@ func (g *Global) saveSettings(ctx context.Context, s HTTPSettings) error {
 
 // SettingsFiles renders the two include files the settings own.
 func (g *Global) SettingsFiles(s HTTPSettings) ([]confedit.File, error) {
-	main, err := RenderMainInclude(s)
+	main, err := g.p.RenderMainInclude(s)
 	if err != nil {
 		return nil, err
 	}
-	http, err := RenderHTTPInclude(s)
+	http, err := g.p.RenderHTTPInclude(s)
 	if err != nil {
 		return nil, err
 	}

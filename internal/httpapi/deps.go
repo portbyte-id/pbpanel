@@ -72,6 +72,10 @@ type Deps struct {
 	// Cron is the job scheduler. Nil leaves /api/cron answering 503.
 	Cron CronService
 
+	// WAFMon is the traffic monitor and WAF event reader. Nil leaves
+	// /api/waf/traffic, /requests and /events answering 503.
+	WAFMon WAFMonitor
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

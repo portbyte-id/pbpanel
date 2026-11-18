@@ -16,6 +16,7 @@ import { runtimesRoute } from "@/routes/_app/runtimes"
 import { servicesRoute } from "@/routes/_app/services"
 import { settingsRoute } from "@/routes/_app/settings"
 import { tlsRoute } from "@/routes/_app/tls"
+import { trafficRoute } from "@/routes/_app/traffic"
 import { siteRoute } from "@/routes/_app/site"
 import { sitesRoute } from "@/routes/_app/sites"
 import { loginRoute } from "@/routes/login"
@@ -37,6 +38,7 @@ const routeTree = rootRoute.addChildren([
     siteRoute,
     filesRoute,
     firewallRoute,
+    trafficRoute,
     logsRoute,
     cronRoute,
     nginxRoute,

@@ -223,6 +223,12 @@ func (r *Reconciler) desired(ctx context.Context) ([]confedit.File, error) {
 	}
 	files = append(files, sf...)
 
+	shared, err := r.Sites.WAFSharedFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, shared...)
+
 	sites, err := r.Sites.List(ctx)
 	if err != nil {
 		return nil, err

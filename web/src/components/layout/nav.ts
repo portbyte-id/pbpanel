@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  Activity,
   AppWindow,
   CalendarClock,
   Cpu,
@@ -79,7 +80,8 @@ export const navGroups: NavGroup[] = [
     items: [
       { label: "Firewall", icon: ShieldCheck, path: "/firewall", description: "Open ports and rules", keywords: "iptables ports" },
       { label: "Cron", icon: CalendarClock, path: "/cron", description: "Scheduled jobs and their run history", keywords: "schedule" },
-      { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files", keywords: "tail" },
+      { label: "Traffic", icon: Activity, path: "/traffic", description: "Live requests, errors and firewall events", keywords: "waf requests monitor modsecurity" },
+      { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files, and the WAF audit", keywords: "tail waf audit modsecurity" },
       { label: "Apps", icon: AppWindow, path: "/apps", description: "Node and custom apps run by the panel", keywords: "node process" },
       { label: "Runtimes", icon: Cpu, path: "/runtimes", description: "Installed language runtimes and images", keywords: "docker image php node" },
     ],

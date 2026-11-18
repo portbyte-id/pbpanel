@@ -63,6 +63,41 @@ func (p Paths) AccessLog(domain string) string {
 }
 func (p Paths) ErrorLog(domain string) string { return path.Join(p.SiteLogDir(), domain+".error.log") }
 
+// WAFDir holds what the firewall renders: http-context files, the module loader
+// and one ModSecurity rules file per site. It sits inside Dir, so the container
+// reads it through the same read-only mount as the rest of the configuration.
+func (p Paths) WAFDir() string { return path.Join(p.Dir(), "waf") }
+
+// WAFMainDir holds main-context files (the module loader). panel-main.conf
+// includes every file in it.
+func (p Paths) WAFMainDir() string { return path.Join(p.WAFDir(), "main") }
+
+// WAFHTTPDir holds one http-context file per site: rate-limit zones and the
+// address and path maps. panel-http.conf includes every file in it.
+func (p Paths) WAFHTTPDir() string { return path.Join(p.WAFDir(), "http") }
+
+// WAFRulesDir holds one ModSecurity rules file per site.
+func (p Paths) WAFRulesDir() string { return path.Join(p.WAFDir(), "rules") }
+
+// WAFHTTPFile is a site's http-context firewall file.
+func (p Paths) WAFHTTPFile(domain string) string {
+	return path.Join(p.WAFHTTPDir(), domain+".conf")
+}
+
+// WAFRulesFile is a site's ModSecurity rules file.
+func (p Paths) WAFRulesFile(domain string) string {
+	return path.Join(p.WAFRulesDir(), domain+".conf")
+}
+
+// WAFAuditLog is where ModSecurity writes a site's audit events, in the writable
+// site log directory.
+func (p Paths) WAFAuditLog(domain string) string {
+	return path.Join(p.SiteLogDir(), domain+".waf-audit.log")
+}
+
+// WAFModuleFile is the main-context file that loads the ModSecurity module.
+func (p Paths) WAFModuleFile() string { return path.Join(p.WAFMainDir(), "modsecurity.conf") }
+
 // RunDir holds the PHP-FPM sockets, shared with the PHP containers.
 func (p Paths) RunDir() string { return path.Join(p.Root, "panel", "run") }
 
