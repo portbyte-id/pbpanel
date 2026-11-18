@@ -90,6 +90,9 @@ func Dockerfile() []byte { return DockerfileFor(Version) }
 
 // DockerfileFor is the derived image for one nginx version.
 func DockerfileFor(version string) []byte {
+	if IsPQC(version) {
+		return pqcDockerfile(Series(version))
+	}
 	return fmt.Appendf(nil,
 		"FROM %s\nRUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
 		BaseImageFor(version), WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)

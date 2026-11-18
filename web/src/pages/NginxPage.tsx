@@ -231,7 +231,9 @@ export function ImageCard() {
                 >
                   {data.versions.map((v) => (
                     <option key={v} value={v}>
-                      {v}
+                      {v.startsWith("pqc-")
+                        ? `${v.slice(4)} post-quantum (OpenSSL 3.5, Alpine, built on this host)`
+                        : `${v} official`}
                       {v === data.version ? " (running)" : ""}
                     </option>
                   ))}

@@ -16,20 +16,27 @@ import (
 // SuggestedVersions are the official nginx tags the Nginx page offers, newest
 // first. Any MAJOR.MINOR tag Docker Hub has works; a tag that does not exist fails
 // at the pull, before anything running is touched.
-var SuggestedVersions = []string{"1.30", "1.29", "1.28"}
+var SuggestedVersions = []string{"1.30", "1.29", "1.28", "pqc-1.30", "pqc-1.29"}
 
-var versionPattern = regexp.MustCompile(`^[1-9][0-9]?\.[0-9]{1,2}$`)
+var versionPattern = regexp.MustCompile(`^(pqc-)?[1-9][0-9]?\.[0-9]{1,2}$`)
 
-// CheckVersion reports whether v is a tag the panel will build from.
+// CheckVersion reports whether v is a tag the panel will build from. A "pqc-"
+// prefix selects the post-quantum flavor built on Alpine.
 func CheckVersion(v string) error {
 	if !versionPattern.MatchString(v) {
-		return fmt.Errorf("nginx: version %q must look like 1.29", v)
+		return fmt.Errorf("nginx: version %q must look like 1.29 or pqc-1.30", v)
 	}
 	return nil
 }
 
-// BaseImageFor is the official image a version is built on.
-func BaseImageFor(version string) string { return "nginx:" + version }
+// BaseImageFor is the image a version is built on: the official one, or Alpine
+// for the post-quantum flavor.
+func BaseImageFor(version string) string {
+	if IsPQC(version) {
+		return pqcBase
+	}
+	return "nginx:" + version
+}
 
 // ErrSameVersion is a switch to the version that already serves.
 var ErrSameVersion = errors.New("nginx: that version already serves")
