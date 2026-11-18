@@ -84,7 +84,8 @@ describe("SiteTLS", () => {
     renderTab(detail())
     expect(await screen.findByText(/served over plain HTTP only/)).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Renew now" })).not.toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: /Get a certificate from Let's Encrypt/ })).toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Create with ACME" }))
+    expect(screen.getByRole("heading", { name: /Create a certificate with ACME/ })).toBeInTheDocument()
   })
 
   it("shows issuer, names, source and the days left in the warning tone", async () => {
@@ -196,7 +197,8 @@ describe("SiteTLS", () => {
     })
     renderTab(detail())
 
-    await user.click(await screen.findByLabelText("Certificate"))
+    await user.click(await screen.findByRole("tab", { name: "Own certificate" }))
+    await user.click(screen.getByLabelText("Certificate"))
     await user.paste(CERT)
     await user.click(screen.getByLabelText("Private key"))
     await user.paste(KEY)
@@ -214,6 +216,7 @@ describe("SiteTLS", () => {
   it("offers the site's domain and aliases as the default names", async () => {
     vi.mocked(api.siteTLS).mockResolvedValue(null)
     renderTab(detail())
+    await userEvent.setup().click(await screen.findByRole("tab", { name: "Create with ACME" }))
     expect(await screen.findByLabelText("Names on the certificate")).toHaveValue(
       "a.test www.a.test",
     )
@@ -226,17 +229,20 @@ describe("SiteTLS when the tls include is detached", () => {
     renderTab(detail(false))
 
     expect(await screen.findByText(/Switched off: the site file no longer includes/)).toBeInTheDocument()
-    for (const name of [
-      "Renew now",
-      "Remove certificate",
-      "Request certificate",
-      "Upload certificate",
-    ]) {
+    for (const name of ["Renew now", "Remove certificate"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled()
     }
     expect(screen.getByRole("checkbox", { name: "Redirect HTTP to HTTPS" })).toBeDisabled()
-    expect(screen.getByLabelText("Private key")).toBeDisabled()
+
+    // Each tab stays reachable, and its own controls are disabled.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("tab", { name: "Create with ACME" }))
+    expect(screen.getByRole("button", { name: "Request certificate" })).toBeDisabled()
     expect(screen.getByLabelText("Names on the certificate")).toBeDisabled()
+
+    await user.click(screen.getByRole("tab", { name: "Own certificate" }))
+    expect(screen.getByRole("button", { name: "Upload certificate" })).toBeDisabled()
+    expect(screen.getByLabelText("Private key")).toBeDisabled()
   })
 
   it("leaves the controls on when the feature is attached", async () => {

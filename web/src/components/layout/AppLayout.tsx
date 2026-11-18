@@ -76,6 +76,11 @@ export function AppLayout() {
         <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 outline-none">
           {current && <p className="text-muted-foreground mb-3 text-sm md:hidden">{current.description}</p>}
           <Outlet />
+          {/* Spaced from the content above, so the page's last control is never pressed against the edge. */}
+          <footer className="border-border text-muted-foreground mt-12 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t pt-4 pb-2 text-xs">
+            <span>Server Panel</span>
+            <span>{new Date().getFullYear()}</span>
+          </footer>
         </main>
       </div>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

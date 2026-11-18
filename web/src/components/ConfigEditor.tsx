@@ -1,41 +1,17 @@
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
-import {
-  bracketMatching,
-  defaultHighlightStyle,
-  StreamLanguage,
-  syntaxHighlighting,
-} from "@codemirror/language"
+import { history } from "@codemirror/commands"
+import { bracketMatching, StreamLanguage } from "@codemirror/language"
 import { nginx } from "@codemirror/legacy-modes/mode/nginx"
 import { properties } from "@codemirror/legacy-modes/mode/properties"
 import { unifiedMergeView } from "@codemirror/merge"
 import { Compartment, EditorState } from "@codemirror/state"
-import { EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view"
+import { EditorView, highlightActiveLine, lineNumbers } from "@codemirror/view"
 import { useEffect, useRef } from "react"
 
-/**
- * The editor's look, taken from the app's tokens so it follows light and dark
- * with the rest of the page instead of bringing a theme of its own.
- */
-const theme = EditorView.theme({
-  "&": {
-    color: "var(--foreground)",
-    backgroundColor: "var(--background)",
-    fontSize: "13px",
-  },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-    lineHeight: "1.55",
-    minHeight: "18rem",
-    maxHeight: "60vh",
-  },
-  ".cm-gutters": {
-    backgroundColor: "var(--muted)",
-    color: "var(--muted-foreground)",
-    border: "none",
-  },
-  ".cm-activeLine": { backgroundColor: "color-mix(in oklch, var(--muted) 60%, transparent)" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--foreground)" },
+import { codeHighlight, codeTheme, editorKeymap } from "@/components/code/codemirror"
+
+/** A config file is read top to bottom, so the box keeps a readable height and scrolls inside. */
+const sizing = EditorView.theme({
+  ".cm-scroller": { minHeight: "18rem", maxHeight: "60vh" },
 })
 
 /**
@@ -81,10 +57,11 @@ export function ConfigEditor({
           bracketMatching(),
           highlightActiveLine(),
           StreamLanguage.define(language === "ini" ? properties : nginx),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          codeHighlight,
+          editorKeymap,
           EditorView.contentAttributes.of({ "aria-label": label }),
-          theme,
+          codeTheme,
+          sizing,
           diff.current.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) handler.current(update.state.doc.toString())
