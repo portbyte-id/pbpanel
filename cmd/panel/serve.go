@@ -14,9 +14,11 @@ import (
 	"github.com/portbyte-id/server-panel/internal/auth"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
+	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
+	"github.com/portbyte-id/server-panel/internal/wafmon"
 	"github.com/portbyte-id/server-panel/internal/webui"
 	"github.com/portbyte-id/server-panel/web"
 )
@@ -145,6 +147,14 @@ func serve(ctx context.Context, _ []string) error {
 	}
 	m7 := newM7(st, reg, layout, appsSvc, siteList, logger)
 
+	// Traffic and WAF events come from the logs nginx writes; the collector only
+	// reads them, so it runs whether or not nginx is up.
+	wafCollector := wafmon.New(wafmon.Options{
+		Dir:    filepath.FromSlash(nginx.Paths{Root: filepath.ToSlash(layout.Root)}.SiteLogDir()),
+		Logger: logger,
+	})
+	go wafCollector.Run(ctx)
+
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
 	var listener *httpapi.Listener
@@ -172,6 +182,7 @@ func serve(ctx context.Context, _ []string) error {
 		Sysinfo:  m7.Sysinfo,
 		Logs:     m7.Logs,
 		Cron:     m7.Cron,
+		WAFMon:   wafCollector,
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {

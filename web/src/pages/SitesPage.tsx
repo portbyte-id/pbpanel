@@ -38,7 +38,11 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
   )
   // `?proxy=<url>` comes from an app's "Proxy site" button: the dialog opens on
   // "Another server" with the app's address filled in.
-  const { proxy } = useSearch({ strict: false }) as { proxy?: string }
+  const { proxy, waf_rule, waf_path } = useSearch({ strict: false }) as {
+    proxy?: string
+    waf_rule?: number
+    waf_path?: string
+  }
   const [creating, setCreating] = useState(proxy !== undefined)
   const [filter, setFilter] = useState("")
   const navigate = useNavigate()
@@ -186,6 +190,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
         <SiteDetailDialog
           key={openDomain}
           domain={openDomain}
+          wafPrefill={waf_rule === undefined ? undefined : { rule: waf_rule, path: waf_path }}
           onClose={() => void navigate({ to: "/sites" })}
         />
       )}

@@ -16,6 +16,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/store"
+	"github.com/portbyte-id/server-panel/internal/waf"
 )
 
 // Errors a caller maps to a status.
@@ -125,6 +126,13 @@ type Options struct {
 	// FS defaults to the real filesystem.
 	FS  FS
 	Now func() time.Time
+	// WAF is the per-site firewall. Nil leaves every site's firewall block empty
+	// and the firewall routes answering 503.
+	WAF *waf.Engine
+	// Settings renders panel-main.conf and panel-http.conf. The first firewall
+	// change on a host that predates the firewall uses it to bring them current,
+	// because they carry the include lines that read the firewall's files.
+	Settings func(ctx context.Context) ([]confedit.File, error)
 }
 
 // Manager owns the sites model. It is safe for concurrent use; changes run one
@@ -138,6 +146,9 @@ type Manager struct {
 	tls TLSState
 	fs  FS
 	now func() time.Time
+	waf *waf.Engine
+	// settings is Options.Settings.
+	settings func(ctx context.Context) ([]confedit.File, error)
 
 	mu sync.Mutex
 }
@@ -147,7 +158,7 @@ func New(o Options) (*Manager, error) {
 	if o.Store == nil || o.Applier == nil || o.Service == nil {
 		return nil, errors.New("sites: store, applier and service are required")
 	}
-	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, tls: o.TLS, fs: o.FS, now: o.Now}
+	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, tls: o.TLS, fs: o.FS, now: o.Now, waf: o.WAF, settings: o.Settings}
 	if m.fs == nil {
 		m.fs = OSFS{}
 	}
@@ -406,6 +417,11 @@ func (m *Manager) siteFile(ctx context.Context, s Site) (confedit.File, error) {
 		body []byte
 	}
 	parts := []part{{nginx.BlockListen, listen}, {nginx.BlockNames, names}, {nginx.BlockACME, acme}, {nginx.BlockTLS, tls}}
+	if rendered, ok, err := m.wafSiteFiles(ctx, s.Domain); err != nil {
+		return confedit.File{}, err
+	} else if ok {
+		parts = append(parts, part{nginx.BlockWAF, rendered.Block})
+	}
 	if s.Kind == KindPHP {
 		phpBody, err := m.renderPHPInclude(s)
 		if err != nil {
@@ -432,7 +448,13 @@ func (m *Manager) allFiles(ctx context.Context, s Site) ([]confedit.File, error)
 	if err != nil {
 		return nil, err
 	}
-	return append(files, sf), nil
+	files = append(files, sf)
+	if rendered, ok, err := m.wafSiteFiles(ctx, s.Domain); err != nil {
+		return nil, err
+	} else if ok {
+		files = append(files, rendered.Files...)
+	}
+	return files, nil
 }
 
 // DeleteResult says what Delete left behind.
@@ -456,6 +478,15 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 	files := []confedit.File{{Path: m.p.SiteFile(s.Domain), Delete: true}}
 	for _, name := range []string{nginx.IncludeListen, nginx.IncludeNames, nginx.IncludeACME, nginx.IncludeProxy, nginx.IncludePHP} {
 		files = append(files, confedit.File{Path: m.p.SiteInclude(s.Domain, name), Delete: true})
+	}
+	if m.waf != nil {
+		files = append(files, m.waf.RemovedFiles(s.Domain)...)
+		// The module loader goes too when this was the last site that needed it.
+		shared, err := m.waf.SharedFiles(ctx, s.Domain)
+		if err != nil {
+			return DeleteResult{}, err
+		}
+		files = append(files, shared...)
 	}
 	services := []confedit.Service{m.svc}
 	if s.Kind == KindPHP && m.php != nil && s.PHPVersion != nil && s.PHPPool != "" {
@@ -644,6 +675,9 @@ func (m *Manager) deleteRow(ctx context.Context, domain string) error {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM php_pools WHERE domain = ?`, domain); err != nil {
+			return err
+		}
+		if err := waf.DeleteTx(ctx, tx, domain); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM sites WHERE domain = ?`, domain)

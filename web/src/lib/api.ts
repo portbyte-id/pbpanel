@@ -14,6 +14,19 @@
 import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
 import type { LogSource } from "@/lib/logs"
 import type { ServiceAction, ServiceRow, SysinfoResponse } from "@/lib/sysinfo"
+import {
+  queryString,
+  type TrafficRange,
+  type TrafficRequestQuery,
+  type TrafficRequests,
+  type TrafficSummary,
+  type WafConfig,
+  type WafEventQuery,
+  type WafEvents,
+  type WafEventSummary,
+  type WafOverview,
+  type WafSiteResponse,
+} from "@/lib/waf"
 
 /** The server's only error shape: a stable class plus a sentence for the operator. */
 export interface ErrorEnvelope {
@@ -783,6 +796,38 @@ export class ApiClient {
     return this.request<ApplyResponse>(`/api/sites/${d}/regenerate?confirm=${d}`, {
       method: "POST",
     })
+  }
+
+  async siteWaf(domain: string): Promise<WafSiteResponse> {
+    return this.request<WafSiteResponse>(`/api/sites/${encodeURIComponent(domain)}/waf`)
+  }
+
+  /** PUT /api/sites/{domain}/waf. The whole config is replaced and `nginx -t` runs first. */
+  async saveSiteWaf(domain: string, config: WafConfig): Promise<WafSiteResponse> {
+    return this.request<WafSiteResponse>(`/api/sites/${encodeURIComponent(domain)}/waf`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    })
+  }
+
+  async wafOverview(): Promise<WafOverview> {
+    return this.request<WafOverview>("/api/waf/status")
+  }
+
+  async wafTraffic(site: string, range: TrafficRange): Promise<TrafficSummary> {
+    return this.request<TrafficSummary>(`/api/waf/traffic${queryString({ site, range })}`)
+  }
+
+  async wafRequests(query: TrafficRequestQuery): Promise<TrafficRequests> {
+    return this.request<TrafficRequests>(`/api/waf/requests${queryString({ ...query })}`)
+  }
+
+  async wafEvents(query: WafEventQuery): Promise<WafEvents> {
+    return this.request<WafEvents>(`/api/waf/events${queryString({ ...query })}`)
+  }
+
+  async wafEventSummary(site: string, range: TrafficRange): Promise<WafEventSummary> {
+    return this.request<WafEventSummary>(`/api/waf/events/summary${queryString({ site, range })}`)
   }
 
   /** GET /api/sites/{domain}/tls. Null while the site has no certificate. */

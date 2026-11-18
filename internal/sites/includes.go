@@ -22,6 +22,10 @@ const (
 	FeatureTLS    Feature = "tls"
 	FeatureProxy  Feature = "proxy"
 	FeaturePHP    Feature = "php"
+	// FeatureWAF is not in featuresOf: a site that predates the firewall block
+	// is not broken, it has not been asked for one yet. The firewall routes
+	// report the block's presence themselves.
+	FeatureWAF Feature = "waf"
 )
 
 // featureBlock names the marked block a feature lives in inside the site file.
@@ -32,6 +36,7 @@ var featureBlock = map[Feature]string{
 	FeatureACME:   nginx.BlockACME,
 	FeatureTLS:    nginx.BlockTLS,
 	FeaturePHP:    nginx.BlockPHP,
+	FeatureWAF:    nginx.BlockWAF,
 }
 
 // featureFile is the include file a feature used before blocks, and the proxy's.
@@ -323,6 +328,11 @@ func (p *sitePatch) set(f Feature, body []byte) {
 			return
 		}
 	}
+	if f == FeatureWAF {
+		// The firewall never had an include file: a site file without its block
+		// simply has no firewall yet.
+		return
+	}
 	inc := p.m.p.SiteInclude(p.s.Domain, featureFile[f])
 	// A block feature whose markers and include line are both gone is detached:
 	// writing its include file would leave a file nothing reads.
@@ -370,6 +380,15 @@ func (m *Manager) managedFiles(ctx context.Context, s Site) ([]confedit.File, er
 	patch.set(FeatureNames, names)
 	patch.set(FeatureACME, acme)
 	patch.set(FeatureTLS, tls)
+	files := []confedit.File(nil)
+	if rendered, ok, err := m.wafSiteFiles(ctx, s.Domain); err != nil {
+		return nil, err
+	} else if ok {
+		// Only a site file that already has the block is touched here; one that
+		// predates it gets the block when the firewall is first switched on.
+		patch.set(FeatureWAF, rendered.Block)
+		files = rendered.Files
+	}
 	switch s.Kind {
 	case KindProxy:
 		proxy, err := nginx.RenderProxy(s.ProxyTarget)
@@ -384,5 +403,5 @@ func (m *Manager) managedFiles(ctx context.Context, s Site) ([]confedit.File, er
 		}
 		patch.set(FeaturePHP, body)
 	}
-	return patch.files(), nil
+	return append(patch.files(), files...), nil
 }

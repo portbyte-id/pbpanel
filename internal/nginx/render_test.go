@@ -49,9 +49,9 @@ func TestGoldenFiles(t *testing.T) {
 
 	b, err := testPaths.RenderMainConf()
 	golden(t, "nginx.conf", mustRender(t, b, err))
-	b, err = RenderMainInclude(DefaultHTTPSettings())
+	b, err = testPaths.RenderMainInclude(DefaultHTTPSettings())
 	golden(t, "panel-main.conf", mustRender(t, b, err))
-	b, err = RenderHTTPInclude(DefaultHTTPSettings())
+	b, err = testPaths.RenderHTTPInclude(DefaultHTTPSettings())
 	golden(t, "panel-http.conf", mustRender(t, b, err))
 	b, err = testPaths.RenderSiteFile(static)
 	golden(t, "site-static.conf", mustRender(t, b, err))
@@ -95,11 +95,11 @@ func TestSettingsRenderEveryField(t *testing.T) {
 		WorkerProcesses: "4", ClientMaxBodySize: "0", Gzip: false,
 		KeepaliveTimeout: 10, ClientBodyTimeout: 11, ClientHeaderTimeout: 12, SendTimeout: 13, ServerTokens: true,
 	}
-	main, err := RenderMainInclude(s)
+	main, err := testPaths.RenderMainInclude(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	http, err := RenderHTTPInclude(s)
+	http, err := testPaths.RenderHTTPInclude(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestSettingsValidation(t *testing.T) {
 		if err := s.Validate(); err == nil {
 			t.Errorf("%s: %+v was accepted", name, s)
 		}
-		if _, err := RenderHTTPInclude(s); err == nil {
+		if _, err := testPaths.RenderHTTPInclude(s); err == nil {
 			t.Errorf("%s: the renderer wrote a config from invalid settings", name)
 		}
 	}
@@ -404,3 +404,40 @@ func TestRenderSiteFileHasEveryBlockEmpty(t *testing.T) {
 
 // NL keeps the multi-line fixtures above readable.
 const NL = "\n"
+
+func TestInsertBlock(t *testing.T) {
+	// A site made after blocks existed already has the markers: nothing changes.
+	fresh, err := testPaths.RenderSiteFile(Site{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := InsertBlock(fresh, BlockWAF); !ok || string(got) != string(fresh) {
+		t.Error("a file with the block must come back untouched")
+	}
+
+	// A site from before the firewall block: it goes after the TLS block, indented
+	// like it, and the rest of the file is byte for byte what it was.
+	old := strings.Replace(string(fresh), "    # >>> pb:waf\n    # <<< pb:waf\n", "", 1)
+	if strings.Contains(old, "pb:waf") {
+		t.Fatal("test setup: the waf block is still there")
+	}
+	got, ok := InsertBlock([]byte(old), BlockWAF)
+	if !ok || !HasBlock(got, BlockWAF) {
+		t.Fatalf("no block inserted:\n%s", got)
+	}
+	if string(got) != string(fresh) {
+		t.Errorf("inserting the block did not give back the fresh file.\n--- want\n%s\n--- got\n%s", fresh, got)
+	}
+
+	// An operator's file with none of the panel's blocks: after `server {`.
+	bare := "server {\n    listen 80;\n}\n"
+	got, ok = InsertBlock([]byte(bare), BlockWAF)
+	if !ok || !strings.HasPrefix(string(got), "server {\n    # >>> pb:waf\n    # <<< pb:waf\n    listen 80;") {
+		t.Errorf("bare server block: ok=%v\n%s", ok, got)
+	}
+
+	// Nothing to attach to.
+	if _, ok := InsertBlock([]byte("# nothing\n"), BlockWAF); ok {
+		t.Error("a file with no server block cannot take the block")
+	}
+}

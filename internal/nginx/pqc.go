@@ -31,6 +31,16 @@ const (
 	modSecurityNginxVersion = "1.0.4"
 )
 
+// The OWASP Core Rule Set bundled with the flavor, the rules ModSecurity runs
+// when a site's firewall is on. The release tarball is pinned and checked
+// against the digest GitHub publishes for the asset, so a build never takes
+// rules nobody looked at. The Dockerfile unpacks it at waf.CRSDir.
+const (
+	// CRSVersion is the Core Rule Set release.
+	CRSVersion = "4.30.0"
+	crsSHA256  = "3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427"
+)
+
 // IsPQC reports whether v is a version of the post-quantum flavor.
 func IsPQC(v string) bool { return strings.HasPrefix(v, PQCPrefix) }
 
@@ -66,6 +76,14 @@ RUN cd modsecurity \
  && ./configure --prefix=/usr --with-pcre2 --with-lmdb --without-lua --disable-examples --disable-doxygen-doc \
  && make -j"$(nproc)" \
  && make install
+# The OWASP Core Rule Set, pinned and checked against the published digest.
+ARG CRS_VERSION=%[9]s
+ARG CRS_SHA256=%[10]s
+RUN set -eux; \
+    curl -fsSLO "https://github.com/coreruleset/coreruleset/releases/download/v${CRS_VERSION}/coreruleset-${CRS_VERSION}-minimal.tar.gz"; \
+    echo "${CRS_SHA256}  coreruleset-${CRS_VERSION}-minimal.tar.gz" | sha256sum -c -; \
+    mkdir crs; tar -xzf "coreruleset-${CRS_VERSION}-minimal.tar.gz" -C crs --strip-components=1; \
+    test -d crs/rules
 RUN set -eux; \
     nginx_tgz=$(curl -fsSL https://nginx.org/download/ | grep -oE "nginx-${NGINX_SERIES}\.[0-9]+\.tar\.gz" | sort -uV | tail -n1); \
     test -n "$nginx_tgz"; \
@@ -116,11 +134,14 @@ COPY --from=build /usr/lib/nginx/modules /usr/lib/nginx/modules
 COPY --from=build /usr/lib/libmodsecurity.so* /usr/lib/
 COPY --from=build /build/modsecurity/modsecurity.conf-recommended /etc/nginx/modsec/modsecurity.conf-recommended
 COPY --from=build /build/modsecurity/unicode.mapping /etc/nginx/modsec/unicode.mapping
+COPY --from=build /build/crs/rules /etc/nginx/modsec/crs/rules
 RUN nginx -V 2>&1 | grep -q "built with OpenSSL ${OPENSSL_SERIES}" \
  && test -f /usr/lib/nginx/modules/ngx_http_modsecurity_module.so \
+ && test -f /etc/nginx/modsec/crs/rules/REQUEST-901-INITIALIZATION.conf \
  && ! ldd /usr/lib/nginx/modules/ngx_http_modsecurity_module.so 2>&1 | grep -qE "Error loading|No such file"
-LABEL panel.nginx.flavor="pqc"
+ARG CRS_VERSION=%[9]s
+LABEL panel.nginx.flavor="pqc" panel.nginx.crs="${CRS_VERSION}"
 EXPOSE 80 443 443/udp
 STOPSIGNAL SIGQUIT
-`, pqcBase, version, openSSLSeries, WWWUser, WWWGID, WWWUID, modSecurityVersion, modSecurityNginxVersion)
+`, pqcBase, version, openSSLSeries, WWWUser, WWWGID, WWWUID, modSecurityVersion, modSecurityNginxVersion, CRSVersion, crsSHA256)
 }

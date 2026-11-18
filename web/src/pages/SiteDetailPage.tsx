@@ -7,6 +7,7 @@ import { ConfigFilePanel } from "@/components/ConfigFilePanel"
 import { SiteControls } from "@/components/SiteControls"
 import { SitePHP } from "@/components/SitePHP"
 import { SiteTLS } from "@/components/SiteTLS"
+import { SiteWAF, type WafPrefill } from "@/components/SiteWAF"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,21 +25,33 @@ import { cn } from "@/lib/utils"
 import { useDeleteSite, useRegenerateSite, useSite, useUpdateSite } from "@/lib/queries"
 import { kindLabel } from "@/pages/SitesPage"
 
-type Section = "domains" | "config" | "ssl" | "php" | "logs" | "delete"
+type Section = "domains" | "config" | "ssl" | "waf" | "php" | "logs" | "delete"
 
 /**
  * One site, as a dialog over the sites list: a rail of sections on the left, the
  * section on the right. It replaces the old page; `/sites/<domain>` still opens
  * it, so a link to a site keeps working.
+ *
+ * `wafPrefill` is a rule handed over from the WAF audit viewer: the dialog then
+ * opens on the Firewall section with that rule ready to add as an exclusion.
  */
-export function SiteDetailDialog({ domain, onClose }: { domain: string; onClose: () => void }) {
+export function SiteDetailDialog({
+  domain,
+  onClose,
+  wafPrefill,
+}: {
+  domain: string
+  onClose: () => void
+  wafPrefill?: WafPrefill
+}) {
   const { data, isPending, error } = useSite(domain)
-  const [section, setSection] = useState<Section>("domains")
+  const [section, setSection] = useState<Section>(wafPrefill ? "waf" : "domains")
 
   const sections: { id: Section; label: string }[] = [
     { id: "domains", label: data?.kind === "proxy" ? "Domains & proxy" : "Domain manager" },
     { id: "config", label: "Config" },
     { id: "ssl", label: "SSL" },
+    { id: "waf", label: "Firewall" },
     ...(data?.kind === "php" ? [{ id: "php" as const, label: "PHP version" }] : []),
     { id: "logs", label: "Response log" },
     { id: "delete", label: "Reset or delete" },
@@ -93,6 +106,7 @@ export function SiteDetailDialog({ domain, onClose }: { domain: string; onClose:
               {section === "domains" && <Overview detail={data} />}
               {section === "config" && <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />}
               {section === "ssl" && <SiteTLS detail={data} />}
+              {section === "waf" && <SiteWAF domain={data.domain} prefill={wafPrefill} />}
               {section === "php" && data.kind === "php" && <SitePHP detail={data} />}
               {section === "logs" && <Logs domain={data.domain} php={data.kind === "php"} />}
               {section === "delete" && <DangerZone detail={data} onGone={onClose} />}

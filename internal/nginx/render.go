@@ -93,9 +93,24 @@ http {
 
 const mainIncludeTemplate = `# Managed by PB panel (Nginx settings). Rewritten on every save; edit it there.
 worker_processes {{.WorkerProcesses}};
+
+# The firewall's module loader, present while a site uses ModSecurity. A glob that
+# matches nothing is not an error.
+include {{.WAFMainDir}}/*.conf;
 `
 
+// LogFormat is the access log format of new sites: combined, plus the request
+// time and the request id. The traffic monitor reads the time from it, and the
+// id ties a line to the firewall's audit event for the same request. Older site
+// files keep the plain combined format, which the monitor also reads.
+const LogFormat = "pbpanel"
+
 const httpIncludeTemplate = `# Managed by PB panel (Nginx settings). Rewritten on every save; edit it there.
+log_format ` + LogFormat + ` '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" rt=$request_time rid=$request_id';
+
+# The firewall's zones and maps, one file per site.
+include {{.WAFHTTPDir}}/*.conf;
+
 client_max_body_size {{.ClientMaxBodySize}};
 client_body_timeout {{.ClientBodyTimeout}}s;
 client_header_timeout {{.ClientHeaderTimeout}}s;
@@ -118,7 +133,7 @@ const siteTemplate = `# Managed by PB panel for {{.Domain}}.
 server {
 {{.Blocks}}
 
-    access_log {{.AccessLog}};
+    access_log {{.AccessLog}} ` + LogFormat + `;
     error_log {{.ErrorLog}};
 {{- if .Static}}
 
@@ -271,22 +286,26 @@ func (p Paths) RenderMainConf() ([]byte, error) {
 }
 
 // RenderMainInclude renders panel-main.conf.
-func RenderMainInclude(s HTTPSettings) ([]byte, error) {
+func (p Paths) RenderMainInclude(s HTTPSettings) ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	return execute("panel-main.conf", s)
+	return execute("panel-main.conf", struct {
+		HTTPSettings
+		WAFMainDir string
+	}{s, p.WAFMainDir()})
 }
 
 // RenderHTTPInclude renders panel-http.conf.
-func RenderHTTPInclude(s HTTPSettings) ([]byte, error) {
+func (p Paths) RenderHTTPInclude(s HTTPSettings) ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
 	return execute("panel-http.conf", struct {
 		HTTPSettings
 		Gzip, ServerTokens string
-	}{s, onOff(s.Gzip), onOff(s.ServerTokens)})
+		WAFHTTPDir         string
+	}{s, onOff(s.Gzip), onOff(s.ServerTokens), p.WAFHTTPDir()})
 }
 
 // Block names: the parts of a site file the panel keeps up to date in place.
@@ -296,6 +315,8 @@ const (
 	BlockACME   = "acme"
 	BlockTLS    = "tls"
 	BlockPHP    = "php"
+	// BlockWAF holds the firewall's server-context directives.
+	BlockWAF = "waf"
 )
 
 // BlockMarkers are the two marker lines of a block, without indentation.
@@ -316,7 +337,7 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 		return nil, err
 	}
 	blocks := strings.Join([]string{
-		emptyBlock(BlockListen), emptyBlock(BlockNames), emptyBlock(BlockACME), emptyBlock(BlockTLS),
+		emptyBlock(BlockListen), emptyBlock(BlockNames), emptyBlock(BlockACME), emptyBlock(BlockTLS), emptyBlock(BlockWAF),
 	}, "\n")
 	return execute("site", struct {
 		Domain, Blocks, PHPBlock  string
@@ -497,6 +518,46 @@ func findBlock(lines []string, name string) (begin, end int, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// InsertBlock adds an empty named block to a site file that has none, the way
+// a site made before the block existed gets it. The block goes after the last
+// of the panel's other blocks, or, failing that, right after the line that opens
+// the server block, indented like what it follows. It reports false when the
+// file has neither, so the caller can say what to add by hand. A file that
+// already has the block is returned unchanged.
+func InsertBlock(content []byte, name string) ([]byte, bool) {
+	lines := strings.Split(string(content), "\n")
+	if _, _, ok := findBlock(lines, name); ok {
+		return content, true
+	}
+	at := -1
+	for _, other := range []string{BlockTLS, BlockACME, BlockNames, BlockListen} {
+		if _, end, ok := findBlock(lines, other); ok {
+			at = end
+			break
+		}
+	}
+	if at < 0 {
+		for i, l := range lines {
+			if t := strings.TrimSpace(l); t == "server {" || t == "server{" {
+				at = i
+				break
+			}
+		}
+	}
+	if at < 0 {
+		return content, false
+	}
+	indent := lines[at][:len(lines[at])-len(strings.TrimLeft(lines[at], " \t"))]
+	if strings.TrimSpace(lines[at]) == "server {" || strings.TrimSpace(lines[at]) == "server{" {
+		indent += "    "
+	}
+	begin, end := BlockMarkers(name)
+	out := append([]string{}, lines[:at+1]...)
+	out = append(out, indent+begin, indent+end)
+	out = append(out, lines[at+1:]...)
+	return []byte(strings.Join(out, "\n")), true
 }
 
 // ReplaceBlock puts body between the named block's markers, indented like the
