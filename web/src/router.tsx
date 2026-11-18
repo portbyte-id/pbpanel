@@ -5,6 +5,7 @@ import { appRoute } from "@/routes/_app"
 import { auditRoute } from "@/routes/_app/audit"
 import { appsRoute } from "@/routes/_app/apps"
 import { cronRoute } from "@/routes/_app/cron"
+import { dockerRoute } from "@/routes/_app/docker"
 import { dashboardRoute } from "@/routes/_app/dashboard"
 import { appIndexRoute } from "@/routes/_app/index"
 import { firewallRoute } from "@/routes/_app/firewall"
@@ -41,6 +42,7 @@ const routeTree = rootRoute.addChildren([
     trafficRoute,
     logsRoute,
     cronRoute,
+    dockerRoute,
     nginxRoute,
     phpRoute,
     appsRoute,

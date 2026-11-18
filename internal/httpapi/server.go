@@ -70,6 +70,7 @@ func (s *server) routes() http.Handler {
 	s.logsRoutes(mux)
 	s.cronRoutes(mux)
 	s.wafMonRoutes(mux)
+	s.dockerRoutes(mux)
 
 	// The jobs SSE handler is served by internal/jobs and guarded here, so a job
 	// id is not a way to read another session's output without a session.
