@@ -85,6 +85,11 @@ func serve(ctx context.Context, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: panel.port: %w", err)
 	}
+	// A port change takes effect on restart, so the new port is opened here and the
+	// old rule is replaced. A failure is logged: the panel still serves on the port.
+	if err := openPanelPort(ctx, port); err != nil {
+		logger.Warn("panel port is not open in the host firewall", "port", port, "error", err)
+	}
 
 	// Building the stack touches neither Docker nor the disk; a failure here is
 	// a wiring problem, and the nginx routes then answer 503.
@@ -170,6 +175,9 @@ func serve(ctx context.Context, _ []string) error {
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
+				if ferr := openPanelPort(ctx, p); ferr != nil {
+					logger.Warn("panel port is not open in the host firewall", "port", p, "error", ferr)
+				}
 				logger.Info("panel port changed", "url", url)
 			}
 			return err
