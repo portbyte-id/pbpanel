@@ -51,6 +51,12 @@ export interface SettingKey {
   description: string
   group: string
   allowed?: string[]
+  /** Display text for each `allowed` value. */
+  labels?: Record<string, string>
+  /** A string setting that may be left empty. */
+  optional?: boolean
+  /** Mask the value while typing. */
+  secret?: boolean
 }
 
 export interface SettingsGroup {

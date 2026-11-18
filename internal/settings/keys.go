@@ -2,7 +2,6 @@ package settings
 
 import (
 	"errors"
-	"net/url"
 	"regexp"
 	"strings"
 )
@@ -53,17 +52,30 @@ const (
 	// panel's own listener on a host with a public IP.
 	KeyTLSPanelAutoIP = "tls.panel.auto_ip"
 
+	// KeyTLSACMEEABKid and KeyTLSACMEEABHMACKey are the External Account
+	// Binding credentials a CA such as Google Public CA requires at account
+	// registration. They are read when an account is first registered.
+	KeyTLSACMEEABKid     = "tls.acme.eab_kid"
+	KeyTLSACMEEABHMACKey = "tls.acme.eab_hmac_key"
+
 	// DefaultACMEDirectory is Let's Encrypt staging. Staging certificates are
 	// not trusted by browsers; switching to production is a deliberate act.
 	DefaultACMEDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+	// ACMEDirectoryLetsEncrypt is Let's Encrypt production.
+	ACMEDirectoryLetsEncrypt = "https://acme-v02.api.letsencrypt.org/directory"
+	// ACMEDirectoryGoogle is Google Public CA production. It needs EAB.
+	ACMEDirectoryGoogle = "https://dv.acme-v02.api.pki.goog/directory"
+	// ACMEDirectoryGoogleStaging is Google Public CA's test endpoint. It needs EAB.
+	ACMEDirectoryGoogleStaging = "https://dv.acme-v02.test-api.pki.goog/directory"
 )
 
-func validateACMEDirectory(value string) error {
-	u, err := url.Parse(value)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return errors.New("must be an https URL such as " + DefaultACMEDirectory)
-	}
-	return nil
+// acmeDirectoryLabels names each offered CA endpoint on the Settings page.
+var acmeDirectoryLabels = map[string]string{
+	DefaultACMEDirectory:       "Let's Encrypt (staging, not trusted by browsers)",
+	ACMEDirectoryLetsEncrypt:   "Let's Encrypt (production)",
+	ACMEDirectoryGoogle:        "Google Public CA (production, needs EAB)",
+	ACMEDirectoryGoogleStaging: "Google Public CA (staging, needs EAB)",
 }
 
 // KeyPHPVersions names the versions offered on the PHP page.
@@ -215,13 +227,36 @@ func defaultKeys() []key {
 		},
 		{
 			meta: Meta{
-				Name:        KeyTLSACMEDirectory,
-				Type:        TypeString,
-				Default:     DefaultACMEDirectory,
-				Description: "ACME directory URL certificates are ordered from. The default is the Let's Encrypt staging endpoint, whose certificates browsers do not trust; set the production URL to issue real ones.",
+				Name:    KeyTLSACMEDirectory,
+				Type:    TypeEnum,
+				Default: DefaultACMEDirectory,
+				Allowed: []string{
+					DefaultACMEDirectory, ACMEDirectoryLetsEncrypt,
+					ACMEDirectoryGoogle, ACMEDirectoryGoogleStaging,
+				},
+				Labels:      acmeDirectoryLabels,
+				Description: "Certificate authority certificates are ordered from. The default is the Let's Encrypt staging endpoint, whose certificates browsers do not trust; choose a production CA to issue real ones. Google Public CA needs the two EAB settings below and does not issue IP-address certificates.",
 				Group:       groupTLS,
 			},
-			check: validateACMEDirectory,
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSACMEEABKid,
+				Type:        TypeString,
+				Optional:    true,
+				Description: "External Account Binding key ID, from `gcloud publicca external-account-keys create`. Required by Google Public CA, ignored by Let's Encrypt. Used when the panel first registers an account at that CA.",
+				Group:       groupTLS,
+			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSACMEEABHMACKey,
+				Type:        TypeString,
+				Optional:    true,
+				Secret:      true,
+				Description: "External Account Binding HMAC key (base64url, as Google prints it). Pair with the key ID above.",
+				Group:       groupTLS,
+			},
 		},
 		{
 			meta: Meta{

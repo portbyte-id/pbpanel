@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ type IssuerOptions struct {
 	// so a change of the tls.acme.directory setting applies to the next order
 	// without a restart.
 	Directory func() string
+	// EAB returns the External Account Binding key ID and base64url HMAC key,
+	// both empty when none is configured. nil means never. It is read only when
+	// an account is first registered at a directory.
+	EAB func() (kid, hmacKey string)
 	// HTTPClient talks to the CA. nil means a client with a two-minute timeout.
 	// Tests and Pebble inject one that trusts a private CA.
 	HTTPClient *http.Client
@@ -79,6 +84,7 @@ type Issuer struct {
 	st          *Store
 	root        string
 	directory   func() string
+	eab         func() (string, string)
 	hc          *http.Client
 	probeClient *http.Client
 	providers   func(string, []byte) (DNSProvider, error)
@@ -96,7 +102,7 @@ func NewIssuer(o IssuerOptions) (*Issuer, error) {
 		return nil, errors.New("tls: Store, Root and Directory are required")
 	}
 	i := &Issuer{
-		st: o.Store, root: o.Root, directory: o.Directory, hc: o.HTTPClient,
+		st: o.Store, root: o.Root, directory: o.Directory, eab: o.EAB, hc: o.HTTPClient,
 		probeClient: o.ProbeClient, providers: o.Providers, skipDNS: o.SkipDNSPropagationCheck, now: o.Now,
 	}
 	if i.hc == nil {
@@ -384,6 +390,18 @@ func (i *Issuer) account(ctx context.Context, dir, email string) (*acmeUser, err
 	}
 }
 
+// requiresEAB reports a CA known to refuse an account without External Account
+// Binding, so the operator gets the missing-setting message instead of the CA's
+// terse rejection. Other CAs are tried without EAB.
+func requiresEAB(dir string) bool {
+	u, err := url.Parse(dir)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "pki.goog" || strings.HasSuffix(h, ".pki.goog")
+}
+
 // register creates the account at the CA and stores it. The key is stored
 // before the registration call so a crash between the two leaves a key to retry
 // with rather than an orphaned account at the CA that nothing can use.
@@ -398,7 +416,25 @@ func (i *Issuer) register(ctx context.Context, dir string, u *acmeUser) (*acmeUs
 	}
 	// Agreeing to the CA's terms is implied by configuring the panel to issue
 	// from it; there is no per-order prompt to put the question to.
-	reg, err := c.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	var kid, hmacKey string
+	if i.eab != nil {
+		kid, hmacKey = i.eab()
+		kid, hmacKey = strings.TrimSpace(kid), strings.TrimSpace(hmacKey)
+	}
+	if (kid == "") != (hmacKey == "") {
+		return nil, fmt.Errorf("%w: External Account Binding needs both a key ID and an HMAC key", ErrInvalid)
+	}
+	var reg *registration.Resource
+	switch {
+	case kid != "":
+		reg, err = c.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+			TermsOfServiceAgreed: true, Kid: kid, HmacEncoded: hmacKey,
+		})
+	case requiresEAB(dir):
+		return nil, fmt.Errorf("%w: %s needs External Account Binding; set tls.acme.eab_kid and tls.acme.eab_hmac_key", ErrInvalid, dir)
+	default:
+		reg, err = c.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("tls: register ACME account at %s: %w", dir, err)
 	}

@@ -30,7 +30,7 @@ func validateType(m Meta, value string) error {
 	case TypeInt:
 		return validateInt(value)
 	case TypeString:
-		if value == "" {
+		if value == "" && !m.Optional {
 			return fmt.Errorf("must not be empty")
 		}
 		return nil
@@ -148,7 +148,7 @@ func checkKey(k key) error {
 		return fmt.Errorf("settings: key %s has no description", name)
 	case k.meta.Group == "":
 		return fmt.Errorf("settings: key %s has no group", name)
-	case k.meta.Default == "":
+	case k.meta.Default == "" && !k.meta.Optional:
 		return fmt.Errorf("settings: key %s has no default", name)
 	}
 	if err := validate(k, k.meta.Default); err != nil {
