@@ -14,10 +14,7 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
-	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
-	"github.com/portbyte-id/server-panel/internal/store"
 	"github.com/portbyte-id/server-panel/internal/waf"
 	"github.com/portbyte-id/server-panel/internal/wafmon"
 )
@@ -44,82 +41,33 @@ const xss = "/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
 // and the real audit log. It needs port 80 free on the host and a Docker
 // Engine, and the first run builds the image.
 func TestRealWAFEndToEnd(t *testing.T) {
-	eng, err := docker.New(docker.DefaultSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := requireNativeHost(t)
 	bg := context.Background()
-	if _, err := eng.Ping(bg); err != nil {
-		t.Skipf("no Docker Engine: %v", err)
-	}
-	_ = eng.ContainerRemove(bg, nginx.ContainerName, true)
-	t.Cleanup(func() { _ = eng.ContainerRemove(bg, nginx.ContainerName, true) })
-
-	root, err := os.MkdirTemp("", "panel-waf-it-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	for _, d := range []string{"", "panel", "panel/nginx", "panel/nginx/sites", "panel/nginx/includes", "panel/logs", "panel/logs/sites", "panel/history", "services", "services/sites"} {
-		p := filepath.Join(root, d)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	h := newNativeHost(t, eng, "panel-waf-it-", nativeLayout{})
 	// ModSecurity writes the audit log from a worker running as www, which owns
 	// nothing here: the daemon would have chowned the file, so the directory is open.
-	if err := os.Chmod(filepath.Join(root, "panel/logs/sites"), 0o777); err != nil {
+	if err := os.Chmod(filepath.Join(h.root, "panel/logs/sites"), 0o777); err != nil {
 		t.Fatal(err)
 	}
 
-	st, err := store.Open(filepath.Join(root, "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-
-	paths := nginx.Paths{Root: root}
-	ed, err := confedit.New(confedit.Options{Roots: []string{paths.Dir()}, HistoryDir: filepath.Join(root, "panel", "history"), Store: st})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cat := images.NewCatalog(st)
-	if err := cat.SetActiveVersion(bg, images.KindNginx, "pqc-1.30"); err != nil {
-		t.Fatal(err)
-	}
-	imgs, err := nginx.NewImages(eng, paths, cat, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
-	global := nginx.NewGlobal(st, ed, live, paths)
-	engine := waf.New(st, paths, func(context.Context) (waf.Availability, error) {
-		return waf.Availability{Available: nginx.IsPQC(imgs.Version()), Flavor: "pqc", CRSVersion: nginx.CRSVersion}, nil
+	paths := h.paths
+	global := h.global
+	// Every native build ships ModSecurity, so the WAF is available once a build
+	// serves, which the reconcile below makes happen.
+	engine := waf.New(h.st, paths, func(context.Context) (waf.Availability, error) {
+		return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}, nil
 	})
-	mgr, err := New(Options{
-		Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}, WAF: engine,
-		Settings: func(ctx context.Context) ([]confedit.File, error) {
+	mgr := h.manager(t, func(o *Options) {
+		o.WAF = engine
+		o.Settings = func(ctx context.Context) ([]confedit.File, error) {
 			s, err := global.Settings(ctx)
 			if err != nil {
 				return nil, err
 			}
 			return global.SettingsFiles(s)
-		},
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &Reconciler{
-		Sites: mgr, Global: global, Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
-		BuildImage: func(ctx context.Context) error {
-			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
-			return err
-		},
-	}
+	rec := h.reconciler(t, mgr)
 	if s := rec.Run(bg); !s.OK {
 		t.Fatalf("first reconcile: %+v", s)
 	}
@@ -323,59 +271,12 @@ func TestRealWAFEndToEnd(t *testing.T) {
 // writes for a new site (the pbpanel format) against the monitor's parser, which
 // is what feeds the traffic page.
 func TestRealAccessLogFormatIsReadByTheMonitor(t *testing.T) {
-	eng, err := docker.New(docker.DefaultSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := requireNativeHost(t)
 	bg := context.Background()
-	if _, err := eng.Ping(bg); err != nil {
-		t.Skipf("no Docker Engine: %v", err)
-	}
-	_ = eng.ContainerRemove(bg, nginx.ContainerName, true)
-	t.Cleanup(func() { _ = eng.ContainerRemove(bg, nginx.ContainerName, true) })
-
-	root, err := os.MkdirTemp("", "panel-waf-log-it-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	for _, d := range []string{"", "panel", "panel/nginx", "panel/nginx/sites", "panel/nginx/includes", "panel/logs", "panel/logs/sites", "panel/history", "services", "services/sites"} {
-		p := filepath.Join(root, d)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	st, err := store.Open(filepath.Join(root, "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	paths := nginx.Paths{Root: root}
-	ed, err := confedit.New(confedit.Options{Roots: []string{paths.Dir()}, HistoryDir: filepath.Join(root, "panel", "history"), Store: st})
-	if err != nil {
-		t.Fatal(err)
-	}
-	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
-	global := nginx.NewGlobal(st, ed, live, paths)
-	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &Reconciler{
-		Sites: mgr, Global: global, Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
-		BuildImage: func(ctx context.Context) error {
-			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
-			return err
-		},
-	}
+	h := newNativeHost(t, eng, "panel-waf-log-it-", nativeLayout{})
+	paths := h.paths
+	mgr := h.manager(t, nil)
+	rec := h.reconciler(t, mgr)
 	if s := rec.Run(bg); !s.OK {
 		t.Fatalf("reconcile: %+v", s)
 	}

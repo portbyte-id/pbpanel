@@ -255,7 +255,7 @@ func (s *server) handleGetNginxImage(n *NginxDeps, w http.ResponseWriter, r *htt
 		Previous *images.Build  `json:"previous"`
 		Builds   []images.Build `json:"builds"`
 	}{
-		Base: nginx.BaseImageFor(imgs.Version()), Repo: nginx.Repo + ":" + imgs.Version(), Present: present,
+		Base: nginx.BuildSource, Repo: nginx.Repo + ":" + imgs.Version(), Present: present,
 		Version: imgs.Version(), Versions: suggested(imgs.Version()), Stopped: n.Container != nil && n.Container.Stopped(ctx),
 		Busy: imgs.Idle() != nil, Current: current, Previous: previous, Builds: builds,
 	})

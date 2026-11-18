@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import { CreateSiteForm, parseAliases } from "@/components/CreateSiteDialog"
 import { SiteControls } from "@/components/SiteControls"
 import { ApiError, type SiteDetail } from "@/lib/api"
-import { describeContainer } from "@/pages/NginxPage"
+import { describeService } from "@/pages/NginxPage"
 
 describe("parseAliases", () => {
   it("splits on spaces, commas and newlines and drops blanks", () => {
@@ -176,27 +176,32 @@ describe("SiteControls", () => {
   })
 })
 
-describe("describeContainer", () => {
-  it("covers running, stopped, missing and Docker not answering", () => {
-    expect(describeContainer({ exists: true, running: true, status: "running" })).toMatchObject({
+describe("describeService", () => {
+  it("covers running, stopped, not installed and systemd not answering", () => {
+    expect(describeService({ exists: true, running: true, status: "running" })).toMatchObject({
       badge: "running",
       ok: true,
     })
-    expect(describeContainer({ exists: true, running: false, status: "exited" })).toMatchObject({
-      badge: "exited",
+    expect(describeService({ exists: true, running: false, status: "inactive" })).toMatchObject({
+      badge: "inactive",
       ok: false,
+      text: "nginx is not running.",
     })
-    expect(describeContainer({ exists: false, running: false, status: "missing" })).toMatchObject({
-      badge: "not created",
+    expect(describeService({ exists: false, running: false, status: "missing" })).toMatchObject({
+      badge: "not installed",
       ok: false,
     })
     expect(
-      describeContainer({
+      describeService({
         exists: false,
         running: false,
         status: "",
-        error: "Docker did not answer",
+        error: "systemd did not answer; see the daemon log",
       }),
-    ).toMatchObject({ badge: "unknown", ok: false, text: "Docker did not answer" })
+    ).toMatchObject({
+      badge: "unknown",
+      ok: false,
+      text: "systemd did not answer; see the daemon log",
+    })
   })
 })

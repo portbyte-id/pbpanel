@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
-import { BuildHistory, ExtensionChips, formatBuildTime } from "@/components/ImageBuilds"
+import { BuildHistory, formatBuildTime } from "@/components/ImageBuilds"
 import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -37,15 +37,15 @@ export function NginxPage() {
     <Tabs defaultValue="settings" className="max-w-4xl">
       <TabsList>
         <TabsTrigger value="settings">Status</TabsTrigger>
-        <TabsTrigger value="image">Image</TabsTrigger>
+        <TabsTrigger value="build">Build</TabsTrigger>
         <TabsTrigger value="common">Settings</TabsTrigger>
         <TabsTrigger value="conf">nginx.conf</TabsTrigger>
       </TabsList>
       <TabsContent value="settings">
         <ServiceStatus />
       </TabsContent>
-      <TabsContent value="image">
-        <ImageCard />
+      <TabsContent value="build">
+        <BuildCard />
       </TabsContent>
       <TabsContent value="common">
         <SettingsForm />
@@ -57,8 +57,8 @@ export function NginxPage() {
   )
 }
 
-/** A sentence and a badge for the container's state, from what Docker reports. */
-export function describeContainer(c: NginxServiceStatus["container"]): {
+/** A sentence and a badge for nginx's state, from what systemd reports. */
+export function describeService(c: NginxServiceStatus["container"]): {
   badge: string
   ok: boolean
   text: string
@@ -66,13 +66,13 @@ export function describeContainer(c: NginxServiceStatus["container"]): {
   if (c.error) return { badge: "unknown", ok: false, text: c.error }
   if (!c.exists) {
     return {
-      badge: "not created",
+      badge: "not installed",
       ok: false,
-      text: "The nginx container does not exist. It is created when the panel starts.",
+      text: "The nginx service is not installed. The panel installs it when it starts.",
     }
   }
   if (!c.running) {
-    return { badge: c.status || "stopped", ok: false, text: "The nginx container is not running." }
+    return { badge: c.status || "stopped", ok: false, text: "nginx is not running." }
   }
   const since = c.started_at ? ` since ${new Date(c.started_at).toLocaleString()}` : ""
   return { badge: "running", ok: true, text: `nginx is running${since}.` }
@@ -91,7 +91,7 @@ function ServiceStatus() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {isPending ? (
-          <SkeletonRows label="Asking Docker…" />
+          <SkeletonRows label="Asking systemd…" />
         ) : error ? (
           <p role="alert" className="text-destructive">
             {error instanceof ApiError ? error.detail : "The status could not be loaded."}
@@ -141,7 +141,7 @@ function ServiceStatus() {
 }
 
 function StatusBody({ status }: { status: NginxServiceStatus }) {
-  const c = describeContainer(status.container)
+  const c = describeService(status.container)
   const r = status.reconcile
 
   return (
@@ -183,10 +183,10 @@ function StatusBody({ status }: { status: NginxServiceStatus }) {
 }
 
 /**
- * The nginx image: which build serves, the build it rolls back to, and the update
- * that builds a new one from the newest base. A build's job is watched in the drawer.
+ * The nginx builds: which one serves, the one it rolls back to, and the rebuild that
+ * compiles a new one from the newest sources. A build's job is watched in the drawer.
  */
-export function ImageCard() {
+export function BuildCard() {
   const client = useQueryClient()
   const { data, isPending, error } = useNginxImage()
   const update = useUpdateNginxImage()
@@ -198,14 +198,14 @@ export function ImageCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Image</CardTitle>
+        <CardTitle>Build</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-sm">
         {isPending ? (
-          <SkeletonRows label="Loading the image…" />
+          <SkeletonRows label="Loading the builds…" />
         ) : error ? (
           <p role="alert" className="text-destructive">
-            {error instanceof ApiError ? error.detail : "The image could not be loaded."}
+            {error instanceof ApiError ? error.detail : "The builds could not be loaded."}
           </p>
         ) : (
           <>
@@ -215,8 +215,8 @@ export function ImageCard() {
               </Badge>
               <span>
                 {data.present
-                  ? "The nginx image is on this host."
-                  : "The nginx image is not on this host."}
+                  ? "An nginx build is on this host."
+                  : "No nginx build is on this host yet."}
               </span>
             </div>
 
@@ -231,9 +231,7 @@ export function ImageCard() {
                 >
                   {data.versions.map((v) => (
                     <option key={v} value={v}>
-                      {v.startsWith("pqc-")
-                        ? `${v.slice(4)} post-quantum (OpenSSL 3.5, Alpine, built on this host)`
-                        : `${v} official`}
+                      {v}
                       {v === data.version ? " (running)" : ""}
                     </option>
                   ))}
@@ -264,10 +262,8 @@ export function ImageCard() {
             </div>
 
             <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[max-content_1fr]">
-              <dt className="text-muted-foreground">Base</dt>
-              <dd className="font-mono text-xs">{data.base}</dd>
-              <dt className="text-muted-foreground">Repository</dt>
-              <dd className="font-mono text-xs">{data.repo}</dd>
+              <dt className="text-muted-foreground">Built from</dt>
+              <dd className="text-xs">{data.base}</dd>
               <dt className="text-muted-foreground">Serving</dt>
               <dd>
                 {data.current ? (
@@ -291,7 +287,7 @@ export function ImageCard() {
                 disabled={data.busy || update.isPending}
                 onClick={() => update.mutate(undefined, { onSuccess: (job: JobRef) => setJobId(job.id) })}
               >
-                {update.isPending ? "Starting…" : "Update image"}
+                {update.isPending ? "Starting…" : "Rebuild nginx"}
               </Button>
               {data.previous && data.previous.state === "ready" && (
                 <Button
@@ -308,17 +304,22 @@ export function ImageCard() {
               )}
               {data.busy && (
                 <span className="text-muted-foreground text-xs" aria-live="polite">
-                  An image build is running.
+                  A build is running.
                 </span>
               )}
             </div>
-            <ApplyError error={update.error ?? activate.error} fallback="The image could not be changed." />
+            <p className="text-muted-foreground text-xs">
+              A rebuild compiles nginx from the newest sources and takes about 5 to 8 minutes. It
+              serves only once nginx -t passes; the build before it stays for rollback.
+            </p>
+            <ApplyError error={update.error ?? activate.error} fallback="The build could not be changed." />
 
             <div className="flex flex-col gap-2">
               <h3 className="text-sm font-medium">History</h3>
               <BuildHistory
                 builds={data.builds}
-                emptyText="No image builds yet."
+                emptyText="No builds yet."
+                showExtensions={false}
                 onActivate={(build) => activate.mutate(build.id, { onSuccess: (job: JobRef) => setJobId(job.id) })}
                 activating={activate.isPending || data.busy}
                 error={null}
@@ -345,7 +346,6 @@ function BuildSummary({ build }: { build: ImageBuild }) {
     <span className="flex flex-wrap items-center gap-2">
       <span className="font-mono text-xs">{build.id}</span>
       <span className="text-muted-foreground text-xs">created {formatBuildTime(build.created_at)}</span>
-      <ExtensionChips names={build.extensions} empty="extensions none" />
     </span>
   )
 }

@@ -17,7 +17,7 @@ const sources: LogSource[] = [
   { id: "panel:audit", label: "Audit log", kind: "audit" },
   { id: "site:b.test:access", label: "b.test access", kind: "site" },
   { id: "site:a.test:access", label: "a.test access", kind: "site" },
-  { id: "docker:panel-nginx", label: "panel-nginx", kind: "docker" },
+  { id: "nginx:error", label: "nginx errors", kind: "nginx" },
 ]
 
 const line = (s: string) => `event: line\ndata: ${JSON.stringify({ line: s })}\n\n`
@@ -46,10 +46,10 @@ describe("LogsPage", () => {
     const groups = within(nav)
       .getAllByRole("region")
       .map((g) => g.getAttribute("aria-label"))
-    expect(groups).toEqual(["Audit", "Containers", "Sites"])
+    expect(groups).toEqual(["Audit", "Nginx", "Sites"])
     expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Audit log",
-      "panel-nginx",
+      "nginx errors",
       "a.test access",
       "b.test access",
     ])
@@ -116,10 +116,10 @@ describe("LogsPage", () => {
     )
     vi.mocked(api.openStream).mockImplementation(async () => streamOf([line("back"), "event: end\ndata: {}\n\n"]))
 
-    await user.click(await screen.findByRole("button", { name: "panel-nginx" }))
+    await user.click(await screen.findByRole("button", { name: "nginx errors" }))
     expect(await screen.findByRole("alert")).toHaveTextContent("Docker is not reachable.")
     await user.click(screen.getByRole("button", { name: "Reconnect" }))
-    await waitFor(() => expect(screen.getByLabelText("Log of panel-nginx")).toHaveTextContent("back"))
+    await waitFor(() => expect(screen.getByLabelText("Log of nginx errors")).toHaveTextContent("back"))
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 

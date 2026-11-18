@@ -28,6 +28,46 @@ func (p Paths) ServesRoot(root string) bool {
 // Dir is the generated nginx config tree.
 func (p Paths) Dir() string { return path.Join(p.Root, "panel", "nginx") }
 
+// VersionsDir holds one directory per nginx build: its binary, module and the
+// libraries they need. Builds are never written in place.
+func (p Paths) VersionsDir() string { return path.Join(p.Dir(), "versions") }
+
+// BuildDir is where the build with this ID lives. It is also the build's compiled-in
+// prefix, so the module path in a config resolves against the build that loads it.
+func (p Paths) BuildDir(id string) string { return path.Join(p.VersionsDir(), id) }
+
+// CurrentLink is the symlink to the build that serves. A swap is one rename of
+// this link, so the unit and the configuration name a path that never changes.
+func (p Paths) CurrentLink() string { return path.Join(p.Dir(), "current") }
+
+// Binary is the nginx executable of the build that serves.
+func (p Paths) Binary() string { return path.Join(p.CurrentLink(), "sbin", "nginx") }
+
+// BinaryOf is the executable of one build, for checking a candidate before it serves.
+func (p Paths) BinaryOf(id string) string { return path.Join(p.BuildDir(id), "sbin", "nginx") }
+
+// MimeTypes is the media type table shipped with every build.
+func (p Paths) MimeTypes() string { return path.Join(p.CurrentLink(), "conf", "mime.types") }
+
+// FastCGIParams is the FastCGI variable table shipped with every build.
+func (p Paths) FastCGIParams() string { return path.Join(p.CurrentLink(), "conf", "fastcgi_params") }
+
+// ModSecDir holds ModSecurity's base files and the Core Rule Set, shipped with
+// every build.
+func (p Paths) ModSecDir() string { return path.Join(p.CurrentLink(), "modsec") }
+
+// CRSDir is the OWASP Core Rule Set of the build that serves.
+func (p Paths) CRSDir() string { return path.Join(p.ModSecDir(), "crs") }
+
+// CacheDir holds nginx's temporary files.
+func (p Paths) CacheDir() string { return path.Join(p.Root, "panel", "cache", "nginx") }
+
+// MainLogDir holds nginx's own logs, not a site's.
+func (p Paths) MainLogDir() string { return path.Join(p.Root, "panel", "logs") }
+
+// MainErrorLog is the error log nginx opens before it has read its configuration.
+func (p Paths) MainErrorLog() string { return path.Join(p.MainLogDir(), "nginx-error.log") }
+
 // ConfPath is nginx.conf, generated once and then the operator's.
 func (p Paths) ConfPath() string { return path.Join(p.Dir(), "nginx.conf") }
 

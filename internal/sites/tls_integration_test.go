@@ -18,12 +18,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
-	"github.com/portbyte-id/server-panel/internal/images"
-	"github.com/portbyte-id/server-panel/internal/nginx"
-	"github.com/portbyte-id/server-panel/internal/store"
 )
 
 // TestRealNginxTLS proves against a real nginx that a site with a certificate
@@ -31,35 +25,12 @@ import (
 // challenge with a 301, and serves a token written the way an ACME client's
 // webroot provider writes it. It needs ports 80 and 443 free on the host.
 func TestRealNginxTLS(t *testing.T) {
-	eng, err := docker.New(docker.DefaultSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := requireNativeHost(t)
 	bg := context.Background()
-	if _, err := eng.Ping(bg); err != nil {
-		t.Skipf("no Docker Engine: %v", err)
-	}
-	_ = eng.ContainerRemove(bg, nginx.ContainerName, true)
-	t.Cleanup(func() { _ = eng.ContainerRemove(bg, nginx.ContainerName, true) })
-
-	root, err := os.MkdirTemp("", "panel-tls-it-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	paths := nginx.Paths{Root: root}
-	for _, d := range []string{
-		"", "panel", "panel/nginx", "panel/nginx/sites", "panel/nginx/includes", "panel/logs", "panel/logs/sites", "panel/history",
-		"services", "services/sites", "panel/ssl", "panel/ssl/sites", "panel/ssl/acme-webroot",
-	} {
-		p := filepath.Join(root, d)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	h := newNativeHost(t, eng, "panel-tls-it-", nativeLayout{
+		dirs: []string{"panel/ssl", "panel/ssl/sites", "panel/ssl/acme-webroot"},
+	})
+	paths := h.paths
 
 	certDir := paths.SiteCertDir("a.test")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
@@ -67,33 +38,9 @@ func TestRealNginxTLS(t *testing.T) {
 	}
 	writeSelfSigned(t, certDir, "a.test")
 
-	st, err := store.Open(filepath.Join(root, "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	ed, err := confedit.New(confedit.Options{Roots: []string{paths.Dir()}, HistoryDir: filepath.Join(root, "panel", "history"), Store: st})
-	if err != nil {
-		t.Fatal(err)
-	}
-	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
 	state := &fakeTLS{certs: map[string]TLSInfo{}}
-	mgr, err := New(Options{Store: st, Applier: ed, Service: live, Paths: paths, FS: chownless{}, TLS: state})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &Reconciler{
-		Sites: mgr, Global: nginx.NewGlobal(st, ed, live, paths), Recover: ed.Recover,
-		Boot: nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()), Live: live, Runtime: nginx.NewRuntime(eng, paths, imgs.ImageFunc()),
-		BuildImage: func(ctx context.Context) error {
-			_, err := imgs.Build(ctx, func(l string) { t.Log(l) })
-			return err
-		},
-	}
+	mgr := h.manager(t, func(o *Options) { o.TLS = state })
+	rec := h.reconciler(t, mgr)
 	if s := rec.Run(bg); !s.OK {
 		t.Fatalf("reconcile: %+v", s)
 	}

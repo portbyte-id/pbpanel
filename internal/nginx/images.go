@@ -6,51 +6,30 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
+	"path/filepath"
 	"sync"
 
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
 )
 
-// SuggestedVersions are the official nginx tags the Nginx page offers, newest
-// first. Any MAJOR.MINOR tag Docker Hub has works; a tag that does not exist fails
-// at the pull, before anything running is touched.
-var SuggestedVersions = []string{"1.30", "1.29", "1.28", "pqc-1.30", "pqc-1.29"}
-
-var versionPattern = regexp.MustCompile(`^(pqc-)?[1-9][0-9]?\.[0-9]{1,2}$`)
-
-// CheckVersion reports whether v is a tag the panel will build from. A "pqc-"
-// prefix selects the post-quantum flavor built on Alpine.
-func CheckVersion(v string) error {
-	if !versionPattern.MatchString(v) {
-		return fmt.Errorf("nginx: version %q must look like 1.29 or pqc-1.30", v)
-	}
-	return nil
-}
-
-// BaseImageFor is the image a version is built on: the official one, or Alpine
-// for the post-quantum flavor.
-func BaseImageFor(version string) string {
-	if IsPQC(version) {
-		return pqcBase
-	}
-	return "nginx:" + version
-}
-
 // ErrSameVersion is a switch to the version that already serves.
 var ErrSameVersion = errors.New("nginx: that version already serves")
 
-// Images owns the nginx image builds (development plan M8, steps 8.1 and 8.6):
-// each build of the image is kept under its own tag, one build serves, and the
-// build served before is kept so one action can put it back.
+// Images owns the nginx builds: each build is kept in its own directory under
+// VersionsDir, one build serves, and the build served before is kept so one action
+// can put it back.
+//
+// The bookkeeping (build IDs, which one is current, which was previous, pruning)
+// is package images, shared with PHP. What differs is what a build is: here a
+// directory made by the builder, and "serving" means the CurrentLink symlink names
+// it and the unit has been restarted onto it.
 //
 // There is one family of builds per nginx version, and one version is active.
-// Switching version builds (or reuses) the target family's image, checks the live
-// configuration against it with `nginx -t`, and swaps the container onto it.
 type Images struct {
-	eng Engine
 	p   Paths
+	run Runner
+	b   Builder
 	cat *images.Catalog
 	log *slog.Logger
 
@@ -60,13 +39,15 @@ type Images struct {
 	active string
 }
 
-// NewImages returns the nginx image family over the build catalogue.
-func NewImages(eng Engine, p Paths, cat *images.Catalog, log *slog.Logger) (*Images, error) {
-	i := &Images{eng: eng, p: p, cat: cat, log: log, fams: map[string]*images.Family{}, active: Version}
+// NewImages returns the nginx build family over the catalogue.
+func NewImages(p Paths, run Runner, b Builder, cat *images.Catalog, log *slog.Logger) (*Images, error) {
+	i := &Images{p: p, run: run, b: b, cat: cat, log: log, fams: map[string]*images.Family{}, active: Version}
 	// The version chosen last time, kept across restarts. A stored value that no
 	// longer parses is ignored: the default family always exists.
-	if v, ok, err := cat.ActiveVersion(context.Background(), images.KindNginx); err == nil && ok && CheckVersion(v) == nil {
-		i.active = v
+	if v, ok, err := cat.ActiveVersion(context.Background(), images.KindNginx); err == nil && ok {
+		if v = NormalizeVersion(v); CheckVersion(v) == nil {
+			i.active = v
+		}
 	}
 	fam, err := i.family(i.active)
 	if err != nil {
@@ -84,27 +65,24 @@ func (i *Images) family(version string) (*images.Family, error) {
 		return f, nil
 	}
 	fam, err := images.NewFamily(images.FamilyOptions{
-		Kind: images.KindNginx, Version: version, Repo: Repo, Catalog: i.cat, Engine: i.eng, Log: i.log,
+		Kind: images.KindNginx, Version: version, Repo: Repo, Catalog: i.cat, Engine: dirStore{i.p}, Log: i.log,
 		Hooks: images.Hooks{
 			Build: func(ctx context.Context, b images.Build, progress docker.Progress) error {
-				// Pull is set: an update is a new build from the newest base image
-				// of the same tag, which is how nginx gets its security fixes.
-				_, err := i.eng.ImageBuild(ctx, docker.BuildOptions{
-					Tag: b.Tag, Dockerfile: DockerfileFor(version), Pull: true,
-					Labels: map[string]string{docker.LabelManaged: "true"},
-				}, progress)
-				return err
+				return i.b.Build(ctx, b.ID, version, progress)
 			},
 			Check: func(ctx context.Context, b images.Build, serving bool) (string, error) {
 				// The first build is made while the panel is still writing nginx's
 				// config files, so `nginx -t` would fail on files that do not exist
-				// yet. Once nginx.conf is on disk the live configuration is checked
-				// against the candidate, whether or not this family serves: that is
-				// what makes a version switch safe.
-				if !serving && !i.configPresent() {
+				// yet. On a host upgraded from the container runtime the files exist
+				// but still name paths that only the image had; the reconcile
+				// rewrites them after this build, and the validation that follows
+				// the rewrite is the first real test. Once a native build serves, the
+				// live configuration is checked against every candidate, whether or
+				// not its family serves: that is what makes a version switch safe.
+				if !serving && (!i.configPresent() || !i.anyServes()) {
 					return "", nil
 				}
-				return checkCandidate(ctx, i.eng, i.p, b.Tag)
+				return checkCandidate(ctx, i.run, i.p, b.ID)
 			},
 			Swap: i.swap,
 		},
@@ -116,8 +94,14 @@ func (i *Images) family(version string) (*images.Family, error) {
 	return fam, nil
 }
 
+// anyServes reports whether a native build serves: the current link exists.
+func (i *Images) anyServes() bool {
+	_, err := readLink(i.p)
+	return err == nil
+}
+
 func (i *Images) configPresent() bool {
-	_, err := os.Stat(i.p.ConfPath())
+	_, err := os.Stat(filepath.FromSlash(i.p.ConfPath()))
 	return err == nil
 }
 
@@ -132,20 +116,6 @@ func (i *Images) activeFamily() *images.Family {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.fam
-}
-
-// ImageFunc is the image the container runs: the build that serves now.
-func (i *Images) ImageFunc() ImageFunc {
-	return func(ctx context.Context) (string, error) {
-		tag, err := i.activeFamily().CurrentTag(ctx)
-		if err != nil {
-			return "", err
-		}
-		if tag == "" {
-			return "", ErrNoImage
-		}
-		return tag, nil
-	}
 }
 
 // Idle reports images.ErrBusy while a build, update or rollback is running, in
@@ -176,13 +146,13 @@ func (i *Images) Current(ctx context.Context) (images.Build, bool, error) {
 	return i.activeFamily().Current(ctx)
 }
 
-// Present reports whether a build serves and its image is on the host.
+// Present reports whether a build serves and its files are on the host.
 func (i *Images) Present(ctx context.Context) (bool, error) {
 	tag, err := i.activeFamily().CurrentTag(ctx)
 	if err != nil || tag == "" {
 		return false, err
 	}
-	if _, err := i.eng.ImageInspect(ctx, tag); err != nil {
+	if _, err := (dirStore{i.p}).ImageInspect(ctx, tag); err != nil {
 		if errors.Is(err, docker.ErrNotFound) {
 			return false, nil
 		}
@@ -191,7 +161,7 @@ func (i *Images) Present(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// Build makes a new build from the newest base image, checks it with `nginx -t`
+// Build compiles a new build from the newest sources, checks it with `nginx -t`
 // against the live configuration, and makes it the one that serves. It is the
 // first build and the update alike.
 func (i *Images) Build(ctx context.Context, progress docker.Progress) (images.Build, error) {
@@ -204,10 +174,10 @@ func (i *Images) Activate(ctx context.Context, id string) (images.Build, error) 
 }
 
 // SetVersion makes another nginx version serve. A version that was built before
-// and whose image is still here is reused; otherwise it is built from the
-// official image. Either way the live configuration is checked against it before
-// the container is touched, and a failed swap puts the old image back. The new
-// version is recorded only once it serves.
+// and whose files are still here is reused; otherwise it is compiled. Either way
+// the live configuration is checked against it before nginx is touched, and a
+// failed swap puts the old build back. The new version is recorded only once it
+// serves.
 func (i *Images) SetVersion(ctx context.Context, version string, progress docker.Progress) (images.Build, error) {
 	if err := CheckVersion(version); err != nil {
 		return images.Build{}, err
@@ -230,14 +200,14 @@ func (i *Images) SetVersion(ctx context.Context, version string, progress docker
 	}
 	reuse := false
 	if has && cur.State == images.StateReady {
-		if _, ierr := i.eng.ImageInspect(ctx, cur.Tag); ierr == nil {
+		if _, ierr := (dirStore{i.p}).ImageInspect(ctx, cur.Tag); ierr == nil {
 			reuse = true
 		}
 	}
 	if reuse {
 		// The family already points at this build, so Activate would not swap:
 		// check and swap explicitly.
-		if out, cerr := checkCandidate(ctx, i.eng, i.p, cur.Tag); cerr != nil {
+		if out, cerr := checkCandidate(ctx, i.run, i.p, cur.ID); cerr != nil {
 			return images.Build{}, fmt.Errorf("nginx %s does not accept the current configuration: %w\n%s", version, cerr, out)
 		}
 		from, _ := i.activeFamily().CurrentTag(ctx)
@@ -260,40 +230,60 @@ func (i *Images) SetVersion(ctx context.Context, version string, progress docker
 	return built, nil
 }
 
-// Reconcile is the boot step: it adopts the image from before builds had IDs and
-// fails any build left running. It reports whether a build serves.
+// Reconcile is the boot step: it fails any build left running, drops a current
+// build whose files have gone, and points the CurrentLink at the build the
+// catalogue says serves. It reports whether a build serves.
 func (i *Images) Reconcile(ctx context.Context) (bool, error) {
-	legacy := ""
-	if i.Version() == Version {
-		legacy = LegacyImage
+	ok, err := i.activeFamily().Reconcile(ctx, "")
+	if err != nil || !ok {
+		return ok, err
 	}
-	return i.activeFamily().Reconcile(ctx, legacy)
+	cur, has, err := i.activeFamily().Current(ctx)
+	if err != nil || !has {
+		return false, err
+	}
+	if got, lerr := readLink(i.p); lerr != nil || got != cur.ID {
+		if err := setLink(i.p, cur.ID); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
-// swap moves a running nginx container from one build to another. A container
-// that is not running has nothing to move; the boot reconcile starts it on the
-// build that serves. `from` is empty when the target belongs to a family that has
-// not served yet (a version switch); the image serving now stands in for it, so a
-// failed swap can put it back.
+// swap makes nginx run the build `to`. `from` is the build serving now, or "" when
+// none does. The link is switched first; a running nginx is then restarted onto
+// it, since a binary cannot be swapped under a reload. A nginx that is not
+// running has nothing to restart: the boot reconcile starts it on the new link.
+// When the restart does not hold, the link is put back and nginx restarted on the
+// old build, so a failed swap leaves what served before serving.
 func (i *Images) swap(ctx context.Context, from, to string) error {
-	c, err := i.eng.ContainerInspect(ctx, ContainerName)
-	if errors.Is(err, docker.ErrNotFound) {
-		return nil
-	}
+	toID, err := idOfTag(to)
 	if err != nil {
 		return err
 	}
-	if !c.State.Running {
+	prev, _ := readLink(i.p)
+	if prev == "" && from != "" {
+		prev, _ = idOfTag(from)
+	}
+	if err := setLink(i.p, toID); err != nil {
+		return err
+	}
+	st, err := status(ctx, i.run)
+	if err != nil || !st.Active {
 		return nil
 	}
-	if from == "" {
-		from, _ = i.activeFamily().CurrentTag(ctx)
+	if err := restartUnit(ctx, i.run); err != nil {
+		if prev == "" {
+			return err
+		}
+		bg := context.WithoutCancel(ctx)
+		if lerr := setLink(i.p, prev); lerr != nil {
+			return errors.Join(err, lerr)
+		}
+		if rerr := restartUnit(bg, i.run); rerr != nil {
+			return errors.Join(err, fmt.Errorf("putting build %s back: %w", prev, rerr))
+		}
+		return err
 	}
-	svc := NewService(i.eng, i.p, func(context.Context) (string, error) { return to, nil })
-	return images.Swap(ctx, i.eng, images.SwapPlan{
-		Name:    ContainerName,
-		Mount:   i.p.Root,
-		Spec:    func(image string) docker.Spec { return Spec(i.p, image) },
-		Healthy: svc.Healthy,
-	}, from, to)
+	return nil
 }

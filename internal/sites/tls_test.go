@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
@@ -241,7 +240,7 @@ func TestReconcileReproducesTheTLSBlock(t *testing.T) {
 	broken := strings.Replace(string(cur), want, "    # stale", 1) + "# operator edit\n"
 	r.fs.files[siteFile] = []byte(broken)
 
-	rec, _ := newReconciler(t, r, &fakeRuntime{present: true, action: docker.ActionNone})
+	rec, _ := newReconciler(t, r, &fakeRuntime{present: true, action: nginx.ActionNone})
 	if st := rec.Run(ctx); !st.OK {
 		t.Fatalf("status = %+v", st)
 	}
@@ -262,7 +261,7 @@ func TestReconcileRestoresALegacyTLSInclude(t *testing.T) {
 	}
 	legacySite(t, r, "a.test", nil)
 	siteBefore, _ := r.fs.ReadFile(siteFile)
-	rec, _ := newReconciler(t, r, &fakeRuntime{present: true, action: docker.ActionNone})
+	rec, _ := newReconciler(t, r, &fakeRuntime{present: true, action: nginx.ActionNone})
 	if st := rec.Run(ctx); !st.OK {
 		t.Fatalf("status = %+v", st)
 	}

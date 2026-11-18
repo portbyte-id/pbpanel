@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
@@ -26,10 +25,10 @@ type ConfigHistory interface {
 }
 
 // NginxService is the live nginx service: what a restore validates and reloads
-// through, and where the status route reads the container's state.
+// through, and where the status route reads systemd's state of the unit.
 type NginxService interface {
 	confedit.Service
-	State(ctx context.Context) (docker.Container, bool, error)
+	State(ctx context.Context) (nginx.Status, bool, error)
 }
 
 // ReconcileStatus reports the outcome of the boot reconcile.
@@ -52,8 +51,8 @@ type NginxDeps struct {
 	PHPReconcile func() []sites.PHPStep
 	// Images carries the nginx image builds. Nil answers the image routes 503.
 	Images NginxImages
-	// Container starts, stops and restarts the nginx container. Nil answers the
-	// container routes 503.
+	// Container starts, stops and restarts nginx. Nil answers the routes 503. The
+	// name is from when nginx ran in a container; the routes keep it.
 	Container NginxContainer
 }
 
@@ -520,13 +519,16 @@ func (s *server) handleHistoryRestore(n *NginxDeps, w http.ResponseWriter, r *ht
 
 // --- service status ----------------------------------------------------------
 
+// containerJSON is a service's state as the API reports it. The name is from when
+// nginx ran in a container, and PHP-FPM still does; for nginx, Exists means systemd
+// knows the unit and Status is its state, "running" while it is active.
 type containerJSON struct {
 	Exists    bool       `json:"exists"`
 	Running   bool       `json:"running"`
 	Status    string     `json:"status"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
-	// Error is set when Docker could not be asked. It is a fixed sentence: the
-	// cause is in the daemon log.
+	// Error is set when the service manager could not be asked. It is a fixed
+	// sentence: the cause is in the daemon log.
 	Error string `json:"error,omitempty"`
 }
 
@@ -539,15 +541,15 @@ func (s *server) handleNginxService(n *NginxDeps, w http.ResponseWriter, r *http
 		out.Reconcile.Steps = []sites.Step{}
 	}
 
-	c, found, err := n.Service.State(r.Context())
+	st, found, err := n.Service.State(r.Context())
 	switch {
 	case err != nil:
-		s.logger.WarnContext(r.Context(), "nginx container state", "error", err)
-		out.Container.Error = "Docker did not answer; is the Docker service running?"
+		s.logger.WarnContext(r.Context(), "nginx service state", "error", err)
+		out.Container.Error = "systemd did not answer; see the daemon log"
 	case found:
-		out.Container = containerJSON{Exists: true, Running: c.State.Running, Status: c.State.Status}
-		if !c.State.StartedAt.IsZero() {
-			out.Container.StartedAt = &c.State.StartedAt
+		out.Container = containerJSON{Exists: true, Running: st.Active, Status: st.State}
+		if st.Active {
+			out.Container.Status = "running"
 		}
 	default:
 		out.Container.Status = "missing"

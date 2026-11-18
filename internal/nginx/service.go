@@ -4,253 +4,231 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 )
 
-// Names and images. The image is the official one plus the `www` account at the
-// fixed UID (decision 1.1), so workers own and read files under /www. Builds are
-// stored as `panel/nginx:1.29-<build-id>`; which one runs is the pointer kept by
-// package images (see Images).
-const (
-	ContainerName = "panel-nginx"
-	BaseImage     = "nginx:1.29"
-	ServiceName   = "nginx"
-
-	// Version is the family's version: the official tag the builds derive from.
-	Version = "1.29"
-	// Repo is the repository of the builds.
-	Repo = "panel/nginx"
-	// LegacyImage is the reference the image had before builds had IDs. It is
-	// adopted at boot.
-	LegacyImage = Repo + ":" + Version
-
-	validateName = "panel-nginx-validate"
-)
-
-// ErrNoImage is a container that has to be made when no build serves yet.
-var ErrNoImage = errors.New("nginx: no image has been built yet; build one first")
-
-// ImageFunc names the image the container runs now.
-type ImageFunc func(ctx context.Context) (string, error)
+// ErrNoBuild is a start asked for before any build exists.
+var ErrNoBuild = errors.New("nginx: no build has been made yet; build one first")
 
 // settle is how long Healthy watches the master after a reload. A config that
-// passed `nginx -t` can still make the master exit on a runtime failure; this
-// is the window in which that shows.
-const settle = 750 * time.Millisecond
+// passed `nginx -t` can still make the master exit on a runtime failure; this is
+// the window in which that shows. A variable so tests do not wait it out.
+var settle = 750 * time.Millisecond
 
-// Engine is the part of the Docker client the nginx service uses.
-type Engine interface {
-	docker.Engine
-	ContainerKill(ctx context.Context, id, signal string) error
-	Exec(ctx context.Context, id string, opts docker.ExecOptions) (docker.ExecResult, error)
-	RunOnce(ctx context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error)
-	ImageBuild(ctx context.Context, opts docker.BuildOptions, progress docker.Progress) (docker.Image, error)
-	ImageTag(ctx context.Context, src, dst string) error
-	ImageRemove(ctx context.Context, ref string) error
+// stopTimeout is how long systemd lets nginx finish its requests after SIGQUIT.
+// The unit says the same; this is the budget the panel waits for.
+const stopTimeout = 25 * time.Second
+
+// Runner runs a host command and returns its combined output. The error of a
+// command that ran and failed carries ExitCode() (*exec.ExitError does).
+type Runner interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// Spec is the nginx container running image: host network, the config tree
-// read-only, the site logs writable, web roots read-only, the PHP socket
-// directory, the site certificates and the ACME webroot read-only, every path
-// identical on the host and in the container. Nothing is mounted over a
-// directory the image owns.
-func Spec(p Paths, image string) docker.Spec {
-	spec := docker.Spec{
-		Name:       ContainerName,
-		Image:      image,
-		Role:       "nginx",
-		Entrypoint: []string{"nginx"},
-		Args:       []string{"-c", p.ConfPath(), "-g", "daemon off;"},
-		StopSignal: "SIGQUIT",
-		Mounts: []docker.Mount{
-			{Path: p.Dir(), ReadOnly: true},
-			{Path: p.SiteLogDir()},
-			{Path: p.SitesRoot(), ReadOnly: true},
-			// Read-write: connecting to a Unix socket needs write access to it.
-			{Path: p.RunDir()},
-			// Certificates and the challenge webroot, never SSLDir itself: that
-			// holds the panel's key and the ACME account key.
-			{Path: p.SiteCertsDir(), ReadOnly: true},
-			{Path: p.ACMEWebroot(), ReadOnly: true},
-		},
-	}
-	// Folders the operator allowed as web roots, read-only at the same path.
-	for _, root := range p.Roots.List() {
-		spec.Mounts = append(spec.Mounts, docker.Mount{Path: root, ReadOnly: true})
-	}
-	return spec
+// ExecRunner runs commands on this host.
+type ExecRunner struct{}
+
+// Run implements Runner.
+func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// Dockerfile is the derived image: the official one plus the `www` group and
-// user at the fixed IDs. The base is a Debian image, which has groupadd.
-func Dockerfile() []byte { return DockerfileFor(Version) }
-
-// DockerfileFor is the derived image for one nginx version.
-func DockerfileFor(version string) []byte {
-	if IsPQC(version) {
-		return pqcDockerfile(Series(version))
+// exitCode is a failed command's exit status, and false when the command did not
+// run at all.
+func exitCode(err error) (int, bool) {
+	var ee interface{ ExitCode() int }
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), true
 	}
-	return fmt.Appendf(nil,
-		"FROM %s\nRUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
-		BaseImageFor(version), WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
+	return 0, false
 }
 
-// Service is nginx as a confedit.Service: it validates with `nginx -t`,
-// reloads by signalling the master, and checks the container is still up.
+// EnsureAction says what EnsureRunning did.
+type EnsureAction string
+
+// What EnsureRunning can do.
+const (
+	// ActionNone: nginx was already running.
+	ActionNone EnsureAction = "none"
+	// ActionStart: nginx was not running and has been started.
+	ActionStart EnsureAction = "start"
+)
+
+// EnsureResult is the outcome of EnsureRunning.
+type EnsureResult struct {
+	Action EnsureAction
+	Reason string
+}
+
+// Status is nginx as systemd reports it.
+type Status struct {
+	// Loaded says systemd knows the unit: false before the first start, when the
+	// unit file has not been written.
+	Loaded bool `json:"loaded"`
+	// Active says the unit is running.
+	Active bool `json:"active"`
+	// State is systemd's ActiveState: active, inactive, failed, activating...
+	State string `json:"state"`
+	// PID is the master process, 0 when none runs.
+	PID int `json:"pid"`
+	// Since identifies this run of the unit: it changes when nginx restarts.
+	Since string `json:"since"`
+}
+
+// status asks systemd about the unit.
+func status(ctx context.Context, run Runner) (Status, error) {
+	out, err := run.Run(ctx, "systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "MainPID", "-p", "ActiveEnterTimestampMonotonic", UnitName)
+	if err != nil {
+		return Status{}, fmt.Errorf("nginx: ask systemd about %s: %w: %s", UnitName, err, strings.TrimSpace(string(out)))
+	}
+	var st Status
+	for line := range strings.SplitSeq(string(out), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "LoadState":
+			st.Loaded = v == "loaded"
+		case "ActiveState":
+			st.State = v
+		case "MainPID":
+			st.PID, _ = strconv.Atoi(v)
+		case "ActiveEnterTimestampMonotonic":
+			st.Since = v
+		}
+	}
+	st.Active = st.State == "active"
+	return st, nil
+}
+
+// Service is nginx as a confedit.Service: it validates with `nginx -t`, reloads
+// by asking systemd to signal the master, and checks it is still the same process.
 type Service struct {
-	eng   Engine
-	p     Paths
-	wait  time.Duration
-	image ImageFunc
+	p    Paths
+	run  Runner
+	wait time.Duration
 }
 
-// NewService returns the nginx service. image names the build a container is
-// made from.
-func NewService(eng Engine, p Paths, image ImageFunc) *Service {
-	return &Service{eng: eng, p: p, wait: settle, image: image}
+// NewService returns the nginx service.
+func NewService(p Paths, run Runner) *Service {
+	return &Service{p: p, run: run, wait: settle}
 }
 
 // Name implements confedit.Service.
 func (s *Service) Name() string { return ServiceName }
 
-// Validate runs `nginx -t` against the files on disk: by exec in the running
-// container, or in a one-shot container with the same mounts when the service
-// is down, so a config can be checked before nginx is first started.
+// Validate runs `nginx -t` with the binary that serves, against the files on
+// disk. It needs no running nginx, so a configuration can be checked before nginx
+// is first started.
 func (s *Service) Validate(ctx context.Context) (string, error) {
-	img, err := s.image(ctx)
-	if err != nil {
-		return "", err
-	}
-	return validate(ctx, s.eng, s.p, img)
+	return test(ctx, s.run, s.p.Binary(), s.p, "the configuration")
 }
 
-// validate checks the live config with the image the container runs. The
-// running container is used when there is one, so the answer is about the
-// process that will read the config.
-func validate(ctx context.Context, eng Engine, p Paths, image string) (string, error) {
-	test := []string{"nginx", "-t", "-c", p.ConfPath()}
-
-	var res docker.ExecResult
-	c, err := eng.ContainerInspect(ctx, ContainerName)
-	switch {
-	case err == nil && c.State.Running:
-		res, err = eng.Exec(ctx, ContainerName, docker.ExecOptions{Cmd: test})
-	case err == nil || errors.Is(err, docker.ErrNotFound):
-		res, err = runTest(ctx, eng, p, image, test)
-	}
-	if err != nil {
-		return "", fmt.Errorf("nginx -t could not be run: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return res.Output(), fmt.Errorf("nginx -t rejected the configuration (exit %d)", res.ExitCode)
-	}
-	return res.Output(), nil
+// checkCandidate is the test of a new build: its own binary against the live
+// configuration, whether or not anything is running. The binary that serves would
+// say nothing about the new one.
+func checkCandidate(ctx context.Context, run Runner, p Paths, id string) (string, error) {
+	return test(ctx, run, p.BinaryOf(id), p, "the build")
 }
 
-// checkCandidate is the test of a new build: `nginx -t` in a one-shot container
-// of that build, whether or not the service is running. Exec in the running
-// container would test the old binary, which says nothing about the new one.
-func checkCandidate(ctx context.Context, eng Engine, p Paths, tag string) (string, error) {
-	res, err := runTest(ctx, eng, p, tag, []string{"nginx", "-t", "-c", p.ConfPath()})
-	if err != nil {
-		return "", fmt.Errorf("nginx -t could not be run: %w", err)
+func test(ctx context.Context, run Runner, bin string, p Paths, what string) (string, error) {
+	out, err := run.Run(ctx, bin, "-t", "-c", p.ConfPath())
+	if err == nil {
+		return string(out), nil
 	}
-	if res.ExitCode != 0 {
-		return res.Output(), fmt.Errorf("nginx -t rejected the build (exit %d)", res.ExitCode)
+	if code, ran := exitCode(err); ran {
+		return string(out), fmt.Errorf("nginx -t rejected %s (exit %d)", what, code)
 	}
-	return res.Output(), nil
+	return "", fmt.Errorf("nginx -t could not be run: %w", err)
 }
 
-func runTest(ctx context.Context, eng Engine, p Paths, image string, test []string) (docker.ExecResult, error) {
-	cfg := Spec(p, image).Config()
-	cfg.Entrypoint, cfg.Cmd = test[:1], test[1:]
-	// A leftover from a daemon that died mid-validation would make the name
-	// taken; removing it first costs nothing when it is not there.
-	_ = eng.ContainerRemove(ctx, validateName, true)
-	return eng.RunOnce(ctx, validateName, cfg)
-}
-
-// Reload signals the master process of the running container. It refuses when
-// the container is not running: a reload that silently did nothing would let an
-// apply report success for a config nothing loaded.
+// Reload asks systemd to signal the master. It refuses when nginx is not
+// running: a reload that silently did nothing would let an apply report success
+// for a config nothing loaded.
 func (s *Service) Reload(ctx context.Context) error {
-	c, err := s.eng.ContainerInspect(ctx, ContainerName)
+	st, err := status(ctx, s.run)
 	if err != nil {
 		return fmt.Errorf("nginx reload: %w", err)
 	}
-	if !c.State.Running {
-		return fmt.Errorf("nginx reload: container %s is %s", ContainerName, c.State.Status)
+	if !st.Active {
+		return fmt.Errorf("nginx reload: %s is %s", UnitName, st.State)
 	}
-	if err := s.eng.ContainerKill(ctx, ContainerName, "HUP"); err != nil {
-		return fmt.Errorf("nginx reload: %w", err)
+	if out, err := s.run.Run(ctx, "systemctl", "reload", UnitName); err != nil {
+		return fmt.Errorf("nginx reload: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// Healthy checks that the container is running and, after a short settle, that
-// it is the same process: a master that exited on the new config and was
-// restarted by the restart policy shows as a new start time.
+// Healthy checks that nginx is running and, after a short settle, that it is the
+// same process: a master that exited on the new config and was restarted by
+// systemd shows as a new run of the unit.
 func (s *Service) Healthy(ctx context.Context) error {
-	before, err := s.running(ctx)
+	return stable(ctx, s.run, s.wait)
+}
+
+func stable(ctx context.Context, run Runner, wait time.Duration) error {
+	before, err := running(ctx, run)
 	if err != nil {
 		return err
 	}
 	select {
-	case <-time.After(s.wait):
+	case <-time.After(wait):
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	after, err := s.running(ctx)
+	after, err := running(ctx, run)
 	if err != nil {
 		return err
 	}
-	if after.State.Pid != before.State.Pid || !after.State.StartedAt.Equal(before.State.StartedAt) {
-		return errors.New("nginx restarted right after the reload: the new configuration made the master exit")
+	if after.PID != before.PID || after.Since != before.Since {
+		return errors.New("nginx restarted right after the change: the new configuration made the master exit")
 	}
 	return nil
 }
 
-func (s *Service) running(ctx context.Context) (docker.Container, error) {
-	c, err := s.eng.ContainerInspect(ctx, ContainerName)
+func running(ctx context.Context, run Runner) (Status, error) {
+	st, err := status(ctx, run)
 	if err != nil {
-		return c, fmt.Errorf("nginx health: %w", err)
+		return st, fmt.Errorf("nginx health: %w", err)
 	}
-	if !c.State.Running || c.State.Restarting {
-		return c, fmt.Errorf("nginx health: container is %s", c.State.Status)
+	if !st.Active {
+		return st, fmt.Errorf("nginx health: %s is %s", UnitName, st.State)
 	}
-	return c, nil
+	return st, nil
 }
 
-// ValidateOnly is the nginx service for changes made while the container is not
-// yet running (boot): it validates in a one-shot container and does not reload.
-type ValidateOnly struct {
-	eng   Engine
-	p     Paths
-	image ImageFunc
+// State is nginx as systemd reports it. The bool is false when the unit does not
+// exist yet.
+func (s *Service) State(ctx context.Context) (Status, bool, error) {
+	st, err := status(ctx, s.run)
+	return st, st.Loaded, err
 }
+
+// ValidateOnly is the nginx service for changes made while nginx is not yet
+// running (boot): it validates and does not reload.
+type ValidateOnly struct{ s *Service }
 
 // NewValidateOnly returns the validate-only service. It shares the apply lock
 // with Service because it has the same name.
-func NewValidateOnly(eng Engine, p Paths, image ImageFunc) *ValidateOnly {
-	return &ValidateOnly{eng: eng, p: p, image: image}
+func NewValidateOnly(p Paths, run Runner) *ValidateOnly {
+	return &ValidateOnly{s: NewService(p, run)}
 }
 
 // Name implements confedit.Service.
 func (v *ValidateOnly) Name() string { return ServiceName }
 
 // Validate implements confedit.Service.
-func (v *ValidateOnly) Validate(ctx context.Context) (string, error) {
-	img, err := v.image(ctx)
-	if err != nil {
-		return "", err
-	}
-	return validate(ctx, v.eng, v.p, img)
-}
+func (v *ValidateOnly) Validate(ctx context.Context) (string, error) { return v.s.Validate(ctx) }
 
-// Reload does nothing: the container is about to be started with these files.
+// Reload does nothing: nginx is about to be started with these files.
 func (v *ValidateOnly) Reload(context.Context) error { return nil }
 
 // Healthy does nothing for the same reason.
@@ -261,84 +239,139 @@ var (
 	_ confedit.Service = (*ValidateOnly)(nil)
 )
 
-// Runtime manages the nginx container's existence: the container itself, made
-// from the build that serves.
+// UnitText is the systemd unit that runs nginx. The master runs as root so it can
+// bind 80 and 443 and read private keys; the workers drop to the www account the
+// build was configured with. Stop is a graceful quit.
+func UnitText(p Paths) string {
+	return fmt.Sprintf(`# Managed by PB panel. Rewritten when the panel starts; do not edit.
+[Unit]
+Description=Panel nginx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=%[1]s -t -c %[2]s
+ExecStart=%[1]s -c %[2]s -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGQUIT
+KillMode=mixed
+TimeoutStopSec=%[3]d
+Restart=on-failure
+RestartSec=1
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+`, p.Binary(), p.ConfPath(), int(stopTimeout/time.Second))
+}
+
+// DefaultUnitDir is where the unit file is written.
+const DefaultUnitDir = "/etc/systemd/system"
+
+// Runtime manages nginx's existence as a service: the unit, whether it runs, and
+// whether the operator stopped it.
 type Runtime struct {
-	eng   Engine
-	p     Paths
-	image ImageFunc
-	flags FlagStore
+	p       Paths
+	run     Runner
+	flags   FlagStore
+	unitDir string
+	retire  func(ctx context.Context) error
+}
+
+// WithRetire sets what runs right before nginx is first started by the unit: it
+// removes whatever else holds nginx's ports. A host upgraded from the container
+// runtime still has the panel-nginx container serving on 80 and 443, and the
+// native nginx cannot bind them until it is gone. It does not run when nginx is
+// already running under systemd.
+func (r *Runtime) WithRetire(f func(ctx context.Context) error) *Runtime {
+	r.retire = f
+	return r
 }
 
 // NewRuntime returns the nginx runtime.
-func NewRuntime(eng Engine, p Paths, image ImageFunc) *Runtime {
-	return &Runtime{eng: eng, p: p, image: image}
+func NewRuntime(p Paths, run Runner) *Runtime {
+	return &Runtime{p: p, run: run, unitDir: DefaultUnitDir}
 }
 
-// ImagePresent reports whether a build serves and its image is on the host.
-func (r *Runtime) ImagePresent(ctx context.Context) (bool, error) {
-	img, err := r.image(ctx)
-	if errors.Is(err, ErrNoImage) {
+// WithUnitDir writes the unit file somewhere other than systemd's own directory.
+// Tests use it; production does not.
+func (r *Runtime) WithUnitDir(dir string) *Runtime {
+	r.unitDir = dir
+	return r
+}
+
+// BuildPresent reports whether a build serves: the current link resolves to a
+// directory that holds a binary.
+func (r *Runtime) BuildPresent(context.Context) (bool, error) {
+	_, err := os.Stat(filepath.FromSlash(r.p.Binary()))
+	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil {
+	return err == nil, err
+}
+
+// writeUnit makes the unit file and the directories nginx writes to match what
+// this panel expects. It reports whether the unit changed.
+func (r *Runtime) writeUnit(ctx context.Context) (bool, error) {
+	for _, d := range []string{r.p.CacheDir(), r.p.MainLogDir(), r.p.RunDir()} {
+		if err := os.MkdirAll(filepath.FromSlash(d), 0o755); err != nil {
+			return false, err
+		}
+	}
+	file := filepath.Join(r.unitDir, UnitName)
+	want := UnitText(r.p)
+	if have, err := os.ReadFile(file); err == nil && string(have) == want {
+		return false, nil
+	}
+	if err := os.WriteFile(file, []byte(want), 0o644); err != nil {
 		return false, err
 	}
-	if _, err := r.eng.ImageInspect(ctx, img); err != nil {
-		if errors.Is(err, docker.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
+	if out, err := r.run.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+		return true, fmt.Errorf("nginx: systemctl daemon-reload: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return true, nil
 }
 
-// EnsureContainer creates, recreates or starts the container so it matches Spec.
-func (r *Runtime) EnsureContainer(ctx context.Context) (docker.EnsureResult, error) {
-	img, err := r.image(ctx)
+// EnsureRunning writes the unit, enables it, and starts nginx when it is not
+// running. A running nginx is left alone.
+func (r *Runtime) EnsureRunning(ctx context.Context) (EnsureResult, error) {
+	if ok, err := r.BuildPresent(ctx); err != nil {
+		return EnsureResult{}, err
+	} else if !ok {
+		return EnsureResult{}, ErrNoBuild
+	}
+	changed, err := r.writeUnit(ctx)
 	if err != nil {
-		return docker.EnsureResult{}, err
+		return EnsureResult{}, err
 	}
-	return docker.Ensure(ctx, r.eng, Spec(r.p, img), r.p.Root)
-}
-
-// ApplyMounts brings a running container up to its spec. The allowed web roots
-// are mounts, so a change to them needs this. A stopped container is left alone:
-// its next start builds it from the current spec. Without a container it does
-// nothing.
-func (r *Runtime) ApplyMounts(ctx context.Context) error {
-	c, err := r.eng.ContainerInspect(ctx, ContainerName)
-	if errors.Is(err, docker.ErrNotFound) {
-		return nil
+	if out, err := r.run.Run(ctx, "systemctl", "enable", UnitName); err != nil {
+		return EnsureResult{}, fmt.Errorf("nginx: systemctl enable: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	st, err := status(ctx, r.run)
 	if err != nil {
-		return err
+		return EnsureResult{}, err
 	}
-	if !c.State.Running {
-		return nil
+	if st.Active {
+		reason := "nginx is running"
+		if changed {
+			reason = "nginx is running; the unit changed and applies at its next start"
+		}
+		return EnsureResult{Action: ActionNone, Reason: reason}, nil
 	}
-	_, err = r.EnsureContainer(ctx)
-	return err
+	if r.retire != nil {
+		if err := r.retire(ctx); err != nil {
+			return EnsureResult{}, fmt.Errorf("nginx: retire the previous runtime: %w", err)
+		}
+	}
+	if out, err := r.run.Run(ctx, "systemctl", "start", UnitName); err != nil {
+		return EnsureResult{}, fmt.Errorf("nginx: systemctl start: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return EnsureResult{Action: ActionStart, Reason: "nginx was " + st.State}, nil
 }
-
-// State is the nginx container as Docker reports it. The bool is false when
-// there is no such container.
-func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
-	c, err := s.eng.ContainerInspect(ctx, ContainerName)
-	if errors.Is(err, docker.ErrNotFound) {
-		return docker.Container{}, false, nil
-	}
-	if err != nil {
-		return docker.Container{}, false, err
-	}
-	return c, true, nil
-}
-
-// stopTimeout is how long a graceful stop (SIGQUIT) lets nginx finish its requests.
-const stopTimeout = 25 * time.Second
 
 // StoppedKey is the stored flag that says the operator stopped nginx from the
-// panel. While it is set the boot reconcile leaves the container stopped.
+// panel. While it is set the boot reconcile leaves nginx stopped.
 const StoppedKey = "nginx.stopped"
 
 // FlagStore keeps the stopped flag. *images.Catalog satisfies it.
@@ -373,40 +406,52 @@ func (r *Runtime) WithFlags(f FlagStore) *Runtime {
 	return r
 }
 
-// Start brings the container up on the build that serves: it is created if it is
-// missing, and started if it is stopped. It clears the stopped flag first, so a
-// start that fails part-way still leaves the reconcile free to retry it.
-func (r *Runtime) Start(ctx context.Context) (docker.EnsureResult, error) {
+// Start brings nginx up on the build that serves. It clears the stopped flag
+// first, so a start that fails part-way still leaves the reconcile free to retry.
+func (r *Runtime) Start(ctx context.Context) (EnsureResult, error) {
 	if err := r.setStopped(ctx, false); err != nil {
-		return docker.EnsureResult{}, err
+		return EnsureResult{}, err
 	}
-	return r.EnsureContainer(ctx)
+	return r.EnsureRunning(ctx)
 }
 
 // Stop shuts nginx down gracefully and records that this was the operator's
-// choice, so the next panel start does not undo it. Stopping a container that is
-// already stopped, or does not exist, only records the choice.
+// choice, so neither the next panel start nor a reboot undoes it. Stopping
+// nginx that is already stopped only records the choice.
 func (r *Runtime) Stop(ctx context.Context) error {
 	if err := r.setStopped(ctx, true); err != nil {
 		return err
 	}
-	c, err := r.eng.ContainerInspect(ctx, ContainerName)
-	if errors.Is(err, docker.ErrNotFound) {
-		return nil
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout+10*time.Second)
+	defer cancel()
+	// Disabled first: a stop that took the panel down halfway must not leave nginx
+	// set to come back at boot.
+	_, _ = r.run.Run(ctx, "systemctl", "disable", UnitName)
+	if out, err := r.run.Run(ctx, "systemctl", "stop", UnitName); err != nil {
+		if strings.Contains(string(out), "not loaded") {
+			return nil
+		}
+		return fmt.Errorf("nginx: systemctl stop: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if err != nil {
-		return err
-	}
-	if !c.State.Running && !c.State.Restarting {
-		return nil
-	}
-	return r.eng.ContainerStop(ctx, ContainerName, stopTimeout)
+	return nil
 }
 
 // Restart stops nginx and starts it again.
-func (r *Runtime) Restart(ctx context.Context) (docker.EnsureResult, error) {
+func (r *Runtime) Restart(ctx context.Context) (EnsureResult, error) {
 	if err := r.Stop(ctx); err != nil {
-		return docker.EnsureResult{}, err
+		return EnsureResult{}, err
 	}
 	return r.Start(ctx)
+}
+
+// Status is nginx as systemd reports it.
+func (r *Runtime) Status(ctx context.Context) (Status, error) { return status(ctx, r.run) }
+
+// restartUnit restarts a running nginx onto the binary the current link names and
+// waits until it holds.
+func restartUnit(ctx context.Context, run Runner) error {
+	if out, err := run.Run(ctx, "systemctl", "restart", UnitName); err != nil {
+		return fmt.Errorf("systemctl restart: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return stable(ctx, run, settle)
 }

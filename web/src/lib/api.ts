@@ -12,6 +12,16 @@
  */
 
 import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
+import type {
+  DockerAction,
+  DockerContainer,
+  DockerImage,
+  DockerInfo,
+  DockerLogs,
+  DockerProcesses,
+  DockerStats,
+  DockerVolume,
+} from "@/lib/docker"
 import type { LogSource } from "@/lib/logs"
 import type { ServiceAction, ServiceRow, SysinfoResponse } from "@/lib/sysinfo"
 import {
@@ -168,7 +178,7 @@ export interface PHPVersion {
   current: ImageBuild | null
 }
 
-/** One image build of a PHP version or of the nginx image. */
+/** One build of a PHP version (a container image) or of nginx (a directory on the host). */
 export type ImageBuildState = "building" | "ready" | "failed" | "pruned"
 
 export interface ImageBuild {
@@ -551,9 +561,11 @@ export interface NginxServiceStatus {
   }
 }
 
-/** The nginx image: the base it is built from, the build in use, and its history. */
+/** The nginx builds: what they are built from, the build in use, and its history. */
 export interface NginxImage {
+  /** What every build is compiled from, for display. */
   base: string
+  /** A Docker-style reference from before nginx ran natively. The page does not show it. */
   repo: string
   /** The nginx version that serves, and the versions the page offers. */
   version: string
@@ -966,7 +978,7 @@ export class ApiClient {
     return res.job
   }
 
-  /** Starts, stops or restarts the nginx container as a job. */
+  /** Starts, stops or restarts the nginx service as a job. */
   async nginxContainerAction(action: "start" | "stop" | "restart"): Promise<JobRef> {
     const res = await this.request<{ job: JobRef }>(`/api/nginx/container/${action}`, { method: "POST" })
     return res.job
@@ -1502,6 +1514,58 @@ export class ApiClient {
 
   async logSources(): Promise<LogSource[]> {
     return (await this.request<{ sources: LogSource[] }>("/api/logs")).sources
+  }
+
+  /* --- Docker ------------------------------------------------------------ */
+
+  async dockerInfo(): Promise<DockerInfo> {
+    return this.request<DockerInfo>("/api/docker")
+  }
+
+  async dockerContainers(): Promise<DockerContainer[]> {
+    return (await this.request<{ containers: DockerContainer[] }>("/api/docker/containers")).containers
+  }
+
+  async dockerStats(): Promise<DockerStats[]> {
+    return (await this.request<{ stats: DockerStats[] }>("/api/docker/stats")).stats
+  }
+
+  async dockerProcesses(id: string): Promise<DockerProcesses> {
+    return this.request<DockerProcesses>(`/api/docker/containers/${encodeURIComponent(id)}/top`)
+  }
+
+  async dockerLogs(id: string, tail = 200): Promise<DockerLogs> {
+    return this.request<DockerLogs>(`/api/docker/containers/${encodeURIComponent(id)}/logs?tail=${tail}`)
+  }
+
+  async dockerControl(id: string, action: DockerAction): Promise<void> {
+    await this.request<unknown>(`/api/docker/containers/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+
+  async dockerRemoveContainer(id: string, force: boolean): Promise<void> {
+    await this.request<unknown>(
+      `/api/docker/containers/${encodeURIComponent(id)}${force ? "?force=true" : ""}`,
+      { method: "DELETE" },
+    )
+  }
+
+  async dockerImages(): Promise<DockerImage[]> {
+    return (await this.request<{ images: DockerImage[] }>("/api/docker/images")).images
+  }
+
+  async dockerRemoveImage(id: string): Promise<void> {
+    await this.request<unknown>(`/api/docker/images/${encodeURIComponent(id)}`, { method: "DELETE" })
+  }
+
+  async dockerVolumes(): Promise<DockerVolume[]> {
+    return (await this.request<{ volumes: DockerVolume[] }>("/api/docker/volumes")).volumes
+  }
+
+  async dockerRemoveVolume(name: string): Promise<void> {
+    await this.request<unknown>(`/api/docker/volumes/${encodeURIComponent(name)}`, { method: "DELETE" })
   }
 
   async cronJobs(): Promise<CronJob[]> {

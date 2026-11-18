@@ -7,7 +7,7 @@
 # Run it after smoke 2: it needs PHP installed and a PHP site that works. It
 # builds PHP with intl and redis and swaps the build under a live site while a
 # request loop runs; asks for a build of an extension that does not exist and
-# checks that the serving container is the same one; updates the nginx image and
+# checks that the serving container is the same one; updates the nginx build and
 # rolls it back under a request loop; and checks that a version a site uses
 # cannot be removed.
 #
@@ -21,12 +21,14 @@
 #   SMOKE_SWAP_TOLERANCE  failed requests allowed per swap, in percent (default 5)
 #
 # Independent oracle: the modules of the serving PHP are read with `php -m` in
-# the container (docker exec), the image a container runs with `docker inspect`,
+# the container (docker exec), the nginx build the master runs (/proc) and the one
+# the serving link names (readlink),
 # the request loop is curl from the workstation with a Host header. None of them
 # is a panel endpoint. The panel's answers are checked against them.
 #
 # Needs port 80 and the panel port of the VM reachable from the workstation, and
-# the VM able to pull from Docker Hub and to download the PECL packages.
+# the VM able to pull from Docker Hub, to download the PECL packages and to fetch
+# the nginx sources (a native nginx build compiles inside a builder container).
 
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -75,9 +77,25 @@ container_running() {
 	[ "$(vm "docker inspect -f '{{.State.Running}}' $1" 2>/dev/null)" = true ]
 }
 
-# nginx_image_differs OLD: the nginx container runs something other than OLD.
-nginx_image_differs() { [ "$(container_image panel-nginx)" != "$1" ]; }
-nginx_image_is() { [ "$(container_image panel-nginx)" = "$1" ]; }
+# container_changed NAME OLD_ID: NAME is a container with an id other than OLD_ID.
+container_changed() {
+	_cc=$(container_id "$1")
+	[ -n "$_cc" ] && [ "$_cc" != "$2" ]
+}
+
+# nginx runs natively: its build is a directory under versions/, and the serving
+# link names it. nginx_build_id is what the link names; nginx_running_build is
+# what the master runs, read from its executable's path under /proc.
+nginx_build_id() { vm 'basename "$(readlink /www/panel/nginx/current)"' 2>/dev/null; }
+nginx_running_build() {
+	vm 'p=$(systemctl show -p MainPID --value panel-nginx.service); basename "$(dirname "$(dirname "$(readlink /proc/$p/exe)")")"' 2>/dev/null
+}
+nginx_unit_active() { [ "$(vm 'systemctl is-active panel-nginx.service' 2>/dev/null)" = active ]; }
+nginx_master_on_link() { [ "$(nginx_build_id)" = "$(nginx_running_build)" ]; }
+
+# nginx_image_differs OLD: the serving link names a build other than OLD.
+nginx_image_differs() { [ "$(nginx_build_id)" != "$1" ]; }
+nginx_image_is() { [ "$(nginx_build_id)" = "$1" ]; }
 
 # current_tag_php: the tag of the PHP build the panel reports as current. The
 # builds list is one object per build; the current one is the object that says
@@ -87,10 +105,11 @@ current_tag_php() {
 	last_body | tr '}' '\n' | grep '"current":true' | sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' | head -n 1
 }
 
-# current_tag_nginx: the tag of the nginx build the panel reports as current.
-current_tag_nginx() {
+# current_id_nginx: the id of the nginx build the panel reports as current. The id
+# is the build's directory name under versions/, the name the link holds.
+current_id_nginx() {
 	api_call GET "$host" "$port" /api/nginx/image >/dev/null
-	last_body | sed -n 's/.*"current":{[^}]*"tag":"\([^"]*\)".*/\1/p' | head -n 1
+	last_body | sed -n 's/.*"current":{[^}]*"id":"\([^"]*\)".*/\1/p' | head -n 1
 }
 
 # bogus_failed: a build of the bogus extension is recorded as failed.
@@ -147,7 +166,10 @@ if [ -z "$pass" ]; then
 fi
 assert_not_equal "an admin password is available" "" "$pass"
 assert_http "login" 200 "$(api_login "$host" "$port" "$SMOKE_USER" "$pass")"
-wait_until 300 "the nginx container to run" container_running panel-nginx
+# The first start compiles nginx in a builder container, which takes several
+# minutes on a VM that has not built one yet.
+wait_until 900 "the nginx unit to run" nginx_unit_active
+assert_equal "the master runs the build the serving link names" "$(nginx_build_id)" "$(nginx_running_build)"
 
 assert_http "the catalogue lists PHP $PHP" 200 "$(api_call GET "$host" "$port" /api/php)"
 assert_contains "PHP $PHP is installed" '"state":"ready"' "$(last_body)"
@@ -170,6 +192,9 @@ assert_http "POST /api/php/$PHP/build starts a job" 202 \
 assert_contains "the job is a php.build" '"kind":"php.build"' "$(last_body)"
 wait_until 1500 "intl to be loaded by PHP $PHP" has_module "$PHP" intl
 wait_until 300 "redis to be loaded by PHP $PHP" has_module "$PHP" redis
+# The modules may already be there from an earlier run, so the module checks can
+# pass before the job has swapped anything: wait for the swap itself.
+wait_until 1500 "the swap to replace the container" container_changed "panel-php-$PHP" "$before_id"
 set -- $(traffic_failures "$SMOKE_TMP/swap1.txt")
 if tolerated "$1" "$2"; then
 	_pass "the site answered through the swap: $1 of $2 requests failed"
@@ -200,21 +225,24 @@ esac
 
 # --- 4. update the nginx image, roll it back, under a live site ---------------
 step 4 "update the nginx image and roll it back"
-nginx_before=$(current_tag_nginx)
+nginx_before=$(current_id_nginx)
 traffic_start "$SMOKE_TMP/nginx.txt"
 assert_http "POST /api/nginx/image/update starts a job" 202 \
 	"$(api_call POST "$host" "$port" /api/nginx/image/update '{}')"
 assert_contains "the job is an nginx.update" '"kind":"nginx.update"' "$(last_body)"
-wait_until 900 "the nginx container to run a new build" nginx_image_differs "$nginx_before"
-assert_equal "nginx runs the build the panel reports as current" "$(current_tag_nginx)" "$(container_image panel-nginx)"
+# A native build compiles nginx from source in a builder container: minutes, not seconds.
+wait_until 1500 "the serving link to name a new nginx build" nginx_image_differs "$nginx_before"
+wait_until 120 "the master to run the build the link names" nginx_master_on_link
+assert_equal "nginx runs the build the panel reports as current" "$(current_id_nginx)" "$(nginx_running_build)"
 
 api_call GET "$host" "$port" /api/nginx/image >/dev/null
 prev_id=$(last_body | sed -n 's/.*"previous":{[^}]*"id":"\([^"]*\)".*/\1/p' | head -n 1)
 assert_not_equal "a previous nginx build is kept for rollback" "" "$prev_id"
 assert_http "POST activate the previous nginx build" 202 \
 	"$(api_call POST "$host" "$port" "/api/nginx/image/builds/$prev_id/activate" '{}')"
-wait_until 300 "nginx to run the previous build again" nginx_image_is "$nginx_before"
-assert_equal "nginx runs the previous build again" "$nginx_before" "$(container_image panel-nginx)"
+wait_until 300 "the serving link to name the previous nginx build" nginx_image_is "$nginx_before"
+wait_until 120 "the master to run the previous build again" nginx_master_on_link
+assert_equal "nginx runs the previous build again" "$nginx_before" "$(nginx_running_build)"
 set -- $(traffic_failures "$SMOKE_TMP/nginx.txt")
 if tolerated "$1" "$2"; then
 	_pass "the site answered through the update and the rollback: $1 of $2 requests failed"

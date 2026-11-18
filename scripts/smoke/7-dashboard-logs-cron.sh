@@ -4,10 +4,10 @@
 #   SMOKE_HOST=root@10.0.0.5 sh scripts/smoke/7-dashboard-logs-cron.sh
 #   SMOKE_DRY_RUN=1 sh scripts/smoke/7-dashboard-logs-cron.sh   # print the plan only
 #
-# Run it after smokes 0 and 1 (the nginx container panel-nginx must be up and
-# publish port 80). It checks the system snapshot against /proc on the VM, the
+# Run it after smokes 0 and 1 (the panel-nginx unit must be active and
+# serve port 80). It checks the system snapshot against /proc on the VM, the
 # live snapshot stream, the service list and the refusal to stop the panel from
-# its own API; stops the nginx container with `docker stop` on the host and
+# its own API; stops the nginx unit with `systemctl stop` on the host and
 # waits for the panel to report it stopped, starts it again through the API and
 # checks the site serves; lists and tails log sources and searches a site access
 # log (literal, regex, case-insensitive, bad pattern); and drives cron: shell
@@ -28,12 +28,12 @@
 #                     `panel reset-password` on the VM, which signs everyone out.
 #   SMOKE_USER        admin username (default admin)
 #   SMOKE_SSH_OPTS    extra ssh options
-#   SMOKE_NGINX       nginx container name (default panel-nginx)
+#   SMOKE_NGINX       nginx service name; its unit is NAME.service (default panel-nginx)
 #   SMOKE_CRON_WAIT   seconds to wait for the scheduled run (default 150)
 #
-# Independent oracle: "is nginx stopped / is the site serving" is `docker
-# inspect` on the VM and curl from the workstation against port 80; the stop is
-# `docker stop`, not a panel call; "what is in the access log" and "what is in
+# Independent oracle: "is nginx stopped / is the site serving" is `systemctl`
+# `is-active` on the VM and curl from the workstation against port 80; the stop is
+# `systemctl stop`, not a panel call; "what is in the access log" and "what is in
 # the cron log file" are `grep` and `cat` on the VM; memory size is
 # /proc/meminfo. The panel's own claims (service state, run history, log
 # sources) are what is being tested, and each is cross-checked against one of
@@ -42,7 +42,7 @@
 #
 # What it touches: one static site (smoke7.test), two or three cron jobs named
 # smoke7-*, one script on the VM, the cron.allow_shell setting (put back), and
-# the nginx container (stopped and started). It removes all of it on exit.
+# the nginx unit (stopped and started). It removes all of it on exit.
 
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -51,6 +51,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 SMOKE_USER=${SMOKE_USER:-admin}
 SMOKE_NGINX=${SMOKE_NGINX:-panel-nginx}
+NGINX_UNIT="$SMOKE_NGINX.service"
 SMOKE_CRON_WAIT=${SMOKE_CRON_WAIT:-150}
 PANEL=/www/panel/bin/panel
 SITE=smoke7.test
@@ -97,7 +98,9 @@ qcall() {
 		set -- "$@" --data-urlencode "$_qa"
 		_qi=$((_qi + 1))
 	done
-	curl -sk -G --max-time 30 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
+	# MSYS2_ARG_CONV_EXCL: on Git Bash for Windows a "q=/path" argument is rewritten
+	# into a Windows path before curl sees it; this call must send it as typed.
+	MSYS2_ARG_CONV_EXCL='q=' curl -sk -G --max-time 30 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
 		"$@" "https://$host:$port$_qp" 2>/dev/null || true
 }
 
@@ -129,7 +132,7 @@ svc_state() {
 	last_body | grep -o "{\"name\":\"$1\"[^}]*}" | str_field state
 }
 
-nginx_running() { [ "$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)" = true ]; }
+nginx_running() { [ "$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)" = active ]; }
 nginx_state_is() { [ "$(svc_state "$SMOKE_NGINX")" = "$1" ]; }
 site_body() { curl -s --max-time 10 -H "Host: $SITE" "http://$host/${1:-}" 2>/dev/null || true; }
 site_serves() { [ "$(site_body)" = "$MARK" ]; }
@@ -179,7 +182,7 @@ cleanup_vm() {
 m7_cleanup() {
 	if [ "$CLEANED" != 1 ] && [ "$SMOKE_DRY_RUN" != 1 ]; then
 		CLEANED=1
-		nginx_running || vm "docker start $SMOKE_NGINX" >/dev/null 2>&1
+		nginx_running || vm "systemctl start $NGINX_UNIT" >/dev/null 2>&1
 		if [ -n "$port" ]; then
 			[ "$ALLOW_SHELL_CHANGED" = 1 ] && set_allow_shell "${ALLOW_SHELL_ORIG:-false}" >/dev/null 2>&1
 			cleanup_vm
@@ -190,11 +193,11 @@ m7_cleanup() {
 trap m7_cleanup EXIT INT TERM
 
 # --- 0. preflight -------------------------------------------------------------
-step 0 "preflight: panel up, docker on the VM, login, nginx container running"
+step 0 "preflight: panel up, docker on the VM, login, nginx unit active"
 assert_equal "panel.service is active (systemctl)" active "$(vm 'systemctl is-active panel' 2>/dev/null)"
 assert_ok "docker answers on the VM" vm "docker version --format '{{.Server.Version}}'"
-assert_equal "the nginx container is running (docker inspect)" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)"
+assert_equal "the nginx unit is active (systemctl)" active \
+	"$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)"
 port=$(vm "$PANEL info" 2>/dev/null | sed -n 's/^ *port  *\([0-9][0-9]*\).*/\1/p' | head -n 1)
 [ "$SMOKE_DRY_RUN" = 1 ] && port=8443
 assert_not_equal "panel info reports a port" "" "$port"
@@ -254,7 +257,7 @@ step 2 "service list, control validation, and the panel refuses to stop itself"
 assert_http "GET /api/services" 200 "$(api_call GET "$host" "$port" /api/services)"
 assert_contains "the list has panel" '"name":"panel"' "$(last_body)"
 assert_contains "the list has $SMOKE_NGINX" "\"name\":\"$SMOKE_NGINX\"" "$(last_body)"
-assert_equal "$SMOKE_NGINX is a container row" container \
+assert_equal "$SMOKE_NGINX is a systemd row" systemd \
 	"$(last_body | grep -o "{\"name\":\"$SMOKE_NGINX\"[^}]*}" | str_field kind)"
 assert_equal "the panel reports $SMOKE_NGINX running" running "$(svc_state "$SMOKE_NGINX")"
 assert_http "POST /api/services/panel/stop is refused" 403 "$(api_call POST "$host" "$port" /api/services/panel/stop '{}')"
@@ -262,19 +265,19 @@ assert_equal "the refusal class is not_allowed" not_allowed "$(err_class)"
 assert_equal "panel.service is still active after the refused stop (systemctl)" active "$(vm 'systemctl is-active panel' 2>/dev/null)"
 assert_http "an unknown service name is 404" 404 "$(api_call POST "$host" "$port" /api/services/no-such-service/restart '{}')"
 assert_http "an unknown action is 400" 400 "$(api_call POST "$host" "$port" "/api/services/$SMOKE_NGINX/explode" '{}')"
-assert_equal "$SMOKE_NGINX was not touched by the refused calls" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)"
+assert_equal "$SMOKE_NGINX was not touched by the refused calls" active \
+	"$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)"
 
 # --- 3. the exit gate: stop nginx from the host -------------------------------
-step 3 "create a site; stop the nginx container on the host; the panel shows it stopped; restart via the API; the site serves"
+step 3 "create a site; stop the nginx unit on the host; the panel shows it stopped; restart via the API; the site serves"
 assert_http "POST /api/sites ($SITE)" 201 "$(api_call POST "$host" "$port" /api/sites "{\"domain\":\"$SITE\",\"kind\":\"static\"}")"
 vm "printf '%s' '$MARK' > $SITE_ROOT/index.html"
 wait_until 30 "the site to serve" site_serves
 assert_equal "the site serves its marker (curl, Host header)" "$MARK" "$(site_body)"
 
-assert_ok "docker stop $SMOKE_NGINX (on the host, not through the panel)" vm "docker stop $SMOKE_NGINX"
-assert_equal "docker inspect says the container is not running" false \
-	"$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)"
+assert_ok "systemctl stop $NGINX_UNIT (on the host, not through the panel)" vm "systemctl stop $NGINX_UNIT"
+assert_equal "systemctl says the unit is not active" inactive \
+	"$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)"
 assert_ok "port 80 stops answering (curl)" wait_until 15 "port 80 to close" site_down
 wait_until 45 "the panel to report $SMOKE_NGINX stopped" nginx_state_is stopped
 assert_equal "GET /api/services shows $SMOKE_NGINX stopped" stopped "$(svc_state "$SMOKE_NGINX")"
@@ -283,8 +286,8 @@ assert_contains "the stopped row offers start" '"start"' \
 
 assert_http "POST /api/services/$SMOKE_NGINX/start" 204 "$(api_call POST "$host" "$port" "/api/services/$SMOKE_NGINX/start" '{}')"
 wait_until 60 "the site to serve again" site_serves
-assert_equal "docker inspect says the container is running again" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)"
+assert_equal "systemctl says the unit is active again" active \
+	"$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)"
 assert_equal "the site serves again (curl, Host header)" "$MARK" "$(site_body)"
 wait_until 45 "the panel to report $SMOKE_NGINX running" nginx_state_is running
 assert_equal "GET /api/services shows $SMOKE_NGINX running" running "$(svc_state "$SMOKE_NGINX")"
@@ -300,7 +303,7 @@ assert_ok "the access log on the VM holds the request (grep)" access_has "$REQ_P
 assert_http "GET /api/logs" 200 "$(api_call GET "$host" "$port" /api/logs)"
 assert_contains "the sources include the site access log" "\"id\":\"$ACCESS_ID\"" "$(last_body)"
 assert_contains "the sources include the site error log" "\"id\":\"site:$SITE:error\"" "$(last_body)"
-assert_contains "the sources include the nginx container output" "\"id\":\"docker:$SMOKE_NGINX\"" "$(last_body)"
+assert_contains "the sources include the nginx error log" "\"id\":\"nginx:error\"" "$(last_body)"
 assert_contains "the sources include the audit log" '"id":"panel:audit"' "$(last_body)"
 if [ "$SMOKE_DRY_RUN" != 1 ]; then
 	case $(last_body) in
@@ -315,7 +318,7 @@ assert_contains "the tail carries the request made by this script" "$REQ_PATH" "
 assert_contains "a tail without follow ends with an end event" "event: end" "$(last_body)"
 assert_http "an unknown log id is 404" 404 "$(api_call GET "$host" "$port" /api/logs/site:no-such.test:access/tail)"
 assert_http "lines=abc is 400" 400 "$(api_call GET "$host" "$port" "/api/logs/$ACCESS_ID/tail?lines=abc")"
-assert_http "the nginx container output tails" 200 "$(stream_get "/api/logs/docker:$SMOKE_NGINX/tail?lines=5" 15)"
+assert_http "the nginx error log tails" 200 "$(stream_get "/api/logs/nginx:error/tail?lines=5" 15)"
 
 # --- 5. logs: search -----------------------------------------------------------
 step 5 "search the site access log: literal, regex, case-insensitive, no hit, bad pattern"
@@ -461,13 +464,17 @@ wait_until 20 "the shell run to finish" run_finished "$SHELL_JOB" "$SRUN"
 assert_equal "the shell run succeeded" succeeded "$(run_status "$SHELL_JOB" "$SRUN")"
 assert_contains "the shell job's output is in the run" "smoke7-shell-ok" "$(last_body)"
 assert_http "PUT cron.allow_shell=false" 200 "$(set_allow_shell false)"
-assert_http "running the stored shell job is refused once the setting is off" 403 \
-	"$(api_call POST "$host" "$port" "/api/cron/$SHELL_JOB/run" '{}')"
-assert_equal "the refusal class is shell_not_allowed" shell_not_allowed "$(err_class)"
+# The run is accepted and recorded as failed: the refusal is the run's own error.
+assert_http_in "POST /api/cron/$SHELL_JOB/run is accepted" "202" "$(api_call POST "$host" "$port" "/api/cron/$SHELL_JOB/run" '{}')"
+SRUN2=$(last_body | num_field id)
+[ "$SMOKE_DRY_RUN" = 1 ] && SRUN2=2
+wait_until 20 "the refused shell run to finish" run_finished "$SHELL_JOB" "$SRUN2"
+assert_equal "the stored shell job fails once the setting is off" failed "$(run_status "$SHELL_JOB" "$SRUN2")"
+assert_contains "the failed run says shell jobs are not enabled" "not enabled" "$(last_body)"
 assert_http "DELETE /api/cron/$SHELL_JOB" 204 "$(api_call DELETE "$host" "$port" "/api/cron/$SHELL_JOB")"
 
 # --- 10. leave the VM as it was found ------------------------------------------
-step 10 "clean up and check: site, jobs and script gone, cron.allow_shell and the nginx container as found"
+step 10 "clean up and check: site, jobs and script gone, cron.allow_shell and the nginx unit as found"
 assert_http "restore cron.allow_shell=${ALLOW_SHELL_ORIG:-false}" 200 "$(set_allow_shell "${ALLOW_SHELL_ORIG:-false}")"
 ALLOW_SHELL_CHANGED=0
 assert_http "DELETE the site $SITE" 200 "$(api_call DELETE "$host" "$port" "/api/sites/$SITE?confirm=$SITE")"
@@ -478,8 +485,8 @@ case $(last_body) in
 *'"name":"smoke7-'*) _fail "no smoke7 cron job is left" "$(last_body)" ;;
 *) _pass "no smoke7 cron job is left" ;;
 esac
-assert_equal "the nginx container is running (docker inspect)" true \
-	"$(vm "docker inspect -f '{{.State.Running}}' $SMOKE_NGINX" 2>/dev/null)"
+assert_equal "the nginx unit is active (systemctl)" active \
+	"$(vm "systemctl is-active $NGINX_UNIT" 2>/dev/null)"
 assert_equal "panel.service is still active (systemctl)" active "$(vm 'systemctl is-active panel' 2>/dev/null)"
 
 smoke_finish

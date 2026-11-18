@@ -76,7 +76,7 @@ container_running() {
 }
 
 nginx_running() {
-	[ "$(vm "docker inspect -f '{{.State.Running}}' panel-nginx" 2>/dev/null)" = true ]
+	[ "$(vm 'systemctl is-active panel-nginx' 2>/dev/null)" = active ]
 }
 
 panel_healthy() {
@@ -253,7 +253,7 @@ assert_equal "PHP $B keeps running without a site (docker inspect)" true \
 	"$(vm "docker inspect -f '{{.State.Running}}' panel-php-$B" 2>/dev/null)"
 assert_ok "the remaining FPM config passes php-fpm -t on the VM" \
 	vm "docker exec panel-php-$B php-fpm -t -y /www/panel/php/$B/php-fpm.conf -c /www/panel/php/$B/php.ini"
-assert_ok "the remaining nginx config passes nginx -t on the VM" vm "docker exec panel-nginx nginx -t -c /www/panel/nginx/nginx.conf"
+assert_ok "the remaining nginx config passes nginx -t on the VM" vm "/www/panel/nginx/current/sbin/nginx -t -c /www/panel/nginx/nginx.conf"
 
 # The kept web root (it holds a phpinfo page) is this script's own; remove it.
 vm "rm -rf $ROOT"

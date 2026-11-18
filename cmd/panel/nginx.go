@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
@@ -22,15 +24,48 @@ import (
 	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
-// wafAvailability says whether the nginx version that serves can run ModSecurity.
-func wafAvailability(version string) waf.Availability {
-	if nginx.IsPQC(version) {
-		return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+// wafAvailability says whether ModSecurity can run: every nginx build ships the
+// module and the Core Rule Set, so it can as soon as a build serves.
+func wafAvailability(built bool) waf.Availability {
+	if !built {
+		return waf.Availability{Flavor: "pqc", Reason: "no nginx build serves yet; build one on the Nginx page"}
 	}
-	return waf.Availability{
-		Flavor: "standard",
-		Reason: "ModSecurity is bundled only with the post-quantum nginx flavor; build it on the Nginx page and switch to it",
+	return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+}
+
+// legacyNginxContainer is the container nginx ran in before it ran under systemd.
+const legacyNginxContainer = "panel-nginx"
+
+// containerRemover is the part of the Docker client the retirement uses.
+type containerRemover interface {
+	ContainerInspect(ctx context.Context, id string) (docker.Container, error)
+	ContainerStop(ctx context.Context, id string, timeout time.Duration) error
+	ContainerRemove(ctx context.Context, id string, force bool) error
+}
+
+// retireNginxContainer stops and removes the panel-nginx container a host
+// upgraded from the container runtime still has, so the native nginx can bind
+// its ports. Only a container the panel made is touched: one without the managed
+// label is somebody else's, and keeping it is the right answer to a port clash.
+// A host without Docker, or without the container, has nothing to retire.
+func retireNginxContainer(ctx context.Context, eng containerRemover, logger *slog.Logger) error {
+	c, err := eng.ContainerInspect(ctx, legacyNginxContainer)
+	if errors.Is(err, docker.ErrNotFound) {
+		return nil
 	}
+	if err != nil {
+		// Docker not answering means no container is holding the ports either.
+		logger.Warn("nginx: could not look for the old container", "error", err)
+		return nil
+	}
+	if c.Labels[docker.LabelManaged] != "true" {
+		return fmt.Errorf("a container named %s exists but the panel did not make it; remove or rename it", legacyNginxContainer)
+	}
+	logger.Info("nginx: removing the container it ran in before; it now runs under systemd")
+	if err := eng.ContainerStop(ctx, legacyNginxContainer, 25*time.Second); err != nil {
+		return err
+	}
+	return eng.ContainerRemove(ctx, legacyNginxContainer, true)
 }
 
 // nginxStack is everything the nginx and sites features run on. The HTTP routes
@@ -53,8 +88,10 @@ type nginxStack struct {
 }
 
 // newNginxStack wires the Docker client, the config editor, the nginx service
-// and the sites model. Nothing here touches Docker or the disk: a daemon on a
-// host without Docker still starts, and the reconcile reports what is missing.
+// and the sites model. Nothing here touches Docker, systemd or the disk: a daemon
+// on a host without Docker still starts, and the reconcile reports what is
+// missing. Docker is only the builder of nginx and the runtime of PHP-FPM; nginx
+// itself runs natively under systemd.
 func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layout, jobsMgr *jobs.Manager, ed *confedit.Editor, tlsState sites.TLSState, logger *slog.Logger) (*nginxStack, error) {
 	// The allowed web roots are one holder both services read, so the Settings
 	// page changes what the next spec and render see.
@@ -66,11 +103,12 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	if err != nil {
 		return nil, err
 	}
-	imgs, err := nginx.NewImages(eng, paths, images.NewCatalog(st), logger)
+	run := nginx.ExecRunner{}
+	imgs, err := nginx.NewImages(paths, run, nginx.DockerBuilder{Eng: eng, P: paths}, images.NewCatalog(st), logger)
 	if err != nil {
 		return nil, err
 	}
-	live := nginx.NewService(eng, paths, imgs.ImageFunc())
+	live := nginx.NewService(paths, run)
 	global := nginx.NewGlobal(st, ed, live, paths)
 	phpMgr, err := php.New(php.Options{
 		Store: st, Engine: eng, Applier: ed, Paths: phpPaths, Log: logger,
@@ -85,10 +123,12 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	if err != nil {
 		return nil, err
 	}
-	// The firewall's ModSecurity runs only on the post-quantum flavor, which is
-	// the one build that has the module and the Core Rule Set.
 	wafEngine := waf.New(st, paths, func(ctx context.Context) (waf.Availability, error) {
-		return wafAvailability(imgs.Version()), nil
+		built, err := imgs.Present(ctx)
+		if err != nil {
+			return waf.Availability{}, err
+		}
+		return wafAvailability(built), nil
 	})
 	mgr, err := sites.New(sites.Options{
 		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
@@ -124,12 +164,14 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	}
 
 	// A stop made from the panel survives a panel restart: the flag lives beside
-	// the image catalogue.
-	runtime := nginx.NewRuntime(eng, paths, imgs.ImageFunc()).WithFlags(images.NewCatalog(st))
+	// the build catalogue.
+	runtime := nginx.NewRuntime(paths, run).WithFlags(images.NewCatalog(st)).WithRetire(func(ctx context.Context) error {
+		return retireNginxContainer(ctx, eng, logger)
+	})
 
-	// The list is read now and on every change. A change recreates the running
-	// containers, because the roots are mounts; that runs as a job so the save
-	// does not wait for Docker.
+	// The list is read now and on every change. nginx reads host paths directly, so
+	// only the PHP containers, which mount the roots, are recreated; that runs as a
+	// job so the save does not wait for Docker.
 	if saved, err := reg.Str(context.Background(), settings.KeySitesWebRoots); err != nil {
 		logger.Error("web roots: read the setting", "error", err)
 	} else if list, err := webroots.Parse(saved, paths.Root); err != nil {
@@ -148,10 +190,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		}
 		roots.Set(list)
 		_, err = jobsMgr.Start(context.Background(), "sites.web_roots", func(ctx context.Context, out *jobs.Writer) error {
-			_ = out.Line("recreating running nginx and PHP containers to mount the allowed web roots")
-			if err := runtime.ApplyMounts(ctx); err != nil {
-				return err
-			}
+			_ = out.Line("recreating running PHP containers to mount the allowed web roots")
 			return phpMgr.ApplyMounts(ctx)
 		})
 		if err != nil {
@@ -164,7 +203,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
-			Boot:    nginx.NewValidateOnly(eng, paths, imgs.ImageFunc()),
+			Boot:    nginx.NewValidateOnly(paths, run),
 			Live:    live, Runtime: runtime,
 			BuildImage: buildImage, Logger: logger,
 		},

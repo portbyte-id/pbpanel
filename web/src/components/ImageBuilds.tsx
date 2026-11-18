@@ -76,6 +76,7 @@ export function formatBuildTime(iso: string): string {
 export function BuildHistory({
   builds,
   emptyText,
+  showExtensions = true,
   onActivate,
   activating,
   error,
@@ -83,6 +84,8 @@ export function BuildHistory({
 }: {
   builds: ImageBuild[]
   emptyText: string
+  /** Hide the extension column for builds that carry none, such as nginx's. */
+  showExtensions?: boolean
   onActivate?: (build: ImageBuild) => void
   activating?: boolean
   error: unknown
@@ -111,9 +114,11 @@ export function BuildHistory({
                 {build.current && <Badge variant="default">serving</Badge>}
                 {build.previous && <Badge variant="outline">previous</Badge>}
                 <span className="font-mono text-muted-foreground text-xs">{build.id}</span>
-                <span className="flex-1">
-                  <ExtensionChips names={build.extensions} empty="no extra extensions" />
-                </span>
+                {showExtensions && (
+                  <span className="flex-1">
+                    <ExtensionChips names={build.extensions} empty="no extra extensions" />
+                  </span>
+                )}
                 {canActivate && (
                   <Button
                     size="sm"

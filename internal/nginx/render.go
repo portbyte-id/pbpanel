@@ -48,7 +48,7 @@ const mainConfTemplate = `# Generated once by PB panel; from here on this file i
 # Remove one and the panel tells you which feature stopped working.
 user www;
 pid /run/nginx.pid;
-error_log /dev/stderr warn;
+error_log {{.ErrorLog}} warn;
 include {{.MainInclude}};
 
 events {
@@ -56,7 +56,7 @@ events {
 }
 
 http {
-    include /etc/nginx/mime.types;
+    include {{.MimeTypes}};
     default_type application/octet-stream;
     sendfile on;
 
@@ -244,7 +244,7 @@ location / {
 
 location ~ \.php$ {
     try_files $uri =404;
-    include /etc/nginx/fastcgi_params;
+    include {{.FastCGIParams}};
     fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     fastcgi_pass unix:{{.Socket}};
 }
@@ -280,8 +280,8 @@ func execute(name string, data any) ([]byte, error) {
 
 // RenderMainConf renders nginx.conf.
 func (p Paths) RenderMainConf() ([]byte, error) {
-	return execute("nginx.conf", struct{ MainInclude, HTTPInclude, SitesGlob, Webroot string }{
-		p.MainIncludePath(), p.HTTPIncludePath(), path.Join(p.SitesDir(), "*.conf"), p.ACMEWebroot(),
+	return execute("nginx.conf", struct{ MainInclude, HTTPInclude, SitesGlob, Webroot, MimeTypes, ErrorLog string }{
+		p.MainIncludePath(), p.HTTPIncludePath(), path.Join(p.SitesDir(), "*.conf"), p.ACMEWebroot(), p.MimeTypes(), p.MainErrorLog(),
 	})
 }
 
@@ -422,9 +422,9 @@ func (p Paths) RenderPHP(socket string) ([]byte, error) {
 		return nil, err
 	}
 	if !strings.HasPrefix(socket, p.RunDir()+"/") || path.Clean(socket) != socket {
-		return nil, fmt.Errorf("nginx: php socket %q is outside %s, where the container cannot see it", socket, p.RunDir())
+		return nil, fmt.Errorf("nginx: php socket %q is outside %s, where PHP-FPM keeps its sockets", socket, p.RunDir())
 	}
-	return execute("php", struct{ Socket string }{socket})
+	return execute("php", struct{ Socket, FastCGIParams string }{socket, p.FastCGIParams()})
 }
 
 // CheckProxyTarget validates a proxy target and returns its canonical form:

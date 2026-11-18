@@ -129,8 +129,8 @@ type ServicesOptions struct {
 	Cmd Commander
 	// Engine reaches Docker. Nil leaves container rows out.
 	Engine Engine
-	// Containers names the containers to show and control: the nginx container and
-	// one per PHP version. It is asked on every call because PHP versions come and
+	// Containers names the containers to show and control: one per PHP
+	// version. It is asked on every call because PHP versions come and
 	// go. Nil means none.
 	Containers func(ctx context.Context) ([]string, error)
 	// Apps lists and controls managed apps. Nil leaves app rows out.
@@ -143,7 +143,7 @@ type ServicesOptions struct {
 type unit struct {
 	name string // service name as shown and accepted
 	unit string // systemd unit
-	// noStop and noBlock exist for the panel's own unit: stopping it from its own
+	// noStop and noBlock exist for the panel's own unit (noStop also for nginx): stopping it from its own
 	// UI leaves nothing to start it again, and a restart must not wait on the
 	// daemon that is asking for it to end.
 	noStop, noBlock bool
@@ -155,6 +155,9 @@ var systemdUnits = []unit{
 	{name: "panel", unit: "panel.service", noStop: true, noBlock: true},
 	{name: "panel-supervisord", unit: "panel-supervisord.service"},
 	{name: "panel-firewall", unit: "panel-firewall.service"},
+	// nginx is stopped from the Nginx page, which records that the operator did it;
+	// a bare systemctl stop here would be undone by the next reconcile.
+	{name: "panel-nginx", unit: "panel-nginx.service", noStop: true},
 	{name: "docker", unit: "docker.service"},
 }
 

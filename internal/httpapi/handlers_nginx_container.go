@@ -6,17 +6,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
 // NginxContainer is what the start, stop and restart routes drive.
-// *nginx.Runtime implements it.
+// *nginx.Runtime implements it. The name is from when nginx ran in a container.
 type NginxContainer interface {
-	Start(ctx context.Context) (docker.EnsureResult, error)
+	Start(ctx context.Context) (nginx.EnsureResult, error)
 	Stop(ctx context.Context) error
-	Restart(ctx context.Context) (docker.EnsureResult, error)
+	Restart(ctx context.Context) (nginx.EnsureResult, error)
 	// Stopped says the operator stopped nginx from the panel.
 	Stopped(ctx context.Context) bool
 }
@@ -26,11 +25,12 @@ func (s *server) nginxContainerRoutes(mux *http.ServeMux, h func(func(*NginxDeps
 	mux.Handle("POST /api/nginx/image/version", h(s.handleSetNginxVersion))
 }
 
-// handleNginxContainerAction starts, stops or restarts the nginx container as a
-// job, so a graceful stop that takes a while is watched, not waited on.
+// handleNginxContainerAction starts, stops or restarts nginx as a job, so a graceful
+// stop that takes a while is watched, not waited on. The route keeps its name from
+// when nginx ran in a container; the service is a systemd unit now.
 func (s *server) handleNginxContainerAction(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
 	if n.Container == nil {
-		writeError(w, http.StatusServiceUnavailable, errUnavailable, "the nginx container cannot be controlled on this host; see the daemon log")
+		writeError(w, http.StatusServiceUnavailable, errUnavailable, "nginx cannot be controlled on this host; see the daemon log")
 		return
 	}
 	action := r.PathValue("action")
@@ -55,7 +55,7 @@ func (s *server) handleNginxContainerAction(n *NginxDeps, w http.ResponseWriter,
 	}
 	note(r, "action", action)
 	job, err := s.deps.Jobs.Start(context.WithoutCancel(r.Context()), "nginx."+action, func(ctx context.Context, out *jobs.Writer) error {
-		_ = out.Line(strings.ToUpper(action[:1]) + action[1:] + "ing the nginx container")
+		_ = out.Line(strings.ToUpper(action[:1]) + action[1:] + "ing nginx")
 		if err := run(ctx); err != nil {
 			return err
 		}

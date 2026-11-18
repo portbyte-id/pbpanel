@@ -252,7 +252,7 @@ func TestPanelContainersFollowsTheVersionSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := panelContainers(ctx, reg)
-	want := []string{"panel-nginx", "panel-php-8.3", "panel-php-8.4"}
+	want := []string{"panel-php-8.3", "panel-php-8.4"} // nginx runs under systemd, not in a container
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v, want %v", got, want)
 	}
