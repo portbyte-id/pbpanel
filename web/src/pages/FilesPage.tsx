@@ -157,7 +157,7 @@ export function FilesPage() {
   return (
     // The page fills the space AppLayout's <main> gives it. Everything but the
     // listing is shrink-0, so only the listing scrolls.
-    <div className="flex h-full min-h-[28rem] flex-col gap-3">
+    <div className="flex h-full min-h-[35rem] flex-col gap-3">
       <div
         className="border-border flex shrink-0 flex-wrap items-center gap-1 border-b"
         role="tablist"

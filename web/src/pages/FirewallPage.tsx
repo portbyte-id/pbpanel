@@ -502,7 +502,7 @@ function BlocklistSection() {
             autoComplete="off"
           />
         </div>
-        <Button type="submit" className="mt-[1.625rem]" disabled={add.isPending || addr.trim() === ""}>
+        <Button type="submit" className="mt-[2rem]" disabled={add.isPending || addr.trim() === ""}>
           {add.isPending ? "Blocking…" : "Block address"}
         </Button>
       </form>

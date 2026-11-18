@@ -303,7 +303,7 @@ export function ExtensionPicker({
 
       <ApplyError error={error} fallback="The request could not be started." />
 
-      <DialogFooter>
+      <DialogFooter className="bg-background sticky -bottom-4 -mx-4 -mb-4 border-t p-4">
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
@@ -359,7 +359,7 @@ export function ExtensionDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

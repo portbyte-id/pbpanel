@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { type CertView, type Site } from "@/lib/api"
-import { useSites, useTLSCerts } from "@/lib/queries"
+import { useApps, useSites, useTLSCerts } from "@/lib/queries"
 
 export function kindLabel(kind: Site["kind"]): string {
   if (kind === "php") return "PHP"
@@ -29,6 +29,12 @@ export function SitesPage() {
   const { data, isPending, error, refetch } = useSites()
   // Certificates are a nicety here: if they fail to load the list still works.
   const certs = useTLSCerts()
+  // Only used to name the app behind a proxy site; the list works without it.
+  const apps = useApps().data
+  const appByURL = useMemo(
+    () => new Map((apps ?? []).filter((a) => a.proxy_url !== "").map((a) => [a.proxy_url, a.name])),
+    [apps],
+  )
   // `?proxy=<url>` comes from an app's "Proxy site" button: the dialog opens on
   // "Another server" with the app's address filled in.
   const { proxy } = useSearch({ strict: false }) as { proxy?: string }
@@ -148,6 +154,11 @@ export function SitesPage() {
                   </td>
                   <td className="px-3 py-1.5 font-mono text-xs break-all">
                     {site.kind === "proxy" ? site.proxy_target : site.root}
+                    {site.kind === "proxy" && appByURL.has(site.proxy_target ?? "") && (
+                      <span className="text-muted-foreground block font-sans">
+                        App: {appByURL.get(site.proxy_target ?? "")}
+                      </span>
+                    )}
                   </td>
                   <td className="text-muted-foreground px-3 py-1.5">
                     {site.aliases.length === 0 ? "—" : site.aliases.join(", ")}

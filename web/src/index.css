@@ -23,6 +23,25 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  /* Container and breakpoint widths, scaled with the type so layouts keep their proportions. */
+  --container-3xs: 20rem;
+  --container-2xs: 22.5rem;
+  --container-xs: 25rem;
+  --container-sm: 30rem;
+  --container-md: 35rem;
+  --container-lg: 40rem;
+  --container-xl: 45rem;
+  --container-2xl: 52.5rem;
+  --container-3xl: 60rem;
+  --container-4xl: 70rem;
+  --container-5xl: 80rem;
+  --container-6xl: 90rem;
+  --container-7xl: 100rem;
+  --breakpoint-sm: 50rem;
+  --breakpoint-md: 60rem;
+  --breakpoint-lg: 80rem;
+  --breakpoint-xl: 100rem;
+  --breakpoint-2xl: 120rem;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -36,23 +55,23 @@
   --color-info: var(--info);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  /* Compact scale: spacing steps are 0.22rem (default 0.25rem) and text is one step tighter. */
-  --spacing: 0.22rem;
-  --text-xs: 0.75rem;
-  --text-xs--line-height: 1.05rem;
-  --text-sm: 0.8125rem;
-  --text-sm--line-height: 1.2rem;
-  --text-base: 0.875rem;
-  --text-base--line-height: 1.3rem;
+  /* Sizing scale at a 16px root: spacing steps are 0.275rem (default 0.25rem, 4.4px) and text runs 15px (xs) to 16px (body). Panel layout widths and breakpoints are scaled to match. */
+  --spacing: 0.275rem;
+  --text-xs: 0.9375rem;
+  --text-xs--line-height: 1.3rem;
+  --text-sm: 1rem;
+  --text-sm--line-height: 1.5rem;
+  --text-base: 1.0625rem;
+  --text-base--line-height: 1.6rem;
   /* Between sm and lg: card and dialog titles, the page title. */
-  --text-md: 0.9375rem;
-  --text-md--line-height: 1.35rem;
-  --text-lg: 1rem;
-  --text-lg--line-height: 1.4rem;
-  --text-xl: 1.125rem;
-  --text-xl--line-height: 1.5rem;
-  --text-2xl: 1.375rem;
-  --text-2xl--line-height: 1.7rem;
+  --text-md: 1.1875rem;
+  --text-md--line-height: 1.7rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.4rem;
+  --text-xl--line-height: 1.85rem;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 2.1rem;
 }
 
 :root {

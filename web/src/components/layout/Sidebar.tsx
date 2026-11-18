@@ -50,7 +50,7 @@ export function Sidebar({
         mobile
           ? "h-full w-full"
           : "sticky top-0 hidden h-svh shrink-0 transition-[width] duration-150 md:flex",
-        !mobile && (collapsed ? "w-[3.25rem]" : "w-48"),
+        !mobile && (collapsed ? "w-[4rem]" : "w-48"),
       )}
     >
       <div className={cn("flex h-11 shrink-0 items-center gap-2 px-3", collapsed && "justify-center px-0")}>
