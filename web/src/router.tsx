@@ -10,6 +10,7 @@ import { dashboardRoute } from "@/routes/_app/dashboard"
 import { appIndexRoute } from "@/routes/_app/index"
 import { firewallRoute } from "@/routes/_app/firewall"
 import { filesRoute } from "@/routes/_app/files"
+import { jobsRoute } from "@/routes/_app/jobs"
 import { logsRoute } from "@/routes/_app/logs"
 import { nginxRoute } from "@/routes/_app/nginx"
 import { phpRoute } from "@/routes/_app/php"
@@ -35,6 +36,7 @@ const routeTree = rootRoute.addChildren([
     appIndexRoute,
     dashboardRoute,
     servicesRoute,
+    jobsRoute,
     sitesRoute,
     siteRoute,
     filesRoute,

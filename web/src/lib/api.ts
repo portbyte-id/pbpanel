@@ -12,6 +12,7 @@
  */
 
 import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
+import type { JobRecord } from "@/lib/jobs"
 import type {
   DockerAction,
   DockerContainer,
@@ -1570,6 +1571,12 @@ export class ApiClient {
 
   async cronJobs(): Promise<CronJob[]> {
     return (await this.request<{ jobs: CronJob[] }>("/api/cron")).jobs
+  }
+
+  /** The jobs the panel knows about, newest first. `active` keeps queued and running ones. */
+  async jobs(options: { active?: boolean } = {}): Promise<JobRecord[]> {
+    const query = options.active ? "?state=active" : ""
+    return (await this.request<{ jobs: JobRecord[] }>(`/api/jobs${query}`)).jobs
   }
 
   async createCronJob(input: CronJobInput): Promise<CronJob> {

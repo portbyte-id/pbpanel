@@ -229,8 +229,8 @@ export function AlertsPanel({
         </p>
       )}
       <p className="text-muted-foreground border-border border-t px-3 py-2 text-xs leading-4">
-        Failed background jobs are not listed here: the panel has no job list to read. Failed cron
-        runs and failed actions in the audit log are.
+        Failed background jobs are not listed here; the Jobs page shows them. Failed cron runs and
+        failed actions in the audit log are.
       </p>
     </Panel>
   )

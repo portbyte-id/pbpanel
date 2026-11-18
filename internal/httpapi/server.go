@@ -74,6 +74,7 @@ func (s *server) routes() http.Handler {
 
 	// The jobs SSE handler is served by internal/jobs and guarded here, so a job
 	// id is not a way to read another session's output without a session.
+	mux.Handle("GET /api/jobs", s.requireAuth(http.HandlerFunc(s.handleJobsList)))
 	mux.Handle(jobs.EventsPattern, s.requireAuth(http.HandlerFunc(s.deps.Jobs.ServeEvents)))
 
 	// The SPA is deliberately not behind requireAuth: its files are what renders

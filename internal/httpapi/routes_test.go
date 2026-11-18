@@ -40,6 +40,7 @@ func protectedRoutes() []protectedRoute {
 		{name: "audit", method: http.MethodGet, path: "/api/audit"},
 		{name: "job events", method: http.MethodGet, path: "/api/jobs/00000000000000000000000000000000/events",
 			okStatus: http.StatusNotFound},
+		{name: "jobs list", method: http.MethodGet, path: "/api/jobs"},
 
 		// The nginx and sites routes. This harness has no nginx, so a request
 		// that passes the session and CSRF checks reaches the handler and gets
