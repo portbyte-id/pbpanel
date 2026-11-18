@@ -109,6 +109,9 @@ func (rr *renewRig) put(t *testing.T, domain, source string, expiresIn time.Dura
 	c := sampleCert(domain)
 	c.Source = source
 	c.NotAfter = rr.now.Add(expiresIn)
+	// A 90-day certificate however near its end: a short lifetime would make the
+	// renewer treat it as short-lived and use a different window.
+	c.NotBefore = c.NotAfter.Add(-90 * day)
 	if source == SourceDNS01 {
 		c.Provider = "cf"
 	}

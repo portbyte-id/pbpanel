@@ -61,6 +61,10 @@ const (
 	dirMode os.FileMode = 0o700
 )
 
+// bootstrapOrg is the organization the installer's self-signed certificate
+// carries, which is how the panel tells it from one an operator uploaded.
+const bootstrapOrg = "Server Panel"
+
 // GenerateSelfSigned writes a self-signed certificate and key to paths. It
 // creates the directory with 0750, replaces any existing pair, and leaves the
 // key at 0600.
@@ -87,7 +91,7 @@ func GenerateSelfSigned(paths CertPaths, hosts []string) error {
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   commonName(hosts),
-			Organization: []string{"Server Panel"},
+			Organization: []string{bootstrapOrg},
 		},
 		// Backdated an hour so a host whose clock is slightly behind does not
 		// reject a certificate that was just issued.

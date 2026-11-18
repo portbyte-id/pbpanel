@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 )
@@ -40,6 +41,17 @@ type CertReloader struct {
 	mu   sync.RWMutex
 	cert *tls.Certificate
 	info CertInfo
+	// bootstrap is true while the certificate is the one the installer generated.
+	bootstrap bool
+}
+
+// IsBootstrap reports whether the panel is still serving the self-signed
+// certificate the installer generated, as opposed to one the operator uploaded
+// (a self-signed one included) or one issued by a CA.
+func (r *CertReloader) IsBootstrap() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.bootstrap
 }
 
 // NewCertReloader loads the pair at paths. If the pair on disk is unusable but
@@ -99,6 +111,7 @@ func (r *CertReloader) install(cert tls.Certificate) error {
 	cert.Leaf = leaf
 	r.mu.Lock()
 	r.cert, r.info = &cert, describeLeaf(leaf)
+	r.bootstrap = r.info.SelfSigned && slices.Contains(leaf.Subject.Organization, bootstrapOrg)
 	r.mu.Unlock()
 	return nil
 }

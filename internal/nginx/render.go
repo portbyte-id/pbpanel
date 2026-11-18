@@ -76,7 +76,17 @@ http {
         listen 80 default_server;
         listen [::]:80 default_server;
         server_name _;
-        return 444;
+
+        # An IP-address certificate is validated against the bare address, which
+        # no site claims, so the challenge path is answered here.
+        location ^~ /.well-known/acme-challenge/ {
+            root {{.Webroot}};
+            default_type text/plain;
+            try_files $uri =404;
+        }
+        location / {
+            return 444;
+        }
     }
 
     include {{.SitesGlob}};
@@ -258,8 +268,8 @@ func execute(name string, data any) ([]byte, error) {
 
 // RenderMainConf renders nginx.conf.
 func (p Paths) RenderMainConf() ([]byte, error) {
-	return execute("nginx.conf", struct{ MainInclude, HTTPInclude, SitesGlob string }{
-		p.MainIncludePath(), p.HTTPIncludePath(), path.Join(p.SitesDir(), "*.conf"),
+	return execute("nginx.conf", struct{ MainInclude, HTTPInclude, SitesGlob, Webroot string }{
+		p.MainIncludePath(), p.HTTPIncludePath(), path.Join(p.SitesDir(), "*.conf"), p.ACMEWebroot(),
 	})
 }
 

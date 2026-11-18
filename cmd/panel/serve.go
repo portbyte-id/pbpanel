@@ -193,6 +193,7 @@ func serve(ctx context.Context, _ []string) error {
 	waitM7 := m7.start(ctx, logger)
 	if tlsSvc != nil {
 		tlsSvc.start(ctx)
+		tlsSvc.startAutoIP(ctx, reg, auditW, logger)
 	}
 
 	// After the listener: a slow image build or an absent Docker must not keep

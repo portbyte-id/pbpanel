@@ -49,6 +49,9 @@ const (
 	KeyTLSACMEDirectory = "tls.acme.directory"
 	// KeyTLSRenewDaysBefore is how many days before expiry a certificate is renewed.
 	KeyTLSRenewDaysBefore = "tls.renew.days_before"
+	// KeyTLSPanelAutoIP turns on the automatic IP-address certificate for the
+	// panel's own listener on a host with a public IP.
+	KeyTLSPanelAutoIP = "tls.panel.auto_ip"
 
 	// DefaultACMEDirectory is Let's Encrypt staging. Staging certificates are
 	// not trusted by browsers; switching to production is a deliberate act.
@@ -229,6 +232,15 @@ func defaultKeys() []key {
 				Group:       groupTLS,
 			},
 			check: rangeInt(1, 60),
+		},
+		{
+			meta: Meta{
+				Name:        KeyTLSPanelAutoIP,
+				Type:        TypeBool,
+				Default:     "true",
+				Description: "When this host has a public IPv4 address on one of its own interfaces (not behind NAT), request an IP-address certificate for the panel from the ACME directory and keep it renewed. It never replaces a certificate you uploaded or one issued for a host name. Port 80 must be reachable from the internet.",
+				Group:       groupTLS,
+			},
 		},
 		{
 			meta: Meta{
