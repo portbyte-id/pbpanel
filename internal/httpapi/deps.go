@@ -76,6 +76,10 @@ type Deps struct {
 	// /api/waf/traffic, /requests and /events answering 503.
 	WAFMon WAFMonitor
 
+	// Docker is the Docker page: listings, resource monitor and container
+	// controls. Nil leaves /api/docker answering 503.
+	Docker DockerService
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

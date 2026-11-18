@@ -183,6 +183,7 @@ func serve(ctx context.Context, _ []string) error {
 		Logs:     m7.Logs,
 		Cron:     m7.Cron,
 		WAFMon:   wafCollector,
+		Docker:   newDockerMgmt(logger),
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {

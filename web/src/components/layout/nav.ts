@@ -3,6 +3,7 @@ import {
   Activity,
   AppWindow,
   CalendarClock,
+  Container,
   Cpu,
   FileText,
   FolderTree,
@@ -80,6 +81,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { label: "Firewall", icon: ShieldCheck, path: "/firewall", description: "Open ports and rules", keywords: "iptables ports" },
       { label: "Cron", icon: CalendarClock, path: "/cron", description: "Scheduled jobs and their run history", keywords: "schedule" },
+      { label: "Docker", icon: Container, path: "/docker", description: "Containers, images and volumes, with live resource use", keywords: "containers images volumes stats compose" },
       { label: "Traffic", icon: Activity, path: "/traffic", description: "Live requests, errors and firewall events", keywords: "waf requests monitor modsecurity" },
       { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files, and the WAF audit", keywords: "tail waf audit modsecurity" },
       { label: "Apps", icon: AppWindow, path: "/apps", description: "Node and custom apps run by the panel", keywords: "node process" },
