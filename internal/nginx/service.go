@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
+	"github.com/portbyte-id/server-panel/internal/native"
 )
 
 // ErrNoBuild is a start asked for before any build exists.
@@ -26,29 +25,20 @@ var settle = 750 * time.Millisecond
 // The unit says the same; this is the budget the panel waits for.
 const stopTimeout = 25 * time.Second
 
-// Runner runs a host command and returns its combined output. The error of a
-// command that ran and failed carries ExitCode() (*exec.ExitError does).
-type Runner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-}
+// unit is nginx's systemd unit, as the shared helpers name it.
+var unit = native.Unit{Product: product, Name: UnitName}
+
+// Runner runs a host command and returns its combined output.
+type Runner = native.Runner
 
 // ExecRunner runs commands on this host.
-type ExecRunner struct{}
+type ExecRunner = native.ExecRunner
 
-// Run implements Runner.
-func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
+// Status is nginx as systemd reports it.
+type Status = native.Status
 
-// exitCode is a failed command's exit status, and false when the command did not
-// run at all.
-func exitCode(err error) (int, bool) {
-	var ee interface{ ExitCode() int }
-	if errors.As(err, &ee) {
-		return ee.ExitCode(), true
-	}
-	return 0, false
-}
+// status asks systemd about the nginx unit.
+func status(ctx context.Context, run Runner) (Status, error) { return native.StatusOf(ctx, run, unit) }
 
 // EnsureAction says what EnsureRunning did.
 type EnsureAction string
@@ -65,48 +55,6 @@ const (
 type EnsureResult struct {
 	Action EnsureAction
 	Reason string
-}
-
-// Status is nginx as systemd reports it.
-type Status struct {
-	// Loaded says systemd knows the unit: false before the first start, when the
-	// unit file has not been written.
-	Loaded bool `json:"loaded"`
-	// Active says the unit is running.
-	Active bool `json:"active"`
-	// State is systemd's ActiveState: active, inactive, failed, activating...
-	State string `json:"state"`
-	// PID is the master process, 0 when none runs.
-	PID int `json:"pid"`
-	// Since identifies this run of the unit: it changes when nginx restarts.
-	Since string `json:"since"`
-}
-
-// status asks systemd about the unit.
-func status(ctx context.Context, run Runner) (Status, error) {
-	out, err := run.Run(ctx, "systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "MainPID", "-p", "ActiveEnterTimestampMonotonic", UnitName)
-	if err != nil {
-		return Status{}, fmt.Errorf("nginx: ask systemd about %s: %w: %s", UnitName, err, strings.TrimSpace(string(out)))
-	}
-	var st Status
-	for line := range strings.SplitSeq(string(out), "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok {
-			continue
-		}
-		switch k {
-		case "LoadState":
-			st.Loaded = v == "loaded"
-		case "ActiveState":
-			st.State = v
-		case "MainPID":
-			st.PID, _ = strconv.Atoi(v)
-		case "ActiveEnterTimestampMonotonic":
-			st.Since = v
-		}
-	}
-	st.Active = st.State == "active"
-	return st, nil
 }
 
 // Service is nginx as a confedit.Service: it validates with `nginx -t`, reloads
@@ -144,7 +92,7 @@ func test(ctx context.Context, run Runner, bin string, p Paths, what string) (st
 	if err == nil {
 		return string(out), nil
 	}
-	if code, ran := exitCode(err); ran {
+	if code, ran := native.ExitCode(err); ran {
 		return string(out), fmt.Errorf("nginx -t rejected %s (exit %d)", what, code)
 	}
 	return "", fmt.Errorf("nginx -t could not be run: %w", err)
@@ -171,38 +119,7 @@ func (s *Service) Reload(ctx context.Context) error {
 // same process: a master that exited on the new config and was restarted by
 // systemd shows as a new run of the unit.
 func (s *Service) Healthy(ctx context.Context) error {
-	return stable(ctx, s.run, s.wait)
-}
-
-func stable(ctx context.Context, run Runner, wait time.Duration) error {
-	before, err := running(ctx, run)
-	if err != nil {
-		return err
-	}
-	select {
-	case <-time.After(wait):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	after, err := running(ctx, run)
-	if err != nil {
-		return err
-	}
-	if after.PID != before.PID || after.Since != before.Since {
-		return errors.New("nginx restarted right after the change: the new configuration made the master exit")
-	}
-	return nil
-}
-
-func running(ctx context.Context, run Runner) (Status, error) {
-	st, err := status(ctx, run)
-	if err != nil {
-		return st, fmt.Errorf("nginx health: %w", err)
-	}
-	if !st.Active {
-		return st, fmt.Errorf("nginx health: %s is %s", UnitName, st.State)
-	}
-	return st, nil
+	return native.Stable(ctx, s.run, unit, s.wait)
 }
 
 // State is nginx as systemd reports it. The bool is false when the unit does not
@@ -453,5 +370,5 @@ func restartUnit(ctx context.Context, run Runner) error {
 	if out, err := run.Run(ctx, "systemctl", "restart", UnitName); err != nil {
 		return fmt.Errorf("systemctl restart: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return stable(ctx, run, settle)
+	return native.Stable(ctx, run, unit, settle)
 }

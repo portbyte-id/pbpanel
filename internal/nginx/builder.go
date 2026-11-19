@@ -1,17 +1,15 @@
 package nginx
 
 import (
-	"bufio"
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/native"
 )
 
 // Names. A build is stored under VersionsDir by ID; which one serves is the
@@ -101,60 +99,29 @@ const (
 //go:embed builder.Dockerfile
 var builderDockerfile string
 
-// ErrUnsupportedHost is a host the builder cannot match yet.
-var ErrUnsupportedHost = errors.New("nginx: no builder image matches this host")
+// product is what the shared native helpers call nginx in an error.
+const product = "nginx"
 
-// Host is the part of /etc/os-release a build is matched on.
-type Host struct {
-	ID        string // ubuntu, debian, rocky
-	VersionID string // 26.04, 12, 9.8
-}
+// Host is the part of /etc/os-release a build is matched on, shared with PHP,
+// which builds the same way.
+type Host = native.Host
+
+// ErrUnsupportedHost is a host the builder cannot match yet.
+var ErrUnsupportedHost = native.ErrUnsupportedHost
+
+// buildMarkers is what a finished build's archive must hold: the program, and the
+// release it compiled.
+var buildMarkers = []string{"sbin/nginx", "version"}
 
 // ReadHost parses an os-release file.
-func ReadHost(file string) (Host, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return Host{}, fmt.Errorf("nginx: read the host release: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	return parseHost(f)
-}
+func ReadHost(file string) (Host, error) { return native.ReadHost(file, product) }
 
-func parseHost(r io.Reader) (Host, error) {
-	var h Host
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(sc.Text(), "=")
-		if !ok {
-			continue
-		}
-		v = strings.Trim(v, `"'`)
-		switch k {
-		case "ID":
-			h.ID = v
-		case "VERSION_ID":
-			h.VersionID = v
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return Host{}, err
-	}
-	if h.ID == "" || h.VersionID == "" {
-		return Host{}, errors.New("nginx: the host release names no ID or VERSION_ID")
-	}
-	return h, nil
-}
+func parseHost(r io.Reader) (Host, error) { return native.ParseHost(r, product) }
 
 // BuilderImage is the image a build compiles on: the same distro and release as
 // the host, so the binary links the host's own glibc. The EL family is not built
 // yet (development plan M9: it needs a dnf builder and SELinux labels).
-func BuilderImage(h Host) (string, error) {
-	switch h.ID {
-	case "ubuntu", "debian":
-		return h.ID + ":" + h.VersionID, nil
-	}
-	return "", fmt.Errorf("%w: %s %s is not supported yet", ErrUnsupportedHost, h.ID, h.VersionID)
-}
+func BuilderImage(h Host) (string, error) { return native.BuilderImage(h, product) }
 
 // DockerfileFor is the build recipe for one build ID on a builder image, for a
 // series (the newest patch is looked up) or one release.
@@ -178,26 +145,13 @@ func DockerfileFor(base, id, version string, p Paths) []byte {
 	).Replace(builderDockerfile))
 }
 
-func say(p docker.Progress, line string) {
-	if p != nil {
-		p(line)
-	}
-}
-
 // Builder makes the build with one ID: a finished directory under VersionsDir.
 type Builder interface {
 	Build(ctx context.Context, id, version string, progress docker.Progress) error
 }
 
-// BuildEngine is the part of the Docker client the builder uses. Docker only
-// compiles: nothing it makes keeps running.
-type BuildEngine interface {
-	ImageBuild(ctx context.Context, opts docker.BuildOptions, progress docker.Progress) (docker.Image, error)
-	ContainerCreate(ctx context.Context, name string, cfg docker.ContainerConfig) (string, error)
-	ContainerArchive(ctx context.Context, id, path string) (io.ReadCloser, error)
-	ContainerRemove(ctx context.Context, id string, force bool) error
-	ImageRemove(ctx context.Context, ref string) error
-}
+// BuildEngine is the part of the Docker client the builder uses.
+type BuildEngine = native.BuildEngine
 
 // DockerBuilder compiles a build in a builder image and reads the prefix out of it.
 type DockerBuilder struct {
@@ -211,45 +165,17 @@ type DockerBuilder struct {
 // Build compiles build id of version and leaves it at P.BuildDir(id). The builder
 // image and container are removed whether or not it worked.
 func (b DockerBuilder) Build(ctx context.Context, id, version string, progress docker.Progress) error {
-	file := b.OSRelease
-	if file == "" {
-		file = "/etc/os-release"
-	}
-	host, err := ReadHost(file)
-	if err != nil {
-		return err
-	}
-	base, err := BuilderImage(host)
-	if err != nil {
-		return err
-	}
-	say(progress, "building nginx "+version+" on "+base)
-
-	tag := "panel/nginx-build:" + id
-	bg := context.WithoutCancel(ctx)
-	if _, err := b.Eng.ImageBuild(ctx, docker.BuildOptions{
-		Tag: tag, Dockerfile: DockerfileFor(base, id, version, b.P), Pull: true,
-		Labels: map[string]string{docker.LabelManaged: "true"},
-	}, progress); err != nil {
-		return err
-	}
-	defer func() { _ = b.Eng.ImageRemove(bg, tag) }()
-
-	name := "panel-nginx-build-" + id
-	cid, err := b.Eng.ContainerCreate(ctx, name, docker.ContainerConfig{
-		Image: tag, Cmd: []string{"true"},
-		Labels: map[string]string{docker.LabelManaged: "true"},
-	})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = b.Eng.ContainerRemove(bg, cid, true) }()
-
-	say(progress, "copying the build out of the builder image")
-	rc, err := b.Eng.ContainerArchive(ctx, cid, b.P.BuildDir(id))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rc.Close() }()
-	return ExtractBuild(rc, b.P.VersionsDir(), id)
+	return native.DockerBuilder{
+		Eng:       b.Eng,
+		OSRelease: b.OSRelease,
+		Spec: native.Spec{
+			Product:         product,
+			TagPrefix:       "panel/nginx-build",
+			ContainerPrefix: "panel-nginx-build-",
+			BuildDir:        b.P.BuildDir,
+			VersionsDir:     b.P.VersionsDir,
+			Dockerfile:      func(base, id, version string) []byte { return DockerfileFor(base, id, version, b.P) },
+			Required:        buildMarkers,
+		},
+	}.Build(ctx, id, version, progress)
 }
