@@ -362,6 +362,32 @@ catalogue pruner or `docker rmi` removes them.
 **Gate:** upgrade the sandbox, which has PHP sites on Docker. The sites keep answering after the
 swap; no `panel-php-*` container remains.
 
+#### Step 5 result (2026-11-20, commit `c3130c3`)
+
+`php.Runtime.WithRetire` fires right before the first `systemctl start` of a version, wired through
+`Manager.runtime()`, both confedit services, and `cmd/panel`'s `retirePHPContainer` over the Docker
+client. A container with the managed label is stopped and removed; one without it is refused with
+"a container the panel did not make"; no container and a dead Docker are no-ops. Covered by fakes in
+`cmd/panel/retire_test.go` and `internal/php`.
+
+The sandbox gate ran as a **real upgrade, nothing faked**: `main@66dd38c` was built from source and
+installed, PHP 8.3 was pulled the container way, site `up5.test` answered 200 from the
+`panel-php-8.3` container, then this branch was installed with `panel upgrade`. After: the site
+still answered 200 with PHP 8.3.37, `docker ps -a` shows no PHP container, the unit is active
+`Type=notify`, `current` names a real build, `journal:panel-php-8.3.service` appears in
+`GET /api/logs`, and the old `panel/php:*` image is left on disk. The retire log line and the unit
+start are about one second apart — that is the 502 gap, and it is smaller than feared.
+
+Two findings for steps 8 and 9:
+
+1. **The first native start happens at the panel restart after the build finishes, not during it.**
+   The boot reconcile runs only at daemon start: an upgrade marks the version absent by design, the
+   ~6-minute native build runs while the container keeps serving, and the next boot reconcile
+   retires the container and starts the unit. Any wording that implies the swap is instantaneous at
+   upgrade time is wrong.
+2. A placeholder `panel.db` left by a sandbox reprovision must be removed before `panel install`,
+   or the install fails with "file is not a database". Sandbox hygiene, not product behaviour.
+
 ### Step 6: full extension catalogue
 
 Fill `ConfigureFlags` for all 25 entries; build each alone and the whole set together; check
