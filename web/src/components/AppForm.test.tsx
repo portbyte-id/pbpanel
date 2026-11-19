@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AppForm, formatEnv, nodeMajors, parseEnv, parseLines } from "@/components/AppDialog"
 import { appendLog } from "@/components/AppLogs"
-import { ApiError, type NodeVersion, type PanelApp } from "@/lib/api"
+import { APPS_ROOT } from "@/components/PathPicker"
+import { ApiError, api, type FMEntry, type FMListing, type NodeVersion, type PanelApp } from "@/lib/api"
 import { domainsOf, formatUptime, isRunning, typeLabel } from "@/pages/AppsPage"
 import { validNodeRequest } from "@/pages/RuntimesPage"
 
@@ -79,6 +80,32 @@ describe("small helpers", () => {
 })
 
 describe("AppForm", () => {
+  const entry = (parent: string, name: string, kind: FMEntry["kind"]): FMEntry => ({
+    name,
+    path: `${parent}/${name}`,
+    kind,
+    size: 0,
+    mode: 0o644,
+    uid: 0,
+    gid: 0,
+    owner: "www",
+    group: "www",
+    mtime: 0,
+  })
+  const listing = (path: string, entries: FMEntry[]): FMListing => ({
+    path,
+    entries,
+    total: entries.length,
+    offset: 0,
+  })
+  const appDir = `${APPS_ROOT}/web`
+  const bin = `${appDir}/bin`
+  const tree: Record<string, FMEntry[]> = {
+    [APPS_ROOT]: [entry(APPS_ROOT, "web", "dir")],
+    [appDir]: [entry(appDir, "bin", "dir"), entry(appDir, "notes.txt", "file")],
+    [bin]: [entry(bin, "web-binary", "file"), entry(bin, "notes.txt", "file")],
+  }
+
   const renderForm = (props: Partial<React.ComponentProps<typeof AppForm>> = {}) => {
     const onSubmit = vi.fn()
     render(
@@ -226,6 +253,149 @@ describe("AppForm", () => {
         restart: "never", autostart: false, port: 8080,
       }),
     )
+  })
+
+  describe("the path browsers", () => {
+    const mockTree = () =>
+      vi.spyOn(api, "fmList").mockImplementation(async ({ path }) => listing(path, tree[path] ?? []))
+
+    afterEach(() => vi.restoreAllMocks())
+
+    it("offers folders and files for the program, and fills the field", async () => {
+      const fm = mockTree()
+      const user = userEvent.setup()
+      const onSubmit = renderForm()
+
+      await user.type(screen.getByLabelText("Name"), "web")
+      await user.click(screen.getByRole("button", { name: "Browse… for the program" }))
+      const dialog = await screen.findByRole("dialog", { name: "Choose the program" })
+      // Starts in the app's own folder, which exists here.
+      expect(fm).toHaveBeenCalledWith({ path: appDir, sort: "name", hidden: true })
+      await user.click(within(dialog).getByRole("button", { name: "bin" }))
+      await screen.findByRole("button", { name: /web-binary/ })
+
+      // A file has to be chosen: the confirm is dead until one is.
+      const use = screen.getByRole("button", { name: "Use this file" })
+      expect(use).toBeDisabled()
+      await user.click(screen.getByRole("button", { name: /notes\.txt/ }))
+      await user.click(use)
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Choose the program" })).not.toBeInTheDocument(),
+      )
+      expect(screen.getByLabelText("Program path")).toHaveValue(`${bin}/notes.txt`)
+
+      await user.type(screen.getByLabelText("Port"), "3000")
+      await user.click(screen.getByRole("button", { name: "Create app" }))
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ command: `${bin}/notes.txt` }))
+    })
+
+    it("offers folders only for the working directory", async () => {
+      mockTree()
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole("button", { name: "Browse… for the working directory" }))
+      const dialog = await screen.findByRole("dialog", { name: "Choose the working directory" })
+      await user.click(await screen.findByRole("button", { name: /web/ }))
+      // A folder picker offers no files at all.
+      expect(await screen.findByRole("button", { name: /bin/ })).toBeInTheDocument()
+      expect(within(dialog).queryByRole("button", { name: /notes\.txt/ })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole("button", { name: "Use this folder" }))
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("dialog", { name: "Choose the working directory" }),
+        ).not.toBeInTheDocument(),
+      )
+      expect(screen.getByLabelText("Working directory")).toHaveValue(`${APPS_ROOT}/web`)
+    })
+
+    it("reads a chosen .env file into the Environment box", async () => {
+      vi.spyOn(api, "fmList").mockImplementation(async ({ path }) =>
+        listing(
+          path,
+          path === `${APPS_ROOT}/web`
+            ? [
+                entry(`${APPS_ROOT}/web`, ".env", "file"),
+                entry(`${APPS_ROOT}/web`, "server.js", "file"),
+              ]
+            : [],
+        ),
+      )
+      const open = vi
+        .spyOn(api, "fmOpenFile")
+        .mockResolvedValue({
+          path: `${APPS_ROOT}/web/.env`,
+          content: "MODE=prod\n# a note\nTOKEN=abc",
+          size: 27,
+          mtime: 0,
+          hash: "h",
+          mode: 0o644,
+          language: "shell",
+        })
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.type(screen.getByLabelText("Name"), "web")
+      await user.click(screen.getByRole("button", { name: "Load .env file…" }))
+      const dialog = await screen.findByRole("dialog", { name: "Choose a .env file" })
+      // Only dotenv files are listed, and dotfiles are shown at all.
+      expect(within(dialog).queryByRole("button", { name: /server\.js/ })).not.toBeInTheDocument()
+      await user.click(within(dialog).getByRole("button", { name: /\.env/ }))
+      await user.click(screen.getByRole("button", { name: "Use this file" }))
+
+      await waitFor(() => expect(open).toHaveBeenCalledWith(`${APPS_ROOT}/web/.env`))
+      await waitFor(() =>
+        expect(screen.getByLabelText("Environment")).toHaveValue("MODE=prod\nTOKEN=abc"),
+      )
+      expect(screen.getByText(/Read from \/www\/services\/apps\/web\/\.env/)).toBeInTheDocument()
+    })
+
+    it("keeps the keys already typed when the file does not set them", async () => {
+      vi.spyOn(api, "fmList").mockResolvedValue(
+        listing(APPS_ROOT, [entry(APPS_ROOT, ".env", "file")]),
+      )
+      vi.spyOn(api, "fmOpenFile").mockResolvedValue({
+        path: `${APPS_ROOT}/.env`,
+        content: "A=file",
+        size: 6,
+        mtime: 0,
+        hash: "h",
+        mode: 0o644,
+        language: "shell",
+      })
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.type(screen.getByLabelText("Environment"), "A=mine{Enter}B=typed")
+      await user.click(screen.getByRole("button", { name: "Load .env file…" }))
+      await user.click(await screen.findByRole("button", { name: /\.env/ }))
+      await user.click(screen.getByRole("button", { name: "Use this file" }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText("Environment")).toHaveValue("A=file\nB=typed"),
+      )
+    })
+
+    it("says why a .env file could not be read and leaves the box alone", async () => {
+      vi.spyOn(api, "fmList").mockResolvedValue(
+        listing(APPS_ROOT, [entry(APPS_ROOT, ".env", "file")]),
+      )
+      vi.spyOn(api, "fmOpenFile").mockRejectedValue(
+        new ApiError(415, "binary_file", "this file is not text"),
+      )
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.type(screen.getByLabelText("Environment"), "A=1")
+      await user.click(screen.getByRole("button", { name: "Load .env file…" }))
+      await user.click(await screen.findByRole("button", { name: /\.env/ }))
+      await user.click(screen.getByRole("button", { name: "Use this file" }))
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("this file is not text")
+      expect(screen.getByLabelText("Environment")).toHaveValue("A=1")
+    })
   })
 })
 
