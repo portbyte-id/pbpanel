@@ -290,6 +290,25 @@ the core layer.
 only on change, `Healthy` catches a restarted master), plus one real start of the 8.3 unit on the
 sandbox behind native nginx.
 
+#### Step 3 result (2026-11-20, commit `7c862f5`)
+
+`internal/php/runtime.go` is new (`EnsureRunning`/`Start`/`Stop`/`Restart`/`Status`/`BuildPresent`,
+the `php.<ver>.stopped` flag, `UnitText` with the D3 sandbox); `service.go` is rewritten as the
+native confedit service over `native.Runner`/`Unit`/`Stable`; `native` gained `RunEnv` so both
+validators carry `PHP_INI_SCAN_DIR`; `fpmConfTemplate` and its golden now write `error_log` to the
+real FPM log file instead of `/proc/self/fd/2`.
+
+Three things the step description did not anticipate: the manager's `swap` and `ApplyMounts` had to
+keep asking Docker directly (they are the container path until step 4, and rewriting them twice
+would have been waste); the FPM log file's `chown www:www` must be skipped when the panel does not
+run as root; and `Healthy` reads the unit three times, so a fake runner for the restart test has to
+answer three times.
+
+Sandbox evidence: `Type=notify` active with `StatusText=Ready to handle connections`, both pool
+sockets present, HTTP 200 with PHP 8.3.37, the FPM log growing, panel data denied and hidden from
+the pool, a reload keeping the same `MainPID`, and a probe unit re-confirming that
+`ProtectHome=true` breaks a `/home` web root while `read-only` works.
+
 ### Step 4: `Manager` and its callers
 
 - `Manager`: family hooks become build (native builder), check (host binaries, as
@@ -308,6 +327,28 @@ sandbox behind native nginx.
 - `php_versions.image`/`digest` are reused (release string and tarball sha256). **No schema change.**
 
 **Gate:** `go test ./cmd/... ./internal/...` passes in WSL.
+
+#### Step 4 result (2026-11-20, commit `cedee93`)
+
+The manager's build hook calls the native builder, the check runs the candidate's own
+`php-fpm`/`php` on the host against the live configuration, the swap flips `CurrentLink` and
+restarts a running unit with nginx's revert-on-failed-restart, `productionIni` reads the serving
+build from disk, `Remove` retires the unit and deletes builds while keeping config and settings,
+`Reconcile` repairs the link. Callers moved with it: `sites.PHPRuntime.EnsureRunning`, `ApplyUnits`
+on the `sites.web_roots` job, `/api/php`'s `container` row filled from `native.Status` under its
+old JSON name, `panelContainers` lists nothing, each version's log is a journalctl source, and the
+sysinfo allowlist takes `panel-php-<ver>.service` from a per-call provider with `noStop`.
+`php_versions.image`/`digest` now hold the compiled release and the tarball sha256. No schema
+change.
+
+Proven on the sandbox through the manager's hooks: build A (6 min), then build B with `intl`
+(6m37s), B swapped under the running unit (link moved, new MainPID, `intl` in `php -m`), then
+Activate rolled back to A (link moved back, new MainPID, `intl` gone).
+
+Two notes for later steps: the probe ran against a fresh catalogue because the sandbox's `panel.db`
+was a placeholder from reprovisioning — **step 5's upgrade path is untested against a real
+Docker-era database row**; and the integration-tagged tests still exercise the old container path
+until step 8 rewrites them.
 
 ### Step 5: upgrade a host that ran PHP in containers
 
