@@ -158,7 +158,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	live := nginx.NewService(paths, run)
 	global := nginx.NewGlobal(st, ed, live, paths)
 	phpMgr, err := php.New(php.Options{
-		Store: st, Engine: eng, Applier: ed, Paths: phpPaths, Log: logger,
+		Store: st, Engine: eng, Applier: ed, Paths: phpPaths, Run: run, Log: logger,
 		Supported: func(ctx context.Context) ([]string, error) {
 			csv, err := reg.Str(ctx, settings.KeyPHPVersions)
 			if err != nil {
@@ -249,8 +249,8 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		}
 		roots.Set(list)
 		_, err = jobsMgr.Start(context.Background(), "sites.web_roots", func(ctx context.Context, out *jobs.Writer) error {
-			_ = out.Line("recreating running PHP containers to mount the allowed web roots")
-			return phpMgr.ApplyMounts(ctx)
+			_ = out.Line("rewriting the PHP units to allow the new web roots, and restarting the versions that run")
+			return phpMgr.ApplyUnits(ctx)
 		})
 		if err != nil {
 			logger.Error("web roots: start the apply job", "error", err)

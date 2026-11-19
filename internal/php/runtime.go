@@ -146,6 +146,28 @@ func (r *Runtime) EnsureRunning(ctx context.Context) (EnsureResult, error) {
 	return EnsureResult{Action: ActionStart, Reason: "PHP " + r.ver + " was " + st.State}, nil
 }
 
+// Apply writes the unit and, when its text changed, restarts a version that is
+// running: a unit that only changed on disk applies at its next start, and the
+// caller that changed it (an allowed web root) needs it now. A version that is
+// not running is left alone; its next start reads the new unit.
+func (r *Runtime) Apply(ctx context.Context) error {
+	if ok, err := r.BuildPresent(ctx); err != nil || !ok {
+		return err
+	}
+	changed, err := r.writeUnit(ctx)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	st, err := r.Status(ctx)
+	if err != nil || !st.Active {
+		return err
+	}
+	return restartUnit(ctx, r.run, r.ver)
+}
+
 // Stopped reports whether the operator stopped this version from the panel.
 func (r *Runtime) Stopped(ctx context.Context) bool {
 	if r.flags == nil {

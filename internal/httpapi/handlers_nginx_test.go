@@ -12,6 +12,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/sites"
 )
 
@@ -147,6 +148,8 @@ type nginxHarness struct {
 	applier *memApplier
 	svc     *fakeNginx
 	history *fakeHistory
+	// php is the PHP layout, when the harness wires one.
+	php php.Paths
 }
 
 func rejected(output string) error {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,12 +82,13 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 	}
 
 	containers := func(ctx context.Context) ([]string, error) { return panelContainers(ctx, reg), nil }
+	units := func(ctx context.Context) ([]string, error) { return panelUnits(ctx, reg), nil }
 
 	var sysApps sysinfo.Apps
 	if appsSvc != nil {
 		sysApps = sysinfoApps{appsSvc}
 	}
-	svcOpts := sysinfo.ServicesOptions{Cmd: sysinfo.ExecCommander{}, Containers: containers, Apps: sysApps}
+	svcOpts := sysinfo.ServicesOptions{Cmd: sysinfo.ExecCommander{}, Containers: containers, Units: units, Apps: sysApps}
 	if eng != nil {
 		svcOpts.Engine = eng
 	}
@@ -193,20 +195,31 @@ func (m *m7Stack) start(ctx context.Context, logger *slog.Logger) (wait func(gra
 	}
 }
 
-// panelContainers names the containers the panel owns: one per PHP version in
-// the catalogue setting. nginx is not one of them: it runs natively under systemd.
-func panelContainers(ctx context.Context, reg *settings.Registry) []string {
-	var names []string
+// panelContainers names the containers the panel owns. There are none left:
+// nginx and PHP both run natively under systemd, so a container that carries a
+// panel name belongs to an older runtime and is not ours to list.
+func panelContainers(context.Context, *settings.Registry) []string { return nil }
+
+// phpVersions reads the `php.versions` setting: the versions the panel runs, and
+// so the versions with a unit to show and a journal to read.
+func phpVersions(ctx context.Context, reg *settings.Registry) []string {
 	csv, err := reg.Str(ctx, settings.KeyPHPVersions)
 	if err != nil {
-		return names
+		return nil
 	}
 	versions, err := php.ParseVersions(csv)
 	if err != nil {
-		return names
+		return nil
 	}
-	for _, v := range versions {
-		names = append(names, php.ContainerName(v))
+	return versions
+}
+
+// panelUnits names the panel's own units that come and go: one per PHP version,
+// so the Services page shows each one and the journal has something to read.
+func panelUnits(ctx context.Context, reg *settings.Registry) []string {
+	var names []string
+	for _, v := range phpVersions(ctx, reg) {
+		names = append(names, php.UnitName(v))
 	}
 	return names
 }
@@ -239,7 +252,7 @@ func newLogRegistry(eng *docker.Client, reg *settings.Registry, layout install.L
 	if eng != nil {
 		dl = dockerLogs{eng}
 	}
-	r := logs.NewRegistry(dl)
+	r := logs.NewRegistry(dl).WithJournal(journalLogs{nginx.ExecRunner{}})
 
 	for _, s := range []logs.Source{
 		{ID: "panel:audit", Label: "Panel audit trail", Kind: logs.KindAudit, Path: filepath.Join(layout.LogsDir(), "audit.log")},
@@ -250,10 +263,15 @@ func newLogRegistry(eng *docker.Client, reg *settings.Registry, layout install.L
 		}
 	}
 
+	// One journal source per PHP version: the unit runs FPM natively, so its log
+	// is the journal rather than a container's.
 	r.AddProvider(logs.ProviderFunc(func(ctx context.Context) ([]logs.Source, error) {
 		var out []logs.Source
-		for _, name := range panelContainers(ctx, reg) {
-			out = append(out, logs.Source{ID: "docker:" + name, Label: name, Kind: logs.KindDocker, Container: name})
+		for _, ver := range phpVersions(ctx, reg) {
+			out = append(out, logs.Source{
+				ID: "journal:" + php.UnitName(ver), Label: "PHP " + ver, Kind: logs.KindJournal,
+				Unit: php.UnitName(ver),
+			})
 		}
 		return out, nil
 	}))
@@ -402,6 +420,24 @@ func (d dockerLogs) ContainerLogs(ctx context.Context, name string, opts logs.Do
 	pr, pw := io.Pipe()
 	go func() {
 		err := d.c.ContainerLogs(ctx, name, docker.LogOptions{Tail: opts.Tail, Follow: opts.Follow}, pw, pw)
+		_ = pw.CloseWithError(err) // a nil err reads as io.EOF
+	}()
+	return &pipeCloser{PipeReader: pr, cancel: cancel}, nil
+}
+
+// journalLogs reads a unit's journal through journalctl. PHP runs under systemd
+// now, so its FPM master's own log is the unit's journal, not a container's.
+type journalLogs struct{ run nginx.Runner }
+
+func (j journalLogs) JournalLogs(ctx context.Context, unit string, opts logs.JournalOptions) (io.ReadCloser, error) {
+	args := []string{"-u", unit, "--no-pager", "-o", "cat", "-n", strconv.Itoa(opts.Tail)}
+	if opts.Follow {
+		args = append(args, "-f")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := j.run.Run(ctx, "journalctl", args...)
 		_ = pw.CloseWithError(err) // a nil err reads as io.EOF
 	}()
 	return &pipeCloser{PipeReader: pr, cancel: cancel}, nil

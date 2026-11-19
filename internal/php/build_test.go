@@ -8,46 +8,33 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
-	"github.com/portbyte-id/server-panel/internal/store"
 )
 
-// moduleEngine answers `php -m` with a fixed module list, which is what the
-// candidate check reads. Everything else is the plain fake.
-type moduleEngine struct {
-	*fakeEngine
+// moduleRunner answers `php -m` with a fixed module list, which is what the
+// candidate check reads; `php-fpm -t` and systemctl go to the plain host runner.
+type moduleRunner struct {
+	*hostRunner
 	modules string
 }
 
-func (e *moduleEngine) RunOnce(ctx context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error) {
-	if len(cfg.Entrypoint) == 1 && cfg.Entrypoint[0] == "php" {
-		e.log("php-m " + name)
-		return docker.ExecResult{Stdout: []byte(e.modules)}, nil
+func (r *moduleRunner) RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+	if strings.HasSuffix(name, "/bin/php") {
+		r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+		r.envs = append(r.envs, strings.Join(env, ","))
+		return []byte(r.modules), nil
 	}
-	return e.fakeEngine.RunOnce(ctx, name, cfg)
+	return r.hostRunner.RunEnv(ctx, env, name, args...)
 }
 
-// newBuildRig is a manager whose build contexts go to a temporary directory and
-// whose `php -m` lists the given modules.
-func newBuildRig(t *testing.T, modules string) (*Manager, *moduleEngine, string) {
+// newBuildRig is a manager whose builds go to a temporary root and whose
+// `php -m` lists the given modules.
+func newBuildRig(t *testing.T, modules string) (*Manager, *fakeBuild, *moduleRunner, Paths) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	eng := &moduleEngine{fakeEngine: &fakeEngine{}, modules: modules}
-	ap := &memApplier{files: map[string][]byte{}}
-	scratch := t.TempDir()
-	m, err := New(Options{
-		Store: st, Engine: eng, Applier: ap, Paths: testPaths, Read: ap.read, Scratch: scratch,
-		Supported: func(context.Context) ([]string, error) { return []string{"8.3", "8.4"}, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m, eng, scratch
+	p := Paths{Root: filepath.ToSlash(t.TempDir())}
+	r := newRigAt(t, p)
+	r.run.modules = modules
+	return r.m, r.b, &moduleRunner{hostRunner: r.run, modules: modules}, p
 }
 
 func install(t *testing.T, m *Manager, names ...string) Version {
@@ -69,8 +56,11 @@ func install(t *testing.T, m *Manager, names ...string) Version {
 	return v
 }
 
-func TestPullWithExtensionsWritesItsDockerfileAndServes(t *testing.T) {
-	m, eng, scratch := newBuildRig(t, "[PHP Modules]\nCore\nintl\nredis\n")
+// A build is checked with its own binaries against the live configuration, and
+// then served: the catalogue keeps its build, the release it compiled and the
+// tarball it came from.
+func TestPullWithExtensionsChecksTheCandidateAndServes(t *testing.T) {
+	m, b, run, p := newBuildRig(t, "[PHP Modules]\nCore\nintl\nredis\n")
 	v := install(t, m, "intl", "redis")
 
 	if v.State != StateReady || v.Current == nil {
@@ -82,28 +72,37 @@ func TestPullWithExtensionsWritesItsDockerfileAndServes(t *testing.T) {
 	if got := strings.Join(v.Current.Extensions, ","); got != "intl,redis" {
 		t.Errorf("extensions = %q", got)
 	}
-	files, _ := filepath.Glob(filepath.Join(scratch, "8.3", "*", "Dockerfile"))
-	if len(files) != 1 {
-		t.Fatalf("Dockerfiles = %v, want one", files)
+	if v.Image != "8.3.37" || v.Digest == "" {
+		t.Errorf("image/digest = %q/%q, want the release and the tarball sha256", v.Image, v.Digest)
 	}
-	raw, err := readFile(files[0])
-	if err != nil {
-		t.Fatal(err)
+	if len(b.calls) != 1 || !strings.HasSuffix(b.calls[0], "intl,redis") {
+		t.Fatalf("builds = %v", b.calls)
 	}
-	for _, want := range []string{"docker-php-ext-install -j$(nproc) intl", "pecl install redis", "libicu-dev"} {
-		if !strings.Contains(raw, want) {
-			t.Errorf("Dockerfile lacks %q:\n%s", want, raw)
+	// The check ran the candidate's own php, with the panel's conf.d scanned.
+	bin := filepath.ToSlash(p.CLIBinaryOf("8.3", v.Current.ID))
+	found := false
+	for i, c := range run.calls {
+		if strings.HasPrefix(c, bin) {
+			found = true
+			if run.envs[i] != "PHP_INI_SCAN_DIR=:"+p.ConfDir("8.3") {
+				t.Errorf("the module check ran without the scan dir: %q", run.envs[i])
+			}
 		}
 	}
-	if !eng.called("php-m ") || !eng.called("build "+v.Current.Tag) {
-		t.Errorf("calls = %v", eng.calls)
+	if !found {
+		t.Errorf("the candidate's own php was not run: %v", run.calls)
+	}
+	// The link names the build that serves.
+	if id, err := readLink(p, "8.3"); err != nil || id != v.Current.ID {
+		t.Errorf("current link = %q, %v; want %s", id, err, v.Current.ID)
 	}
 }
 
 func TestCandidateMissingAnExtensionIsRejectedAndTheOldBuildServes(t *testing.T) {
-	m, eng, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, b, _, p := newBuildRig(t, "[PHP Modules]\nCore\n")
 	first := install(t, m)
 
+	b.calls = nil
 	exts, _ := ParseExtensions([]string{"intl"})
 	if _, err := m.Rebuild(ctx, "8.3", exts, nil); err == nil || !strings.Contains(err.Error(), "does not load: intl") {
 		t.Fatalf("Rebuild = %v, want the missing module reported", err)
@@ -119,26 +118,33 @@ func TestCandidateMissingAnExtensionIsRejectedAndTheOldBuildServes(t *testing.T)
 	if builds[0].State != images.StateFailed || !strings.Contains(builds[0].Output, "does not load: intl") {
 		t.Errorf("rejected build = %+v", builds[0])
 	}
-	if !eng.called("rmi " + builds[0].Tag) {
-		t.Error("the rejected candidate's image was not removed")
+	// The rejected build's directory is gone, and the link still names the one
+	// that serves.
+	if _, err := os.Stat(filepath.FromSlash(p.BuildPrefix("8.3", builds[0].ID))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the rejected build was kept: %v", err)
+	}
+	if id, _ := readLink(p, "8.3"); id != first.Current.ID {
+		t.Errorf("the link moved to %s after a rejected build", id)
 	}
 }
 
 // A first install has no FPM config yet: its candidate is checked for modules
 // only, and `php-fpm -t` is left to the apply that writes the config.
 func TestFirstInstallDoesNotRunFPMTestBeforeItsConfigExists(t *testing.T) {
-	m, eng, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, _, run, p := newBuildRig(t, "[PHP Modules]\nCore\n")
 	install(t, m)
-	if eng.called("run panel-php-8.3-candidate php-fpm") {
-		t.Errorf("the first install ran php-fpm -t: %v", eng.calls)
+	for _, c := range run.calls {
+		if strings.Contains(c, "sbin/php-fpm -t -y "+p.FPMConf("8.3")) {
+			t.Errorf("the first install ran php-fpm -t: %v", run.calls)
+		}
 	}
-	if !eng.called("php-m panel-php-8.3-candidate") {
-		t.Errorf("the first install did not check the modules: %v", eng.calls)
+	if len(run.calls) == 0 || !strings.Contains(run.calls[0], "bin/php") {
+		t.Errorf("the first install did not check the modules: %v", run.calls)
 	}
 }
 
 func TestFirstPullThatFailsLeavesTheVersionFailedWithOutput(t *testing.T) {
-	m, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, _, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
 	exts, _ := ParseExtensions([]string{"intl"})
 	if err := m.StartPull(ctx, "8.3"); err != nil {
 		t.Fatal(err)
@@ -153,7 +159,7 @@ func TestFirstPullThatFailsLeavesTheVersionFailedWithOutput(t *testing.T) {
 }
 
 func TestRemoveIsRefusedWhileASiteUsesTheVersion(t *testing.T) {
-	m, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, _, _, p := newBuildRig(t, "[PHP Modules]\nCore\n")
 	install(t, m)
 
 	used := func(context.Context) (bool, error) { return true, nil }
@@ -172,10 +178,20 @@ func TestRemoveIsRefusedWhileASiteUsesTheVersion(t *testing.T) {
 	if v.State != StateAbsent || v.Current != nil {
 		t.Errorf("after removal: %+v", v)
 	}
+	// The builds and the link are gone; the configuration tree is not.
+	if _, err := os.Stat(filepath.FromSlash(p.VersionsDir("8.3"))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the builds were kept: %v", err)
+	}
+	if _, err := os.Lstat(filepath.FromSlash(p.CurrentLink("8.3"))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the link was kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.FromSlash(p.Dir("8.3"))); err != nil {
+		t.Errorf("the configuration tree was removed: %v", err)
+	}
 }
 
 func TestActivateReturnsToAnEarlierBuild(t *testing.T) {
-	m, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, _, _, p := newBuildRig(t, "[PHP Modules]\nCore\n")
 	first := install(t, m)
 	if _, err := m.Rebuild(ctx, "8.3", nil, nil); err != nil {
 		t.Fatalf("Rebuild = %v", err)
@@ -187,32 +203,16 @@ func TestActivateReturnsToAnEarlierBuild(t *testing.T) {
 	if v.Current == nil || v.Current.ID != first.Current.ID {
 		t.Errorf("current after activate = %+v, want %s", v.Current, first.Current.ID)
 	}
+	if id, _ := readLink(p, "8.3"); id != first.Current.ID {
+		t.Errorf("the link names %s, want %s", id, first.Current.ID)
+	}
 	if _, err := m.Activate(ctx, "8.3", "not-an-id"); err == nil {
 		t.Error("a malformed build id was accepted")
 	}
 }
 
-func TestReconcileAdoptsTheLegacyImageOfAReadyVersion(t *testing.T) {
-	m, eng, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
-	eng.images = map[string]bool{LegacyImage("8.3"): true}
-	if err := m.setState(ctx, Version{Version: "8.3", Image: BaseImage("8.3"), State: StateReady}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := m.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile = %v", err)
-	}
-	v, _ := m.Get(ctx, "8.3")
-	if v.State != StateReady || v.Current == nil || !strings.HasPrefix(v.Current.Output, "adopted from") {
-		t.Errorf("after reconcile: %+v", v)
-	}
-	if !eng.called("tag " + LegacyImage("8.3") + " " + v.Current.Tag) {
-		t.Errorf("the legacy image was not given the build tag; calls = %v", eng.calls)
-	}
-}
-
 func TestReconcileMarksAnInterruptedPullFailed(t *testing.T) {
-	m, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
+	m, _, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
 	if err := m.setState(ctx, Version{Version: "8.3", Image: BaseImage("8.3"), State: StatePulling}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,10 +223,4 @@ func TestReconcileMarksAnInterruptedPullFailed(t *testing.T) {
 	if v.State != StateFailed || !strings.Contains(v.Output, "interrupted by a daemon restart") {
 		t.Errorf("after reconcile: %+v", v)
 	}
-}
-
-// readFile returns a file the test wrote.
-func readFile(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	return string(b), err
 }

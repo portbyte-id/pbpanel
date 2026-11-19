@@ -58,6 +58,9 @@ func (r *Registry) Tail(ctx context.Context, id string, opts TailOptions, emit f
 	if src.Container != "" {
 		return r.tailDocker(ctx, src.Container, opts, emit)
 	}
+	if src.Unit != "" {
+		return r.tailJournal(ctx, src.Unit, opts, emit)
+	}
 	return tailFile(ctx, src.Path, opts, emit)
 }
 
@@ -87,6 +90,27 @@ func (r *Registry) tailDocker(ctx context.Context, name string, opts TailOptions
 		return fmt.Errorf("%w: docker is not available", ErrUnavailable)
 	}
 	rc, err := r.docker.ContainerLogs(ctx, name, DockerOptions{Tail: opts.Lines, Follow: opts.Follow})
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer func() { _ = rc.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = rc.Close() })
+	defer stop()
+	err = readLines(rc, emit, nil)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// tailJournal streams a unit's journal. A unit that is not loaded has written
+// nothing, and journalctl says so with a non-zero exit; that reads as an
+// unavailable source rather than a failed stream.
+func (r *Registry) tailJournal(ctx context.Context, unit string, opts TailOptions, emit func(string) error) error {
+	if r.journal == nil {
+		return fmt.Errorf("%w: the journal is not available", ErrUnavailable)
+	}
+	rc, err := r.journal.JournalLogs(ctx, unit, JournalOptions{Tail: opts.Lines, Follow: opts.Follow})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}

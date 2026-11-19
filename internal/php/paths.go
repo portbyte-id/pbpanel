@@ -157,6 +157,13 @@ func (p Paths) VersionFile(ver, id string) string {
 	return path.Join(p.BuildPrefix(ver, id), "version")
 }
 
+// SourceSHA256File is where a build records the sha256 of the tarball it was
+// compiled from, as php.net published it. It is what the catalogue shows as a
+// version's digest.
+func (p Paths) SourceSHA256File(ver, id string) string {
+	return path.Join(p.BuildPrefix(ver, id), "source-sha256")
+}
+
 // ProductionIniFile is the build's php.ini-production, what a version's php.ini is
 // first copied from.
 func (p Paths) ProductionIniFile(ver, id string) string {

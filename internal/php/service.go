@@ -3,6 +3,7 @@ package php
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -32,8 +33,8 @@ func UnitName(ver string) string { return "panel-php-" + ver + ".service" }
 // unit is one version's unit, as the shared helpers name it.
 func unit(ver string) native.Unit { return native.Unit{Product: product, Name: UnitName(ver)} }
 
-// Engine is the part of the Docker client PHP uses. The native runtime needs none
-// of it; it stays while the manager still builds images (step 4).
+// Engine is the part of the Docker client PHP uses. Docker is only the builder
+// now: the runtime is systemd. The interface stays until step 9 removes it.
 type Engine interface {
 	docker.Engine
 	ContainerKill(ctx context.Context, id, signal string) error
@@ -41,6 +42,7 @@ type Engine interface {
 	RunOnce(ctx context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error)
 	ImagePull(ctx context.Context, ref string, progress docker.Progress) (docker.Image, error)
 	ImageBuild(ctx context.Context, opts docker.BuildOptions, progress docker.Progress) (docker.Image, error)
+	ContainerArchive(ctx context.Context, id, path string) (io.ReadCloser, error)
 	ImageTag(ctx context.Context, src, dst string) error
 	ImageRemove(ctx context.Context, ref string) error
 }
@@ -198,26 +200,14 @@ func (s *Service) Status(ctx context.Context) (native.Status, bool, error) {
 	return st, st.Loaded, err
 }
 
-// State is the unit's status in the container shape the manager and the HTTP
-// layer read today. Step 4 moves both callers onto Status and this goes away.
-func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
-	st, found, err := s.Status(ctx)
-	if err != nil || !found {
-		return docker.Container{}, false, err
+// restartUnit restarts a running version onto the binary its `current` link
+// names and waits until it holds. FPM cannot pick up a new master binary on a
+// reload, so a build swap is a restart.
+func restartUnit(ctx context.Context, run Runner, ver string) error {
+	if out, err := run.Run(ctx, "systemctl", "restart", UnitName(ver)); err != nil {
+		return fmt.Errorf("systemctl restart: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	word := "exited"
-	switch {
-	case st.Active:
-		word = "running"
-	case st.State == "activating":
-		word = "restarting"
-	case st.State == "failed":
-		word = "failed"
-	}
-	return docker.Container{
-		Name:  UnitName(s.ver),
-		State: docker.ContainerState{Status: word, Running: st.Active, Pid: st.PID},
-	}, true, nil
+	return native.Stable(ctx, run, unit(ver), settle)
 }
 
 var _ confedit.Service = (*Service)(nil)

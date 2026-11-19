@@ -214,13 +214,16 @@ func TestHealthyCatchesARestartedMaster(t *testing.T) {
 	}
 }
 
-func TestStateMapsTheUnitOntoTheContainerShape(t *testing.T) {
-	st, found, err := NewService(phpHost(true, nil), testPaths, "8.3", false).State(ctx)
-	if err != nil || !found || !st.State.Running || st.State.Status != "running" || st.State.Pid != 7 {
-		t.Errorf("State of a running unit = %+v, %v, %v", st, found, err)
+// Status is what the HTTP layer reads for a version's `container` row.
+func TestStatusReadsTheUnit(t *testing.T) {
+	st, found, err := NewService(phpHost(true, nil), testPaths, "8.3", false).Status(ctx)
+	if err != nil || !found || !st.Active || st.State != "active" || st.PID != 7 || st.Since != "100" {
+		t.Errorf("Status of a running unit = %+v, %v, %v", st, found, err)
 	}
-	st, found, _ = NewService(phpHost(false, nil), testPaths, "8.3", false).State(ctx)
-	if !found || st.State.Running || st.State.Status != "exited" {
-		t.Errorf("State of a stopped unit = %+v, %v", st, found)
+	if _, found, _ := NewService(phpHost(false, nil), testPaths, "8.3", false).Status(ctx); !found {
+		t.Error("a unit systemd knows was reported as absent")
+	}
+	if _, found, _ := NewService(&fakeRunner{fn: unitState("not-found", "inactive", 0, "0")}, testPaths, "8.3", false).Status(ctx); found {
+		t.Error("a unit systemd does not know was reported as loaded")
 	}
 }

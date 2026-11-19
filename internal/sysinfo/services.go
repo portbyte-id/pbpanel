@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -129,16 +130,24 @@ type ServicesOptions struct {
 	Cmd Commander
 	// Engine reaches Docker. Nil leaves container rows out.
 	Engine Engine
-	// Containers names the containers to show and control: one per PHP
-	// version. It is asked on every call because PHP versions come and
-	// go. Nil means none.
+	// Containers names the containers to show and control. It is asked on every
+	// call because containers come and go. Nil means none.
 	Containers func(ctx context.Context) ([]string, error)
+	// Units names the panel's own systemd units that come and go with a setting:
+	// one `panel-php-<ver>.service` per PHP version. It is asked on every call for
+	// the same reason. Nil means none.
+	Units func(ctx context.Context) ([]string, error)
 	// Apps lists and controls managed apps. Nil leaves app rows out.
 	Apps Apps
 	// StopTimeout is how long Docker waits for a container to exit after SIGTERM
 	// before killing it. Zero means 10 seconds.
 	StopTimeout time.Duration
 }
+
+// unitPattern is a systemd unit name. A name from the provider is passed to
+// systemctl as one argument, so anything with a path separator or a shell
+// character is refused here.
+var unitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,127}$`)
 
 type unit struct {
 	name string // service name as shown and accepted
@@ -166,6 +175,7 @@ type Services struct {
 	cmd         Commander
 	eng         Engine
 	containers  func(context.Context) ([]string, error)
+	units       func(context.Context) ([]string, error)
 	apps        Apps
 	stopTimeout time.Duration
 }
@@ -175,7 +185,7 @@ func NewServices(o ServicesOptions) (*Services, error) {
 	if o.Cmd == nil {
 		return nil, fmt.Errorf("sysinfo: ServicesOptions.Cmd is required")
 	}
-	s := &Services{cmd: o.Cmd, eng: o.Engine, containers: o.Containers, apps: o.Apps, stopTimeout: o.StopTimeout}
+	s := &Services{cmd: o.Cmd, eng: o.Engine, containers: o.Containers, units: o.Units, apps: o.Apps, stopTimeout: o.StopTimeout}
 	if s.stopTimeout <= 0 {
 		s.stopTimeout = 10 * time.Second
 	}
@@ -194,7 +204,7 @@ func actionsFor(noStop bool) []Action {
 // in Detail; List never fails as a whole.
 func (s *Services) List(ctx context.Context) []Service {
 	out := make([]Service, 0, len(systemdUnits)+8)
-	for _, u := range systemdUnits {
+	for _, u := range s.allUnits(ctx) {
 		st, detail := s.systemdState(ctx, u.unit)
 		out = append(out, Service{Name: u.name, Kind: KindSystemd, State: st, Detail: detail, Actions: actionsFor(u.noStop)})
 	}
@@ -219,17 +229,41 @@ func (s *Services) List(ctx context.Context) []Service {
 	return out
 }
 
+// allUnits is the fixed allowlist plus the units the provider names. A PHP
+// version's unit is shown under the service name `panel-php-<ver>` and is never
+// stopped from here: the PHP page records that the operator chose it, and a bare
+// systemctl stop would be undone by the next reconcile.
+func (s *Services) allUnits(ctx context.Context) []unit {
+	out := append([]unit(nil), systemdUnits...)
+	if s.units == nil {
+		return out
+	}
+	names, err := s.units(ctx)
+	if err != nil {
+		// A provider that cannot answer leaves the fixed rows alone; the cause is
+		// in the daemon log, as for the containers.
+		return out
+	}
+	for _, name := range names {
+		if !unitPattern.MatchString(name) {
+			continue
+		}
+		out = append(out, unit{name: strings.TrimSuffix(name, ".service"), unit: name, noStop: true})
+	}
+	return out
+}
+
 // Control runs start, stop or restart on one service. The name must be on the
-// allowlist: a fixed set of systemd units, the containers Options.Containers
-// names, or an app the app manager lists. Anything else is ErrUnknownService and
-// nothing is run.
+// allowlist: a fixed set of systemd units, the units Options.Units names, the
+// containers Options.Containers names, or an app the app manager lists. Anything
+// else is ErrUnknownService and nothing is run.
 func (s *Services) Control(ctx context.Context, name string, action Action) error {
 	switch action {
 	case ActionStart, ActionStop, ActionRestart:
 	default:
 		return fmt.Errorf("%w: %q", ErrUnknownAction, action)
 	}
-	for _, u := range systemdUnits {
+	for _, u := range s.allUnits(ctx) {
 		if u.name == name {
 			if action == ActionStop && u.noStop {
 				return fmt.Errorf("%w: %s cannot be stopped from its own UI", ErrNotAllowed, name)

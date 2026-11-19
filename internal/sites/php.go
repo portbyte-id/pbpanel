@@ -11,7 +11,6 @@ import (
 	"sort"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
 )
@@ -23,12 +22,14 @@ type PHPRuntime interface {
 	// Usable reports whether sites can run on a version.
 	Usable(ctx context.Context, ver string) error
 	// Service is a version as a confedit service. With start set, its reload
-	// brings the container up when it is not running.
+	// brings the version up when it is not running.
 	Service(ver string, start bool) confedit.Service
 	// BaseFiles are the files a version's FPM starts on that are missing or
 	// out of date.
 	BaseFiles(ctx context.Context, ver string) ([]confedit.File, error)
-	EnsureContainer(ctx context.Context, ver string) (docker.EnsureResult, error)
+	// EnsureRunning writes the version's unit and starts it when it is not
+	// running.
+	EnsureRunning(ctx context.Context, ver string) (php.EnsureResult, error)
 }
 
 // phpInputError turns "that version cannot be used" into a rejected field, so
@@ -385,7 +386,7 @@ func (m *Manager) reconcileVersion(ctx context.Context, ver string, sites []Site
 		}
 		return fmt.Sprintf("%d file(s) written and validated", len(files)), nil
 	}
-	ens, err := m.php.EnsureContainer(ctx, ver)
+	ens, err := m.php.EnsureRunning(ctx, ver)
 	if err != nil {
 		return "", err
 	}

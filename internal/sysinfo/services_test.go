@@ -197,6 +197,73 @@ func TestListContainerStates(t *testing.T) {
 	}
 }
 
+// The PHP units come from a provider, because a version comes and goes with the
+// setting. They are listed and started, never stopped from here: the PHP page
+// records that choice.
+func TestProviderUnitsAreListedAndNotStopped(t *testing.T) {
+	cmd := &fakeCmd{show: map[string]string{
+		"panel-php-8.3.service": show("loaded", "active", "running"),
+		"panel-php-8.4.service": show("not-found", "inactive", "dead"),
+		"panel-php-8.5.service": show("loaded", "active", "running"),
+	}}
+	o := ServicesOptions{
+		Cmd: cmd,
+		Units: func(context.Context) ([]string, error) {
+			return []string{"panel-php-8.3.service", "panel-php-8.4.service", "../../etc/passwd"}, nil
+		},
+	}
+	s, err := NewServices(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := byName(s.List(context.Background()))
+	if svc := got["panel-php-8.3"]; svc.Kind != KindSystemd || svc.State != StateRunning {
+		t.Errorf("panel-php-8.3 = %+v", svc)
+	}
+	if svc := got["panel-php-8.4"]; svc.State != StateMissing {
+		t.Errorf("panel-php-8.4 = %+v", svc)
+	}
+	// A name that is not a unit name is never asked about or passed to systemctl.
+	if _, ok := got["../../etc/passwd"]; ok {
+		t.Error("a path-shaped unit name was listed")
+	}
+	for _, c := range cmd.calls {
+		for _, a := range c {
+			if strings.Contains(a, "passwd") {
+				t.Errorf("a path-shaped unit name reached systemctl: %q", c)
+			}
+		}
+	}
+	if !reflect.DeepEqual(got["panel-php-8.3"].Actions, []Action{ActionStart, ActionRestart}) {
+		t.Errorf("actions = %v, want no stop", got["panel-php-8.3"].Actions)
+	}
+	if err := s.Control(context.Background(), "panel-php-8.3", ActionStop); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("stopping a PHP unit = %v, want ErrNotAllowed", err)
+	}
+	cmd.calls = nil
+	if err := s.Control(context.Background(), "panel-php-8.4", ActionStart); err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.calls) != 1 || !reflect.DeepEqual(cmd.calls[0], []string{"systemctl", "start", "panel-php-8.4.service"}) {
+		t.Errorf("calls = %q", cmd.calls)
+	}
+}
+
+// A provider that fails leaves the fixed rows alone rather than hiding them.
+func TestProviderFailureLeavesTheFixedRows(t *testing.T) {
+	cmd := &fakeCmd{show: map[string]string{"panel-nginx.service": show("loaded", "active", "running")}}
+	s, err := NewServices(ServicesOptions{
+		Cmd:   cmd,
+		Units: func(context.Context) ([]string, error) { return nil, errors.New("the setting is unreadable") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := byName(s.List(context.Background())); got["panel-nginx"].State != StateRunning {
+		t.Errorf("the fixed rows were lost: %+v", got)
+	}
+}
+
 func TestListToleratesFailures(t *testing.T) {
 	cmd := &fakeCmd{show: map[string]string{}, err: map[string]error{"panel.service": errors.New("systemctl: not found")}}
 	apps := &fakeApps{err: errors.New("supervisord is down")}
