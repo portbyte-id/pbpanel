@@ -55,6 +55,7 @@ func (s *server) routes() http.Handler {
 
 	mux.Handle("GET /api/me", s.requireAuth(http.HandlerFunc(s.handleMe)))
 	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handlePassword)))
+	mux.Handle("POST /api/username", s.requireAuth(http.HandlerFunc(s.handleUsername)))
 
 	mux.Handle("GET /api/settings", s.requireAuth(http.HandlerFunc(s.handleGetSettings)))
 	mux.Handle("PUT /api/settings", s.requireAuth(http.HandlerFunc(s.handlePutSettings)))

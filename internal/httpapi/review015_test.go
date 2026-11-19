@@ -41,6 +41,7 @@ func TestEveryUnsafeRouteRequiresCSRF(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/logout", true},
 		{http.MethodPost, "/api/password", true},
+		{http.MethodPost, "/api/username", true},
 		{http.MethodPut, "/api/settings", true},
 		{http.MethodDelete, "/api/settings", false},
 		{http.MethodPatch, "/api/settings", false},

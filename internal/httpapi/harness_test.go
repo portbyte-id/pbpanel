@@ -113,11 +113,18 @@ type session struct {
 // login authenticates and returns the cookie and CSRF token the client holds.
 func (h *harness) login() session {
 	h.t.Helper()
+	return h.loginAs(testUser, testPassword)
+}
 
-	body := map[string]string{"username": testUser, "password": testPassword}
+// loginAs authenticates with an explicit account, for the tests that rename the
+// admin and must then sign in under the new name.
+func (h *harness) loginAs(username, password string) session {
+	h.t.Helper()
+
+	body := map[string]string{"username": username, "password": password}
 	rec := h.do(http.MethodPost, "/api/login", "", "", body)
 	if rec.Code != http.StatusOK {
-		h.t.Fatalf("login: status %d, body %s", rec.Code, rec.Body.String())
+		h.t.Fatalf("login as %q: status %d, body %s", username, rec.Code, rec.Body.String())
 	}
 
 	var resp loginResponse

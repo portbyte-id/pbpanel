@@ -10,10 +10,20 @@ import (
 // remember. The client shows the same number, so a rejection is not a surprise.
 const minPasswordLen = 12
 
+// maxUsernameLen bounds a new username. It is a login field shown in the header,
+// not a display name, so a cap keeps it from breaking the layout it appears in.
+const maxUsernameLen = 64
+
 // passwordRequest is the POST /api/password body.
 type passwordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+// usernameRequest is the POST /api/username body.
+type usernameRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewUsername     string `json:"new_username"`
 }
 
 // handlePassword changes the admin password after re-checking the current one.
@@ -38,29 +48,45 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The current password is proved through VerifyLogin rather than a bare hash
-	// check so a wrong one is throttled exactly like a failed login. VerifyLogin
-	// opens a session on success; it is revoked below along with all the others,
-	// and never reaches a cookie.
-	session, err := s.deps.Auth.VerifyLogin(r.Context(), s.deps.Actor, req.CurrentPassword, clientIP(r), r.UserAgent())
+	if !s.proveCurrentPassword(w, r, req.CurrentPassword) {
+		return
+	}
+
+	if err := s.deps.Auth.SetPassword(r.Context(), s.currentUsername(r.Context()), req.NewPassword); err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+
+	clearSessionCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// proveCurrentPassword re-checks the signed-in account's password before a
+// credential change. It writes the failure response and reports false when the
+// password is wrong, the address is throttled, or the check itself failed.
+//
+// The check goes through VerifyLogin rather than a bare hash comparison so a
+// wrong password is throttled exactly like a failed login. VerifyLogin opens a
+// session on success; it is revoked here so a check never leaves one live.
+func (s *server) proveCurrentPassword(w http.ResponseWriter, r *http.Request, password string) bool {
+	session, err := s.deps.Auth.VerifyLogin(r.Context(), s.currentUsername(r.Context()), password, clientIP(r), r.UserAgent())
 	if err != nil {
 		// A lockout here is the same condition as a login lockout, so it gets the
 		// same answer: 429 with Retry-After.
 		s.writeLoginError(w, r, err)
-		return
+		return false
 	}
-	// Revoke the session VerifyLogin just made before SetPassword revokes the
-	// rest, so this check never leaves a live session behind on a failure path.
 	if err := s.deps.Auth.Sessions().Revoke(r.Context(), session.ID); err != nil {
 		s.writeInternal(w, r, err)
-		return
+		return false
 	}
+	return true
+}
 
-	if err := s.deps.Auth.SetPassword(r.Context(), s.deps.Actor, req.NewPassword); err != nil {
-		s.writeInternal(w, r, err)
-		return
-	}
-
+// clearSessionCookie deletes the session cookie. The server has revoked every
+// session by the time this runs, so the browser's copy is dead either way; this
+// stops it being presented on the next request.
+func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -70,5 +96,4 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	w.WriteHeader(http.StatusNoContent)
 }

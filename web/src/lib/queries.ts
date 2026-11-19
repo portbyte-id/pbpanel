@@ -154,6 +154,19 @@ export function useChangePassword() {
   })
 }
 
+export function useChangeUsername() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { currentPassword: string; newUsername: string }) =>
+      api.changeUsername(input.currentPassword, input.newUsername),
+    // A rename revokes every session too, so the cached `me` — which names the
+    // old account — must not outlive the redirect to /login.
+    onSuccess: () => {
+      client.clear()
+    },
+  })
+}
+
 export function useLogin() {
   const client = useQueryClient()
   return useMutation({

@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -227,6 +229,109 @@ func TestPasswordChangeRejectsShortPassword(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 	h.errorEnvelopeOf(rec)
+}
+
+// TestUsernameChangeRenamesAndRevokes proves the rename does all three things a
+// credential change must: the new name logs in, the old one does not, and the
+// cookie that asked for the change is dead.
+func TestUsernameChangeRenamesAndRevokes(t *testing.T) {
+	h := newHarness(t)
+	s := h.login()
+
+	const newUser = "operator"
+	rec := h.do(http.MethodPost, "/api/username", s.cookie, s.csrf,
+		map[string]string{"current_password": testPassword, "new_username": newUser})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 1 || cookies[0].MaxAge >= 0 {
+		t.Fatalf("the change did not clear the cookie: %+v", cookies)
+	}
+
+	if after := h.do(http.MethodGet, "/api/me", s.cookie, "", nil); after.Code != http.StatusUnauthorized {
+		t.Errorf("cookie still valid after a rename: status %d", after.Code)
+	}
+
+	old := h.do(http.MethodPost, "/api/login", "", "",
+		map[string]string{"username": testUser, "password": testPassword})
+	if old.Code != http.StatusUnauthorized {
+		t.Errorf("old username: status = %d, want 401", old.Code)
+	}
+
+	fresh := h.do(http.MethodPost, "/api/login", "", "",
+		map[string]string{"username": newUser, "password": testPassword})
+	if fresh.Code != http.StatusOK {
+		t.Fatalf("new username: status = %d, want 200 (body %s)", fresh.Code, fresh.Body.String())
+	}
+}
+
+// TestMeReportsTheRenamedAccount proves /api/me reads the stored name rather
+// than the one the daemon started with, so the header follows a rename without
+// a restart.
+func TestMeReportsTheRenamedAccount(t *testing.T) {
+	h := newHarness(t)
+	s := h.login()
+
+	const newUser = "operator"
+	if rec := h.do(http.MethodPost, "/api/username", s.cookie, s.csrf,
+		map[string]string{"current_password": testPassword, "new_username": newUser}); rec.Code != http.StatusNoContent {
+		t.Fatalf("rename: status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	again := h.loginAs(newUser, testPassword)
+	rec := h.do(http.MethodGet, "/api/me", again.cookie, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var resp meResponse
+	h.decode(rec, &resp)
+	if resp.Username != newUser {
+		t.Errorf("username = %q, want %q", resp.Username, newUser)
+	}
+}
+
+// TestUsernameChangeNeedsCurrentPassword proves a live session alone cannot
+// rename the account, the same rule a password change follows.
+func TestUsernameChangeNeedsCurrentPassword(t *testing.T) {
+	h := newHarness(t)
+	s := h.login()
+
+	rec := h.do(http.MethodPost, "/api/username", s.cookie, s.csrf,
+		map[string]string{"current_password": "not the current password", "new_username": "operator"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+	if env := h.errorEnvelopeOf(rec); env.Error != errInvalidLogin {
+		t.Errorf("error = %q, want %q", env.Error, errInvalidLogin)
+	}
+}
+
+// TestUsernameChangeRejectsBadInput proves the empty and over-long cases are
+// refused before the password is checked.
+func TestUsernameChangeRejectsBadInput(t *testing.T) {
+	h := newHarness(t)
+	s := h.login()
+
+	cases := map[string]map[string]string{
+		"empty":       {"current_password": testPassword, "new_username": "   "},
+		"missing":     {"current_password": testPassword},
+		"too long":    {"current_password": testPassword, "new_username": strings.Repeat("a", maxUsernameLen+1)},
+		"no password": {"new_username": "operator"},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := h.do(http.MethodPost, "/api/username", s.cookie, s.csrf, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			h.errorEnvelopeOf(rec)
+		})
+	}
+
+	// A refused request must not have renamed anything.
+	if _, err := h.deps.Auth.VerifyLogin(context.Background(), testUser, testPassword, "203.0.113.9", "t"); err != nil {
+		t.Errorf("the account was renamed by a rejected request: %v", err)
+	}
 }
 
 // TestGetSettingsReturnsEveryKeyGrouped proves the Settings page can render from

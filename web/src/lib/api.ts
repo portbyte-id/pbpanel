@@ -758,6 +758,15 @@ export class ApiClient {
     this.setCsrfToken(null)
   }
 
+  /** POST /api/username. Every session is revoked, including this one. */
+  async changeUsername(currentPassword: string, newUsername: string): Promise<void> {
+    await this.request<void>("/api/username", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_username: newUsername }),
+    })
+    this.setCsrfToken(null)
+  }
+
   async settings(): Promise<SettingsResponse> {
     return this.request<SettingsResponse>("/api/settings")
   }

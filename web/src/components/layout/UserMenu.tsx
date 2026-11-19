@@ -1,8 +1,9 @@
 import { useNavigate } from "@tanstack/react-router"
-import { KeyRound, LogOut, Monitor, Moon, Sun, UserRound } from "lucide-react"
+import { KeyRound, LogOut, Monitor, Moon, Sun, UserRound, UserRoundPen } from "lucide-react"
 import { useState } from "react"
 
 import { PasswordDialog } from "@/components/PasswordDialog"
+import { UsernameDialog } from "@/components/UsernameDialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -23,13 +24,14 @@ const THEMES: { mode: ThemeMode; label: string; icon: typeof Sun }[] = [
 
 /**
  * The header's account control. One button opens an account dialog (appearance,
- * change password, sign out) so the header stays one row high.
+ * change username, change password, sign out) so the header stays one row high.
  */
 export function UserMenu({ username }: { username: string }) {
   const navigate = useNavigate()
   const logout = useLogout()
   const [theme, setTheme] = useTheme()
   const [accountOpen, setAccountOpen] = useState(false)
+  const [usernameOpen, setUsernameOpen] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
 
   const signOut = () => {
@@ -89,6 +91,17 @@ export function UserMenu({ username }: { username: string }) {
               className="justify-start"
               onClick={() => {
                 setAccountOpen(false)
+                setUsernameOpen(true)
+              }}
+            >
+              <UserRoundPen aria-hidden="true" />
+              Change username
+            </Button>
+            <Button
+              variant="outline"
+              className="justify-start"
+              onClick={() => {
+                setAccountOpen(false)
                 setPasswordOpen(true)
               }}
             >
@@ -103,6 +116,7 @@ export function UserMenu({ username }: { username: string }) {
         </DialogContent>
       </Dialog>
 
+      <UsernameDialog username={username} open={usernameOpen} onOpenChange={setUsernameOpen} />
       <PasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </>
   )

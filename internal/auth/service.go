@@ -153,6 +153,41 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) er
 	})
 }
 
+// SetUsername renames the admin account and revokes every existing session in
+// the same transaction. A rename changes the half of the credential the login
+// page asks for, so it carries the rule SetPassword already enforces: no session
+// that predates a credential change stays live.
+func (s *Service) SetUsername(ctx context.Context, username string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return errors.New("auth: username is empty")
+	}
+	now := formatTime(s.clock.Now())
+
+	return s.st.WithTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE admin SET username = ?, updated_at = ? WHERE id = 1`,
+			username, now,
+		)
+		if err != nil {
+			return fmt.Errorf("auth: set username: %w", err)
+		}
+		renamed, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("auth: set username: %w", err)
+		}
+		if renamed == 0 {
+			return errors.New("auth: no admin account to rename")
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL`, now,
+		); err != nil {
+			return fmt.Errorf("auth: revoke sessions: %w", err)
+		}
+		return nil
+	})
+}
+
 // VerifyLogin checks username and password. On success it opens a session for
 // ip and userAgent and returns it; the caller sets the cookie and hands the CSRF
 // token to the client.

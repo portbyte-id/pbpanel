@@ -92,9 +92,10 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 
 // actorFor names who performed the request. The panel has one admin account, so
 // every request is attributed to it; the body's username is never recorded,
-// because a failed login's username is attacker-supplied text.
-func (s *server) actorFor(*http.Request) string {
-	return s.deps.Actor
+// because a failed login's username is attacker-supplied text. The name is read
+// per request so a rename from the account dialog shows up in the trail at once.
+func (s *server) actorFor(r *http.Request) string {
+	return s.currentUsername(r.Context())
 }
 
 type auditNotesKey struct{}
