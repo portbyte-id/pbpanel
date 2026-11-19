@@ -122,7 +122,12 @@ http {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			h := guard.NewHandler(e.keys, func(ctx context.Context, d string) (guard.Settings, bool, error) {
-				s := guard.Settings{Provider: provider, Difficulty: 10, Clearance: time.Hour, CookieName: CookieName(d)}
+				// The Turnstile keys are panel settings now: the handler refuses a
+				// Turnstile site without them, so the lookup supplies the test pair.
+				s := guard.Settings{
+					Provider: provider, Difficulty: 10, Clearance: time.Hour, CookieName: CookieName(d),
+					TurnstileSiteKey: "1x00000000000000000000AA", TurnstileSecret: "1x0000000000000000000000000000000AA",
+				}
 				return s, d == "a.test", nil
 			}, tsOK{}, nil)
 			go func() { _ = guard.Serve(ctx, ln, h) }()

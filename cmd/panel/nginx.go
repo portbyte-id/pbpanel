@@ -44,6 +44,21 @@ func guardKeys(layout install.Layout) (*guard.Keyring, error) {
 	return guard.NewKeyring(master)
 }
 
+// turnstileKeys is the firewall's source of the panel's Turnstile keys. They are
+// Settings, read on every use, so a key typed in the Settings page applies to the
+// next visitor and the next save without a reload.
+func turnstileKeys(reg *settings.Registry) waf.TurnstileSource {
+	return func(ctx context.Context) (siteKey, secret string, err error) {
+		if siteKey, err = reg.Str(ctx, settings.KeyWAFTurnstileSiteKey); err != nil {
+			return "", "", fmt.Errorf("reading the Turnstile site key: %w", err)
+		}
+		if secret, err = reg.Str(ctx, settings.KeyWAFTurnstileSecret); err != nil {
+			return "", "", fmt.Errorf("reading the Turnstile secret key: %w", err)
+		}
+		return siteKey, secret, nil
+	}
+}
+
 // serveGuard answers the challenge page over the unix socket nginx proxies
 // /.pb-challenge/ to. A site whose page cannot reach it shows the visitor an
 // error and a retry button; visitors with a valid cookie are not affected.
@@ -171,6 +186,9 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		wafEngine.WithGuard(keys)
 		guardHandler = guard.NewHandler(keys, wafEngine.GuardSettings, nil, logger)
 	}
+	// Turnstile's keys are panel settings: without this source no site can use
+	// Turnstile, however the Settings page is filled in.
+	wafEngine.WithTurnstile(turnstileKeys(reg))
 	mgr, err := sites.New(sites.Options{
 		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
 		WAF: wafEngine,

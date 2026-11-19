@@ -15,7 +15,8 @@ viewer for ModSecurity events.
 
 Certificate challenges (`/.well-known/acme-challenge/`) are never blocked by IP
 rules and never inspected by ModSecurity, so an allow list cannot stop a
-certificate from renewing.
+certificate from renewing. The challenge page's own endpoints are exempt the same
+way: see `challenge-page.md`.
 
 **Not built: geo (country) rules.** They need a GeoIP database and an nginx
 module for it, neither of which the image has. Address and network rules cover
