@@ -72,3 +72,38 @@ func TestRetireIsANoOpOnAFreshHostOrWithoutDocker(t *testing.T) {
 		}
 	}
 }
+
+func TestRetirePHPRemovesTheManagedVersionContainer(t *testing.T) {
+	f := &fakeRetirer{c: &docker.Container{Labels: map[string]string{docker.LabelManaged: "true"}}}
+	if err := retirePHPContainer(context.Background(), "8.3", f, quiet()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.calls, ",") != "stop panel-php-8.3,remove panel-php-8.3" {
+		t.Errorf("calls = %v", f.calls)
+	}
+}
+
+func TestRetirePHPLeavesAForeignContainerAndSaysSo(t *testing.T) {
+	f := &fakeRetirer{c: &docker.Container{Labels: map[string]string{}}}
+	err := retirePHPContainer(context.Background(), "8.3", f, quiet())
+	if err == nil || !strings.Contains(err.Error(), "did not make it") {
+		t.Errorf("err = %v, want a refusal to touch a container the panel did not make", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("a foreign container was touched: %v", f.calls)
+	}
+}
+
+func TestRetirePHPIsANoOpOnAFreshHostOrWithoutDocker(t *testing.T) {
+	for name, f := range map[string]*fakeRetirer{
+		"no container": {},
+		"docker down":  {inspectErr: errors.New("dial unix /var/run/docker.sock: connect: no such file or directory")},
+	} {
+		if err := retirePHPContainer(context.Background(), "8.3", f, quiet()); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(f.calls) != 0 {
+			t.Errorf("%s: calls = %v", name, f.calls)
+		}
+	}
+}

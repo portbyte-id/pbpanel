@@ -113,6 +113,34 @@ func retireNginxContainer(ctx context.Context, eng containerRemover, logger *slo
 	return eng.ContainerRemove(ctx, legacyNginxContainer, true)
 }
 
+// retirePHPContainer stops and removes the panel-php-<ver> container a host
+// upgraded from the container PHP runtime still has, right before the version's
+// first native start: config files and pool sockets are the same paths, so the
+// new FPM master simply recreates them. Only a container the panel made is
+// touched; a foreign one means the socket or the sites tree is somebody else's
+// to keep running. A host without Docker, or without the container, has nothing
+// to retire. Old panel/php:* images are left on disk for the pruner.
+func retirePHPContainer(ctx context.Context, ver string, eng containerRemover, logger *slog.Logger) error {
+	name := php.ContainerName(ver)
+	c, err := eng.ContainerInspect(ctx, name)
+	if errors.Is(err, docker.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		// Docker not answering means no container is holding the sockets either.
+		logger.Warn("php: could not look for the old container", "version", ver, "error", err)
+		return nil
+	}
+	if c.Labels[docker.LabelManaged] != "true" {
+		return fmt.Errorf("a container named %s exists but the panel did not make it; remove or rename it", name)
+	}
+	logger.Info("php: removing the container it ran in before; it now runs under systemd", "version", ver)
+	if err := eng.ContainerStop(ctx, name, 25*time.Second); err != nil {
+		return err
+	}
+	return eng.ContainerRemove(ctx, name, true)
+}
+
 // nginxStack is everything the nginx and sites features run on. The HTTP routes
 // of step 1.10 take it from here.
 type nginxStack struct {
@@ -165,6 +193,9 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 				return nil, err
 			}
 			return php.ParseVersions(csv)
+		},
+		Retire: func(ctx context.Context, ver string) error {
+			return retirePHPContainer(ctx, ver, eng, logger)
 		},
 	})
 	if err != nil {
