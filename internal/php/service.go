@@ -2,20 +2,38 @@ package php
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/native"
 )
 
 // settle is how long Healthy watches the master after a reload, for the same
 // reason as nginx: a config that passed the test can still make it exit.
 const settle = 750 * time.Millisecond
 
-// Engine is the part of the Docker client PHP uses.
+// stopTimeout is how long systemd lets FPM finish its requests after SIGQUIT.
+// The unit says the same; this is the budget the panel waits for.
+const stopTimeout = 25 * time.Second
+
+// Runner runs a host command and returns its combined output.
+type Runner = native.Runner
+
+// ExecRunner runs commands on this host.
+type ExecRunner = native.ExecRunner
+
+// UnitName is the systemd unit that runs one version's FPM master.
+func UnitName(ver string) string { return "panel-php-" + ver + ".service" }
+
+// unit is one version's unit, as the shared helpers name it.
+func unit(ver string) native.Unit { return native.Unit{Product: product, Name: UnitName(ver)} }
+
+// Engine is the part of the Docker client PHP uses. The native runtime needs none
+// of it; it stays while the manager still builds images (step 4).
 type Engine interface {
 	docker.Engine
 	ContainerKill(ctx context.Context, id, signal string) error
@@ -27,13 +45,8 @@ type Engine interface {
 	ImageRemove(ctx context.Context, ref string) error
 }
 
-// ImageFunc names the image a version's container runs now. It is a function so
-// that a swap takes effect on the next start without rebuilding the service.
-type ImageFunc func(ctx context.Context) (string, error)
-
-// scanDirEnv makes PHP read the panel's conf.d after the image's own: a
-// leading colon keeps the compiled-in directory, where the image enables its
-// extensions.
+// scanDirEnv makes PHP read the panel's conf.d after the build's own: a leading
+// colon keeps the compiled-in directory, where the build enables its extensions.
 func scanDirEnv(p Paths, ver string) string { return "PHP_INI_SCAN_DIR=:" + p.ConfDir(ver) }
 
 // Spec is the container of one version running image. FPM is started on the
@@ -64,25 +77,32 @@ func Spec(p Paths, ver, image string) docker.Spec {
 	return spec
 }
 
-// Service is one PHP version as a confedit.Service: it validates with
-// `php-fpm -t`, reloads with USR2 and checks the container is still up.
+// Service is one PHP version as a confedit.Service: it validates with the
+// version's own php-fpm and php binaries on the host, reloads with USR2 and
+// checks the master is still the same process.
 type Service struct {
-	eng   Engine
-	p     Paths
-	ver   string
-	wait  time.Duration
-	image ImageFunc
-	// start makes Reload create or start the container when it is not running.
+	p    Paths
+	run  Runner
+	ver  string
+	wait time.Duration
+	rt   *Runtime
+	// start makes Reload bring the version up when its unit is not running.
 	// Changes that give the version its first site use it; a settings edit does
 	// not, so a version nobody uses stays down (step 2.7).
 	start bool
 }
 
-// NewService returns the service of a version. With start set, a reload brings
-// the container up if it is not running. image names the build to run when a
-// container has to be created.
-func NewService(eng Engine, p Paths, ver string, start bool, image ImageFunc) *Service {
-	return &Service{eng: eng, p: p, ver: ver, wait: settle, start: start, image: image}
+// NewService returns the service of a version. With start set, a reload starts
+// the version's unit when it is not running.
+func NewService(run Runner, p Paths, ver string, start bool) *Service {
+	return &Service{p: p, run: run, ver: ver, wait: settle, start: start, rt: NewRuntime(p, run, ver)}
+}
+
+// WithUnitDir writes the unit somewhere other than systemd's own directory.
+// Tests use it; production does not.
+func (s *Service) WithUnitDir(dir string) *Service {
+	s.rt.WithUnitDir(dir)
+	return s
 }
 
 // Name implements confedit.Service.
@@ -90,128 +110,114 @@ func (s *Service) Name() string { return ServiceName(s.ver) }
 
 // iniTrouble matches what PHP prints when php.ini or a conf.d file does not
 // parse or names an extension it cannot load. Both commands of Validate report
-// those and still exit 0 (confirmed against php:8.3-fpm), so the exit code
-// alone would let a broken ini go live.
+// those and still exit 0 (confirmed against php:8.3-fpm and a native 8.3 build),
+// so the exit code alone would let a broken ini go live.
 var iniTrouble = regexp.MustCompile(`PHP:\s+syntax error|PHP Startup:|PHP (Warning|Fatal error|Parse error)|\b(ERROR|ALERT):`)
 
-// Validate checks the files on disk with two commands: `php-fpm -t` for the
-// FPM config and the ini syntax, then a PHP start-up for what only loading the
-// ini shows, such as an extension that does not exist. They run by exec in the
-// running container, or in a one-shot container with the same mounts when it
-// is down.
+// Validate checks the files on disk with two commands run on the host: `php-fpm
+// -t` for the FPM config and the ini syntax, then a PHP start-up for what only
+// loading the ini shows, such as an extension that does not exist. It needs no
+// running unit, so a configuration can be checked before the version is first
+// started.
 func (s *Service) Validate(ctx context.Context) (string, error) {
+	runEnv, ok := s.run.(native.EnvRunner)
+	if !ok {
+		return "", fmt.Errorf("php %s: the runner cannot set PHP_INI_SCAN_DIR, so conf.d would be ignored", s.ver)
+	}
 	ini := s.p.IniPath(s.ver)
-	var out string
-	for _, test := range [][]string{
-		{"php-fpm", "-t", "-y", s.p.FPMConf(s.ver), "-c", ini},
-		{"php", "-c", ini, "-d", "display_startup_errors=1", "-d", "log_errors=0", "-r", ""},
+	env := []string{scanDirEnv(s.p, s.ver)}
+	var out strings.Builder
+	for _, test := range []struct {
+		what string
+		bin  string
+		args []string
+	}{
+		{"php-fpm", s.p.Binary(s.ver), []string{"-t", "-y", s.p.FPMConf(s.ver), "-c", ini}},
+		{"php", s.p.CLIBinary(s.ver), []string{"-c", ini, "-d", "display_startup_errors=1", "-d", "log_errors=0", "-r", ""}},
 	} {
-		res, err := s.run(ctx, test)
+		b, err := runEnv.RunEnv(ctx, env, test.bin, test.args...)
+		out.Write(b)
 		if err != nil {
-			return out, fmt.Errorf("%s could not be run: %w", test[0], err)
+			if code, ran := native.ExitCode(err); ran {
+				return out.String(), fmt.Errorf("%s rejected the configuration (exit %d)", test.what, code)
+			}
+			return out.String(), fmt.Errorf("%s could not be run: %w", test.what, err)
 		}
-		out += res.Output()
-		if res.ExitCode != 0 {
-			return out, fmt.Errorf("%s rejected the configuration (exit %d)", test[0], res.ExitCode)
-		}
-		if iniTrouble.MatchString(res.Output()) {
-			return out, fmt.Errorf("%s reported a problem with the configuration", test[0])
+		if iniTrouble.MatchString(string(b)) {
+			return out.String(), fmt.Errorf("%s reported a problem with the configuration", test.what)
 		}
 	}
-	return out, nil
+	return out.String(), nil
 }
 
-func (s *Service) run(ctx context.Context, cmd []string) (docker.ExecResult, error) {
-	name := ContainerName(s.ver)
-	c, err := s.eng.ContainerInspect(ctx, name)
-	switch {
-	case err == nil && c.State.Running:
-		return s.eng.Exec(ctx, name, docker.ExecOptions{Cmd: cmd, Env: []string{scanDirEnv(s.p, s.ver)}})
-	case err == nil || errors.Is(err, docker.ErrNotFound):
-		img, err := s.image(ctx)
-		if err != nil {
-			return docker.ExecResult{}, err
-		}
-		cfg := Spec(s.p, s.ver, img).Config()
-		cfg.Entrypoint, cfg.Cmd = cmd[:1], cmd[1:]
-		// A leftover from a daemon that died mid-validation would hold the name.
-		_ = s.eng.ContainerRemove(ctx, name+"-validate", true)
-		return s.eng.RunOnce(ctx, name+"-validate", cfg)
-	}
-	return docker.ExecResult{}, err
-}
-
-// Reload sends USR2 to the master of the running container. When the container
-// is not running, a starting service brings it up on the files just written; a
-// plain one does nothing, because nothing is running the old config either.
+// Reload asks systemd to signal the master. It refuses when the unit is not
+// running: a reload that silently did nothing would let an apply report success
+// for a config nothing loaded. A service built with start brings the version up
+// instead, which is what a first site does.
 func (s *Service) Reload(ctx context.Context) error {
-	name := ContainerName(s.ver)
-	c, err := s.eng.ContainerInspect(ctx, name)
-	switch {
-	case err == nil && c.State.Running:
-		if err := s.eng.ContainerKill(ctx, name, "USR2"); err != nil {
-			return fmt.Errorf("php %s reload: %w", s.ver, err)
-		}
-		return nil
-	case err != nil && !errors.Is(err, docker.ErrNotFound):
+	st, _, err := s.Status(ctx)
+	if err != nil {
 		return fmt.Errorf("php %s reload: %w", s.ver, err)
 	}
-	if !s.start {
-		return nil
-	}
-	img, err := s.image(ctx)
-	if err != nil {
-		return fmt.Errorf("php %s start: %w", s.ver, err)
-	}
-	if _, err := docker.Ensure(ctx, s.eng, Spec(s.p, s.ver, img), s.p.Root); err != nil {
-		return fmt.Errorf("php %s start: %w", s.ver, err)
-	}
-	return nil
-}
-
-// Healthy checks that the container is running and, after a short settle, that
-// it was not restarted: USR2 re-executes the master in place, so a new start
-// time means the master exited on the new config.
-func (s *Service) Healthy(ctx context.Context) error {
-	before, found, err := s.State(ctx)
-	if err != nil {
-		return fmt.Errorf("php %s health: %w", s.ver, err)
-	}
-	if !found || !before.State.Running {
-		if s.start {
-			return fmt.Errorf("php %s health: the container is not running", s.ver)
+	if st.Active {
+		if out, err := s.run.Run(ctx, "systemctl", "reload", UnitName(s.ver)); err != nil {
+			return fmt.Errorf("php %s reload: %w: %s", s.ver, err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	}
-	select {
-	case <-time.After(s.wait):
-	case <-ctx.Done():
-		return ctx.Err()
+	if !s.start {
+		return fmt.Errorf("php %s reload: %s is %s", s.ver, UnitName(s.ver), st.State)
 	}
-	after, found, err := s.State(ctx)
-	if err != nil {
-		return fmt.Errorf("php %s health: %w", s.ver, err)
-	}
-	if !found || !after.State.Running || after.State.Restarting {
-		return fmt.Errorf("php %s health: the container stopped right after the reload", s.ver)
-	}
-	if !after.State.StartedAt.Equal(before.State.StartedAt) {
-		return fmt.Errorf("php %s restarted right after the reload: the new configuration made FPM exit", s.ver)
+	if _, err := s.rt.EnsureRunning(ctx); err != nil {
+		return fmt.Errorf("php %s start: %w", s.ver, err)
 	}
 	return nil
 }
 
-// State is the version's container as Docker reports it. The bool is false
-// when there is no such container.
-func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
-	c, err := s.eng.ContainerInspect(ctx, ContainerName(s.ver))
-	if errors.Is(err, docker.ErrNotFound) {
-		return docker.Container{}, false, nil
+// Healthy checks the unit is running and, after a short settle, that it is the
+// same process: USR2 re-executes the master in place, so a new PID or start time
+// means the master exited on the new config and systemd restarted it.
+func (s *Service) Healthy(ctx context.Context) error {
+	if !s.start {
+		st, _, err := s.Status(ctx)
+		if err != nil {
+			return fmt.Errorf("php %s health: %w", s.ver, err)
+		}
+		if !st.Active {
+			// Nothing was reloaded for a version nobody uses; that is not unhealthy.
+			return nil
+		}
 	}
-	if err != nil {
+	return native.Stable(ctx, s.run, unit(s.ver), s.wait)
+}
+
+// Status is the version's unit as systemd reports it. The bool is false when the
+// unit does not exist yet.
+func (s *Service) Status(ctx context.Context) (native.Status, bool, error) {
+	st, err := native.StatusOf(ctx, s.run, unit(s.ver))
+	return st, st.Loaded, err
+}
+
+// State is the unit's status in the container shape the manager and the HTTP
+// layer read today. Step 4 moves both callers onto Status and this goes away.
+func (s *Service) State(ctx context.Context) (docker.Container, bool, error) {
+	st, found, err := s.Status(ctx)
+	if err != nil || !found {
 		return docker.Container{}, false, err
 	}
-	return c, true, nil
+	word := "exited"
+	switch {
+	case st.Active:
+		word = "running"
+	case st.State == "activating":
+		word = "restarting"
+	case st.State == "failed":
+		word = "failed"
+	}
+	return docker.Container{
+		Name:  UnitName(s.ver),
+		State: docker.ContainerState{Status: word, Running: st.Active, Pid: st.PID},
+	}, true, nil
 }
 
 var _ confedit.Service = (*Service)(nil)

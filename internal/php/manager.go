@@ -113,6 +113,9 @@ type Options struct {
 	Engine  Engine
 	Applier Applier
 	Paths   Paths
+	// Run runs host commands. The native service and runtime need it; it
+	// defaults to ExecRunner. The Docker build path does not use it.
+	Run Runner
 	// Supported returns the versions of the `php.versions` setting.
 	Supported func(ctx context.Context) ([]string, error)
 	// Read defaults to os.ReadFile.
@@ -133,6 +136,7 @@ type Manager struct {
 	eng       Engine
 	ap        Applier
 	p         Paths
+	run       Runner
 	supported func(ctx context.Context) ([]string, error)
 	read      func(string) ([]byte, error)
 	now       func() time.Time
@@ -153,9 +157,12 @@ func New(o Options) (*Manager, error) {
 		return nil, errors.New("php: store, engine and applier are required")
 	}
 	m := &Manager{
-		st: o.Store, eng: o.Engine, ap: o.Applier, p: o.Paths, supported: o.Supported,
+		st: o.Store, eng: o.Engine, ap: o.Applier, p: o.Paths, run: o.Run, supported: o.Supported,
 		read: o.Read, now: o.Now, scratch: o.Scratch, log: o.Log,
 		catalog: images.NewCatalog(o.Store), fams: map[string]*images.Family{}, digests: map[string]string{},
+	}
+	if m.run == nil {
+		m.run = ExecRunner{}
 	}
 	if m.supported == nil {
 		m.supported = func(context.Context) ([]string, error) { return ParseVersions(DefaultVersions) }
@@ -176,13 +183,8 @@ func New(o Options) (*Manager, error) {
 func (m *Manager) Paths() Paths { return m.p }
 
 // Service returns the confedit service of a version. See NewService for start.
-// The service runs whichever build is current when a container has to be made.
 func (m *Manager) Service(ver string, start bool) confedit.Service {
-	return NewService(m.eng, m.p, ver, start, m.imageFunc(ver))
-}
-
-func (m *Manager) imageFunc(ver string) ImageFunc {
-	return func(ctx context.Context) (string, error) { return m.CurrentTag(ctx, ver) }
+	return NewService(m.run, m.p, ver, start)
 }
 
 // CurrentTag is the image reference a version runs. It is ErrNotReady when no
@@ -205,10 +207,10 @@ func (m *Manager) CurrentTag(ctx context.Context, ver string) (string, error) {
 	return tag, nil
 }
 
-// ContainerState is a version's container as Docker reports it. The bool is
-// false when there is no such container.
+// ContainerState is a version's unit as systemd reports it, in the container
+// shape this caller and the HTTP layer read. Step 4 replaces both with Status.
 func (m *Manager) ContainerState(ctx context.Context, ver string) (docker.Container, bool, error) {
-	return NewService(m.eng, m.p, ver, false, m.imageFunc(ver)).State(ctx)
+	return NewService(m.run, m.p, ver, false).State(ctx)
 }
 
 // family returns the build family of a version, made on first use. Its hooks
@@ -347,21 +349,51 @@ func (m *Manager) check(ctx context.Context, ver string, b images.Build, serving
 // swap is the promotion hook: the running container moves from one build to
 // another. A version whose container is not running has nothing to move; its
 // next start uses the new build.
+//
+// It still asks Docker, not systemd: this hook is the container swap, and it goes
+// with the container path in step 4.
 func (m *Manager) swap(ctx context.Context, ver, from, to string) error {
-	svc := NewService(m.eng, m.p, ver, true, func(context.Context) (string, error) { return to, nil })
-	c, found, err := svc.State(ctx)
-	if err != nil {
+	c, err := m.eng.ContainerInspect(ctx, ContainerName(ver))
+	if err != nil && !errors.Is(err, docker.ErrNotFound) {
 		return err
 	}
-	if !found || !c.State.Running {
+	if err != nil || !c.State.Running {
 		return nil
 	}
 	return images.Swap(ctx, m.eng, images.SwapPlan{
 		Name:    ContainerName(ver),
 		Mount:   m.p.Root,
 		Spec:    func(image string) docker.Spec { return Spec(m.p, ver, image) },
-		Healthy: svc.Healthy,
+		Healthy: func(ctx context.Context) error { return containerHealthy(ctx, m.eng, ver) },
 	}, from, to)
+}
+
+// containerHealthy is the swap's health check: the new container is running and
+// stays running, and it was not restarted right after it started.
+func containerHealthy(ctx context.Context, eng Engine, ver string) error {
+	before, err := eng.ContainerInspect(ctx, ContainerName(ver))
+	if err != nil {
+		return fmt.Errorf("php %s health: %w", ver, err)
+	}
+	if !before.State.Running {
+		return fmt.Errorf("php %s health: the container is %s", ver, before.State.Status)
+	}
+	select {
+	case <-time.After(settle):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	after, err := eng.ContainerInspect(ctx, ContainerName(ver))
+	if err != nil {
+		return fmt.Errorf("php %s health: %w", ver, err)
+	}
+	if !after.State.Running || after.State.Restarting {
+		return fmt.Errorf("php %s health: the container stopped right after the swap", ver)
+	}
+	if !after.State.StartedAt.Equal(before.State.StartedAt) {
+		return fmt.Errorf("php %s restarted right after the swap: the new build made FPM exit", ver)
+	}
+	return nil
 }
 
 // --- catalogue ---------------------------------------------------------------
@@ -750,6 +782,9 @@ func (m *Manager) EnsureContainer(ctx context.Context, ver string) (docker.Ensur
 // ApplyMounts brings every running version's container up to its spec, as
 // nginx.Runtime.ApplyMounts does for nginx. Stopped and absent containers are
 // left alone.
+//
+// It asks Docker directly, not ContainerState: this is the container path, and it
+// goes with it in step 4.
 func (m *Manager) ApplyMounts(ctx context.Context) error {
 	vs, err := m.List(ctx)
 	if err != nil {
@@ -757,12 +792,15 @@ func (m *Manager) ApplyMounts(ctx context.Context) error {
 	}
 	var errs []error
 	for _, v := range vs {
-		c, ok, err := m.ContainerState(ctx, v.Version)
+		c, err := m.eng.ContainerInspect(ctx, ContainerName(v.Version))
+		if errors.Is(err, docker.ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("php %s: %w", v.Version, err))
 			continue
 		}
-		if !ok || !c.State.Running {
+		if !c.State.Running {
 			continue
 		}
 		if _, err := m.EnsureContainer(ctx, v.Version); err != nil {
