@@ -1,6 +1,7 @@
 import { useId, useState } from "react"
 
 import { ApplyError, ApplyWarnings } from "@/components/ApplyError"
+import { APPS_ROOT, PathPicker, isEnvFile, parentOf } from "@/components/PathPicker"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -15,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import {
   ApiError,
+  api,
   type AppInput,
   type AppRestart,
   type AppType,
@@ -108,6 +110,33 @@ export function AppForm({
   const [restart, setRestart] = useState<AppRestart>(app?.restart ?? "always")
   const [autostart, setAutostart] = useState(app?.autostart ?? true)
   const [localError, setLocalError] = useState<{ field: string; text: string } | null>(null)
+  // Which path field's browser is open, and the file the last env load came from.
+  const [picking, setPicking] = useState<"command" | "workdir" | "env" | null>(null)
+  const [envFrom, setEnvFrom] = useState<string | null>(null)
+  const [envLoading, setEnvLoading] = useState(false)
+
+  const loadEnvFile = async (path: string) => {
+    setEnvLoading(true)
+    try {
+      const file = await api.fmOpenFile(path)
+      const parsed = parseEnv(file.content)
+      if (parsed.error) {
+        setLocalError({ field: "env", text: `${path}: ${parsed.error}` })
+        return
+      }
+      // Merged, not replaced: keys the operator typed and the file lacks stay.
+      setEnv((current) => formatEnv({ ...parseEnv(current).env, ...parsed.env }))
+      setEnvFrom(path)
+      setLocalError(null)
+    } catch (err) {
+      setLocalError({
+        field: "env",
+        text: err instanceof ApiError ? `${path}: ${err.detail}` : `The file ${path} could not be read.`,
+      })
+    } finally {
+      setEnvLoading(false)
+    }
+  }
 
   const apiField =
     error instanceof ApiError && (error.code === "invalid_input" || error.code === "conflict")
@@ -175,6 +204,14 @@ export function AppForm({
   }
 
   const noNode = type === "node" && majors.length === 0
+  // Where each browser opens: the folder a path already names, else the app's own.
+  const appDir = name.trim() === "" ? APPS_ROOT : `${APPS_ROOT}/${name.trim()}`
+  const workdirStart = workdir.trim().startsWith("/") ? workdir.trim() : appDir
+  const commandStart = command.trim().startsWith("/")
+    ? parentOf(command.trim())
+    : workdir.trim().startsWith("/")
+      ? workdir.trim()
+      : appDir
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
@@ -238,18 +275,37 @@ export function AppForm({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-command`}>{type === "node" ? "Entry script" : "Program path"}</Label>
-        <Input
-          id={`${id}-command`}
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={type === "node" ? "server.js" : "/www/services/apps/my-app/bin/my-app"}
-          required
-          aria-invalid={invalid("command")}
-          aria-describedby={describedBy("command")}
-        />
+        <div className="flex gap-2">
+          <Input
+            id={`${id}-command`}
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={type === "node" ? "server.js" : "/www/services/apps/my-app/bin/my-app"}
+            required
+            aria-invalid={invalid("command")}
+            aria-describedby={describedBy("command")}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            aria-label="Browse… for the program"
+            onClick={() => setPicking("command")}
+          >
+            Browse…
+          </Button>
+        </div>
         {fieldError("command")}
+        <PathPicker
+          open={picking === "command"}
+          onOpenChange={(open) => !open && setPicking(null)}
+          start={commandStart}
+          mode="file"
+          title={type === "node" ? "Choose the entry script" : "Choose the program"}
+          description="Open a folder, then choose a file in it. The whole filesystem is browsable."
+          onPick={setCommand}
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -269,21 +325,51 @@ export function AppForm({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-workdir`}>Working directory</Label>
-        <Input
-          id={`${id}-workdir`}
-          value={workdir}
-          onChange={(e) => setWorkdir(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={`/www/services/apps/${name.trim() || "<name>"}`}
-          aria-invalid={invalid("workdir")}
-          aria-describedby={describedBy("workdir")}
-        />
+        <div className="flex gap-2">
+          <Input
+            id={`${id}-workdir`}
+            value={workdir}
+            onChange={(e) => setWorkdir(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={`/www/services/apps/${name.trim() || "<name>"}`}
+            aria-invalid={invalid("workdir")}
+            aria-describedby={describedBy("workdir")}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            aria-label="Browse… for the working directory"
+            onClick={() => setPicking("workdir")}
+          >
+            Browse…
+          </Button>
+        </div>
         {fieldError("workdir")}
+        <PathPicker
+          open={picking === "workdir"}
+          onOpenChange={(open) => !open && setPicking(null)}
+          start={workdirStart}
+          mode="dir"
+          title="Choose the working directory"
+          description="The folder the app runs in. Open a folder, then choose it; the whole filesystem is browsable."
+          onPick={setWorkdir}
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-env`}>Environment</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={`${id}-env`}>Environment</Label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={envLoading}
+            onClick={() => setPicking("env")}
+          >
+            {envLoading ? "Reading…" : "Load .env file…"}
+          </Button>
+        </div>
         <textarea
           id={`${id}-env`}
           className={textarea}
@@ -295,6 +381,21 @@ export function AppForm({
           aria-describedby={describedBy("env")}
         />
         {fieldError("env")}
+        {envFrom !== null && (
+          <p className="text-muted-foreground text-xs">
+            Read from {envFrom}. Keys typed here that the file did not set were kept.
+          </p>
+        )}
+        <PathPicker
+          open={picking === "env"}
+          onOpenChange={(open) => !open && setPicking(null)}
+          start={workdirStart}
+          mode="file"
+          filter={isEnvFile}
+          title="Choose a .env file"
+          description="Its KEY=value lines are added to the box above, replacing only the keys it sets. Only .env files are listed."
+          onPick={(p) => void loadEnvFile(p)}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -430,7 +531,7 @@ export function AppDialog({
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
           <DialogTitle>{app ? `Edit ${app.name}` : "Add an app"}</DialogTitle>
           <DialogDescription>
