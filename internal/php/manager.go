@@ -126,6 +126,11 @@ type Options struct {
 	UnitDir string
 	// Supported returns the versions of the `php.versions` setting.
 	Supported func(ctx context.Context) ([]string, error)
+	// Retire removes the container a version ran in before the native runtime.
+	// It runs right before the version's first start under systemd, while the
+	// container is still serving the pools the new master is about to take over.
+	// Nil on hosts that never had the container runtime; tests set a fake.
+	Retire func(ctx context.Context, ver string) error
 	// Read defaults to os.ReadFile.
 	Read func(string) ([]byte, error)
 	Now  func() time.Time
@@ -144,6 +149,7 @@ type Manager struct {
 	run       Runner
 	unitDir   string
 	supported func(ctx context.Context) ([]string, error)
+	retireFn  func(ctx context.Context, ver string) error
 	read      func(string) ([]byte, error)
 	now       func() time.Time
 	log       *slog.Logger
@@ -162,7 +168,7 @@ func New(o Options) (*Manager, error) {
 	}
 	m := &Manager{
 		st: o.Store, ap: o.Applier, p: o.Paths, build: o.Build, run: o.Run,
-		unitDir: o.UnitDir, supported: o.Supported, read: o.Read, now: o.Now, log: o.Log,
+		unitDir: o.UnitDir, supported: o.Supported, retireFn: o.Retire, read: o.Read, now: o.Now, log: o.Log,
 		catalog: images.NewCatalog(o.Store), fams: map[string]*images.Family{},
 	}
 	if m.build == nil {
@@ -195,14 +201,24 @@ func (m *Manager) Paths() Paths { return m.p }
 
 // Service returns the confedit service of a version. See NewService for start.
 func (m *Manager) Service(ver string, start bool) confedit.Service {
-	return NewService(m.run, m.p, ver, start).WithUnitDir(m.unitDir)
+	svc := NewService(m.run, m.p, ver, start).WithUnitDir(m.unitDir)
+	if m.retireFn != nil {
+		svc.rt = svc.rt.WithRetire(func(ctx context.Context) error { return m.retireFn(ctx, ver) })
+	}
+	return svc
 }
 
 // runtime is a version's systemd runtime: the unit, whether it runs, and the
 // stop the operator chose. The flag lives beside the build catalogue, so it
-// survives a panel restart.
+// survives a panel restart. When the manager has a retire hook, it runs right
+// before the version's first start: the container the version ran in before the
+// native runtime is still serving the pool sockets then.
 func (m *Manager) runtime(ver string) *Runtime {
-	return NewRuntime(m.p, m.run, ver).WithUnitDir(m.unitDir).WithFlags(m.catalog)
+	rt := NewRuntime(m.p, m.run, ver).WithUnitDir(m.unitDir).WithFlags(m.catalog)
+	if m.retireFn != nil {
+		rt = rt.WithRetire(func(ctx context.Context) error { return m.retireFn(ctx, ver) })
+	}
+	return rt
 }
 
 // Status is a version's unit as systemd reports it. The bool is false when the

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +418,55 @@ func (r *rig) pull(t *testing.T, ver string) {
 	}
 	if err := r.m.Pull(ctx, ver, nil, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestManagerRetireHookFiresOnTheFirstStart wires the retire hook through the
+// manager the way cmd/panel does: the first start of a version retires its old
+// container before systemd starts the unit, a start while the unit runs does
+// not retire again, and both confedit services carry the hook for the versions
+// they start.
+func TestManagerRetireHookFiresOnTheFirstStart(t *testing.T) {
+	r := newRig(t)
+	var retired []string
+	r.m.retireFn = func(_ context.Context, ver string) error {
+		retired = append(retired, ver)
+		return nil
+	}
+	r.pull(t, "8.3")
+
+	r.run.active = false
+	if _, err := r.m.EnsureRunning(ctx, "8.3"); err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != 1 || retired[0] != "8.3" {
+		t.Fatalf("retire hook = %v, want one call for 8.3", retired)
+	}
+	startAt := slices.Index(r.run.calls, "systemctl start panel-php-8.3.service")
+	if startAt < 0 {
+		t.Fatalf("the version was not started: %v", r.run.calls)
+	}
+
+	// While the unit runs the hook stays idle: the container is gone by now and
+	// a running version must not be disturbed.
+	r.run.active = true
+	if _, err := r.m.EnsureRunning(ctx, "8.3"); err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != 1 {
+		t.Errorf("retire hook = %v, want it to run on the first start only", retired)
+	}
+
+	// The confedit service the sites model applies with reaches the same hook,
+	// start flag or not: only a start runs it, but it must be wired on both.
+	for _, start := range []bool{true, false} {
+		svc, ok := r.m.Service("8.4", start).(*Service)
+		if !ok {
+			t.Fatalf("Service returned %T", svc)
+		}
+		if svc.rt.retire == nil {
+			t.Errorf("the service (start=%v) has no retire hook", start)
+		}
 	}
 }
 

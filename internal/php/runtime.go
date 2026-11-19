@@ -56,6 +56,7 @@ type Runtime struct {
 	ver     string
 	flags   FlagStore
 	unitDir string
+	retire  func(ctx context.Context) error
 }
 
 // NewRuntime returns the runtime of a version.
@@ -73,6 +74,15 @@ func (r *Runtime) WithUnitDir(dir string) *Runtime {
 // WithFlags makes the runtime remember a stop across panel restarts.
 func (r *Runtime) WithFlags(f FlagStore) *Runtime {
 	r.flags = f
+	return r
+}
+
+// WithRetire sets what runs right before the version's first start under
+// systemd: it removes the container the version ran in before the native
+// runtime, so the new master can recreate the pool sockets. It does not run
+// while the unit is already active.
+func (r *Runtime) WithRetire(f func(ctx context.Context) error) *Runtime {
+	r.retire = f
 	return r
 }
 
@@ -139,6 +149,11 @@ func (r *Runtime) EnsureRunning(ctx context.Context) (EnsureResult, error) {
 			reason = "PHP " + r.ver + " is running; the unit changed and applies at its next start"
 		}
 		return EnsureResult{Action: ActionNone, Reason: reason}, nil
+	}
+	if r.retire != nil {
+		if err := r.retire(ctx); err != nil {
+			return EnsureResult{}, fmt.Errorf("php %s: retire the previous runtime: %w", r.ver, err)
+		}
 	}
 	if out, err := r.run.Run(ctx, "systemctl", "start", name); err != nil {
 		return EnsureResult{}, fmt.Errorf("php %s: systemctl start: %w: %s", r.ver, err, strings.TrimSpace(string(out)))

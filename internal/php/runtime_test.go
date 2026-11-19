@@ -143,6 +143,42 @@ func TestEnsureRunningWithoutABuildIsErrNoBuild(t *testing.T) {
 	}
 }
 
+// The container a host ran before must be gone before systemd starts FPM, or the
+// new master races it for the pool sockets; and a version that already runs under
+// systemd is never disturbed by it.
+func TestRetireRunsBeforeTheFirstStartOnly(t *testing.T) {
+	p := runtimePaths(t)
+	installBuild(t, p, "8.3")
+	unitDir := t.TempDir()
+	retired := 0
+	start := "systemctl start panel-php-8.3.service"
+	run := &fakeRunner{fn: unitState("loaded", "inactive", 0, "0")}
+	rt := NewRuntime(p, run, "8.3").WithUnitDir(unitDir).WithRetire(func(context.Context) error {
+		retired++
+		if contains(run.calls, start) {
+			t.Error("the version was started before the old container was retired")
+		}
+		return nil
+	})
+	ctx := context.Background()
+	if _, err := rt.EnsureRunning(ctx); err != nil || retired != 1 {
+		t.Fatalf("EnsureRunning = %v, retired %d times", err, retired)
+	}
+	run.fn = unitState("loaded", "active", 7, "100")
+	if _, err := rt.EnsureRunning(ctx); err != nil || retired != 1 {
+		t.Errorf("a running version was retired again: %v, %d", err, retired)
+	}
+
+	failing := NewRuntime(p, &fakeRunner{fn: unitState("loaded", "inactive", 0, "0")}, "8.3").
+		WithUnitDir(unitDir).
+		WithRetire(func(context.Context) error {
+			return errors.New("a container named panel-php-8.3 exists but the panel did not make it")
+		})
+	if _, err := failing.EnsureRunning(ctx); err == nil || !strings.Contains(err.Error(), "retire") {
+		t.Errorf("a failed retirement started the version anyway: %v", err)
+	}
+}
+
 func TestStopRecordsTheFlagAndDisablesTheUnit(t *testing.T) {
 	p := runtimePaths(t)
 	flags := flagStore{}
