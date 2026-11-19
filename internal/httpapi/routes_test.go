@@ -34,6 +34,8 @@ func protectedRoutes() []protectedRoute {
 		{name: "me", method: http.MethodGet, path: "/api/me"},
 		{name: "password", method: http.MethodPost, path: "/api/password",
 			body: map[string]string{"current_password": testPassword, "new_password": "a brand new long password"}},
+		{name: "username", method: http.MethodPost, path: "/api/username",
+			body: map[string]string{"current_password": testPassword, "new_username": "operator"}},
 		{name: "settings get", method: http.MethodGet, path: "/api/settings"},
 		{name: "settings put", method: http.MethodPut, path: "/api/settings",
 			body: map[string]any{"settings": []map[string]string{{"name": "login.max_attempts", "value": "6"}}}},
@@ -238,6 +240,7 @@ func TestMalformedBodyIs400(t *testing.T) {
 
 	routes := []protectedRoute{
 		{name: "password", method: http.MethodPost, path: "/api/password"},
+		{name: "username", method: http.MethodPost, path: "/api/username"},
 		{name: "settings put", method: http.MethodPut, path: "/api/settings"},
 	}
 

@@ -309,3 +309,70 @@ func TestSetPasswordRejectsEmptyValues(t *testing.T) {
 		t.Fatal("SetPassword accepted an empty password")
 	}
 }
+
+// A rename is a credential change, so it revokes sessions like a password
+// change does: a name that no longer exists must not leave a cookie working.
+func TestSetUsernameRenamesAndRevokesEverySession(t *testing.T) {
+	svc, _, _ := seeded(t)
+	ctx := context.Background()
+
+	first, err := svc.VerifyLogin(ctx, testUser, testPassword, "203.0.113.7", "a")
+	if err != nil {
+		t.Fatalf("VerifyLogin: %v", err)
+	}
+
+	const newUser = "operator"
+	if err := svc.SetUsername(ctx, newUser); err != nil {
+		t.Fatalf("SetUsername: %v", err)
+	}
+
+	if _, err := svc.Sessions().Lookup(ctx, first.ID); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("the session survived the rename: %v", err)
+	}
+
+	name, err := svc.Username(ctx)
+	if err != nil {
+		t.Fatalf("Username: %v", err)
+	}
+	if name != newUser {
+		t.Fatalf("Username = %q, want %q", name, newUser)
+	}
+
+	if _, err := svc.VerifyLogin(ctx, testUser, testPassword, "203.0.113.8", "b"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("the old username still logs in: %v", err)
+	}
+	if _, err := svc.VerifyLogin(ctx, newUser, testPassword, "203.0.113.9", "c"); err != nil {
+		t.Fatalf("the new username does not log in: %v", err)
+	}
+}
+
+// The name is trimmed the same way SetPassword trims it, so a stray space from
+// the form does not become part of the credential.
+func TestSetUsernameTrimsWhitespace(t *testing.T) {
+	svc, _, _ := seeded(t)
+
+	if err := svc.SetUsername(context.Background(), "  operator  "); err != nil {
+		t.Fatalf("SetUsername: %v", err)
+	}
+	name, err := svc.Username(context.Background())
+	if err != nil {
+		t.Fatalf("Username: %v", err)
+	}
+	if name != "operator" {
+		t.Fatalf("Username = %q, want %q", name, "operator")
+	}
+}
+
+func TestSetUsernameRejectsEmptyAndMissingAccount(t *testing.T) {
+	ctx := context.Background()
+
+	st := openStore(t)
+	svc := newService(t, st, newFakeClock())
+	if err := svc.SetUsername(ctx, "   "); err == nil {
+		t.Fatal("SetUsername accepted an empty username")
+	}
+	// No admin row at all: install has not run, so there is nothing to rename.
+	if err := svc.SetUsername(ctx, "operator"); err == nil {
+		t.Fatal("SetUsername renamed an account that does not exist")
+	}
+}

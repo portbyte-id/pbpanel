@@ -16,7 +16,7 @@ export function LoginPage() {
   const navigate = useNavigate()
   const login = useLogin()
   const search = useSearch({ from: "/login" })
-  const [username, setUsername] = useState("admin")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
 
@@ -53,6 +53,7 @@ export function LoginPage() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoFocus
               required
             />
           </div>
@@ -67,7 +68,6 @@ export function LoginPage() {
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoFocus
                 required
                 className="pr-10"
               />

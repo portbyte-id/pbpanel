@@ -176,6 +176,24 @@ describe("request bodies", () => {
 
     await expect(client.request("/api/password", { method: "POST" })).resolves.toBeUndefined()
   })
+
+  it("sends the username change as the server's field names", async () => {
+    const { fetch, calls } = stubFetch(new Response(null, { status: 204 }))
+    const client = new ApiClient({ fetch })
+    client.setCsrfToken("t")
+
+    await client.changeUsername("the current password", "operator")
+
+    expect(calls[0].url).toBe("/api/username")
+    expect(calls[0].init.method).toBe("POST")
+    expect(headerOf(calls[0], CSRF_HEADER)).toBe("t")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      current_password: "the current password",
+      new_username: "operator",
+    })
+    // Every session is revoked by the server, so the token must not survive.
+    expect(client.csrfToken).toBeNull()
+  })
 })
 
 describe("isSafeMethod", () => {

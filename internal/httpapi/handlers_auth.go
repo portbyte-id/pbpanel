@@ -114,5 +114,5 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // reload, when it has a cookie but no in-memory token.
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	session, _ := sessionFrom(r.Context())
-	writeJSON(w, http.StatusOK, meResponse{Username: s.deps.Actor, CSRFToken: session.CSRFToken})
+	writeJSON(w, http.StatusOK, meResponse{Username: s.currentUsername(r.Context()), CSRFToken: session.CSRFToken})
 }
