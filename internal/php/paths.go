@@ -47,6 +47,9 @@ func LegacyImage(ver string) string { return Repo + ":" + ver + "-fpm" }
 
 // BuildDir is the build context of one build on the host. The panel writes the
 // Dockerfile there and sends the directory to the Engine.
+//
+// The native runtime does not use it: it compiles in a builder image and extracts
+// the finished prefix to VersionsDir. It stays until the Docker path is removed.
 func (p Paths) BuildDir(ver, id string) string {
 	return path.Join(p.Root, "panel", "build", "php", ver, id)
 }
@@ -108,6 +111,64 @@ func (p Paths) ErrorLog(domain string) string {
 
 // SitesRoot is the directory whose subdirectories are web roots.
 func (p Paths) SitesRoot() string { return path.Join(p.Root, "services", "sites") }
+
+// VersionsDir holds one directory per native PHP build: php-fpm, the CLI, the
+// shared extensions and the libraries they need. Builds are never written in
+// place, as nginx's are not.
+func (p Paths) VersionsDir(ver string) string { return path.Join(p.Dir(ver), "versions") }
+
+// BuildPrefix is where the build with this ID lives. It is also the build's
+// compiled-in prefix, so extension_dir and the compiled-in scan dir resolve
+// against the build that is loading them, candidate or serving.
+//
+// It is not BuildDir: BuildDir(ver, id) is the Docker build context, a different
+// thing the native runtime never writes.
+func (p Paths) BuildPrefix(ver, id string) string {
+	return path.Join(p.VersionsDir(ver), id)
+}
+
+// CurrentLink is the symlink to the build that serves. A swap is one rename of
+// this link, so the unit and the configuration name a path that never changes.
+func (p Paths) CurrentLink(ver string) string { return path.Join(p.Dir(ver), "current") }
+
+// Binary is the FPM master of the build that serves.
+func (p Paths) Binary(ver string) string {
+	return path.Join(p.CurrentLink(ver), "sbin", "php-fpm")
+}
+
+// CLIBinary is the php command-line binary of the build that serves.
+func (p Paths) CLIBinary(ver string) string { return path.Join(p.CurrentLink(ver), "bin", "php") }
+
+// BinaryOf is the FPM master of one build, for checking a candidate before it
+// serves.
+func (p Paths) BinaryOf(ver, id string) string {
+	return path.Join(p.BuildPrefix(ver, id), "sbin", "php-fpm")
+}
+
+// CLIBinaryOf is the CLI of one build.
+func (p Paths) CLIBinaryOf(ver, id string) string {
+	return path.Join(p.BuildPrefix(ver, id), "bin", "php")
+}
+
+// VersionFile is where a build records the PHP release it compiled. A series
+// build picks its patch release while it runs, so the series does not say which
+// one is on disk.
+func (p Paths) VersionFile(ver, id string) string {
+	return path.Join(p.BuildPrefix(ver, id), "version")
+}
+
+// ProductionIniFile is the build's php.ini-production, what a version's php.ini is
+// first copied from.
+func (p Paths) ProductionIniFile(ver, id string) string {
+	return path.Join(p.BuildPrefix(ver, id), "etc", "php.ini-production")
+}
+
+// FPMErrorLog is the FPM master's own log, not a site's. Under systemd FPM cannot
+// open /proc/self/fd/2 or /dev/stderr, so it logs to a file; the unit names it in
+// ReadWritePaths and the rendered php-fpm.conf in [global] error_log.
+func (p Paths) FPMErrorLog(ver string) string {
+	return path.Join(p.Root, "panel", "logs", "php-"+ver+"-fpm.log")
+}
 
 // ServesRoot reports whether a pool's web root is one the PHP container can see:
 // inside the sites tree or inside an allowed folder; see nginx.Paths.ServesRoot.
