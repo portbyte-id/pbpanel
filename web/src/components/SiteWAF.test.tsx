@@ -99,6 +99,22 @@ describe("SiteWAF", () => {
     ])
   }, 30_000)
 
+  it("shows one section at a time, so the firewall does not stack every panel", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.siteWaf).mockResolvedValue(respond())
+    renderTab()
+
+    await openTab(user, "IP rules")
+    const shown = () =>
+      screen.getAllByRole("tabpanel").filter((p) => !p.hasAttribute("hidden")).map((p) => p.textContent)
+    expect(shown()).toHaveLength(1)
+    expect(shown()[0]).toContain("Always block these IPs")
+
+    await openTab(user, "Exclusions")
+    expect(shown()).toHaveLength(1)
+    expect(shown()[0]).toContain("Rule exclusions")
+  })
+
   it("keeps an entry typed in one tab when another tab is shown", async () => {
     const user = userEvent.setup()
     vi.mocked(api.siteWaf).mockResolvedValue(respond())

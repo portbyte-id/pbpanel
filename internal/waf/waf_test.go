@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/portbyte-id/server-panel/internal/guard"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
@@ -189,6 +190,51 @@ func TestRulesFileModesAndParanoia(t *testing.T) {
 			if !strings.Contains(rules, want) {
 				t.Errorf("%s: rules lack %q", tc.mode, want)
 			}
+		}
+	}
+}
+
+// TestChallengeExemptFromModSecurity: the challenge's own endpoints are the
+// requests a visitor has to make to get through, so the engine never inspects
+// them. A rule that flags the puzzle or the answer, or the 403 page itself,
+// leaves a visitor at a check they cannot pass.
+//
+// The switch is in the two locations rather than in the rules file: nginx runs
+// the request phases again after an internal redirect and takes the configuration
+// of the location it lands in, so the page is exempt even though the rules file
+// sees it under the URI the visitor asked for.
+func TestChallengeExemptFromModSecurity(t *testing.T) {
+	on := Default()
+	on.Mode = ModeBlock
+	on.Challenge = Challenge{Enabled: true}
+	on, err := on.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := string(guardedEngine(t).RenderConfig("a.test", on).Block)
+	page := strings.Index(block, "location = "+guard.PagePath+" {")
+	sock := strings.Index(block, "location ^~ "+guard.Prefix+" {")
+	if page < 0 || sock < 0 {
+		t.Fatalf("the challenge locations are missing:\n%s", block)
+	}
+	for _, at := range []int{page, sock} {
+		end := strings.Index(block[at:], "\n}")
+		if end < 0 || !strings.Contains(block[at:at+end], "modsecurity off;") {
+			t.Errorf("a challenge location is still inspected by ModSecurity:\n%s", block[at:at+end+2])
+		}
+	}
+
+	// A site with the firewall off asks nginx for no engine at all, and a site
+	// without a challenge must not carry the switch either: the directive is only
+	// valid where the module is loaded for the site.
+	engine := guardedEngine(t)
+	for name, c := range map[string]Config{"firewall off": Default(), "no challenge": func() Config {
+		x := Default()
+		x.Mode = ModeBlock
+		return x
+	}()} {
+		if block := string(engine.RenderConfig("a.test", c).Block); strings.Contains(block, "modsecurity off;") {
+			t.Errorf("%s: switched the engine off in a location:\n%s", name, block)
 		}
 	}
 }

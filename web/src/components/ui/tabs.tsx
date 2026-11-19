@@ -3,13 +3,34 @@ import * as TabsPrimitive from "@radix-ui/react-tabs"
 
 import { cn } from "@/lib/utils"
 
-function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Root>) {
+/** The selected tab, for TabsContent to hide the panels that are not it. */
+const TabsValue = React.createContext<string | undefined>(undefined)
+
+function Tabs({
+  className,
+  value,
+  defaultValue,
+  onValueChange,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Root>) {
+  // The selection is mirrored here so a kept-mounted panel can tell whether it is
+  // the shown one; Radix owns the state either way.
+  const [current, setCurrent] = React.useState(value ?? defaultValue ?? "")
+  const selected = value ?? current
   return (
-    <TabsPrimitive.Root
-      data-slot="tabs"
-      className={cn("flex flex-col gap-3", className)}
-      {...props}
-    />
+    <TabsValue.Provider value={selected}>
+      <TabsPrimitive.Root
+        data-slot="tabs"
+        className={cn("flex flex-col gap-3", className)}
+        {...props}
+        value={value}
+        defaultValue={defaultValue}
+        onValueChange={(next) => {
+          setCurrent(next)
+          onValueChange?.(next)
+        }}
+      />
+    </TabsValue.Provider>
   )
 }
 
@@ -39,11 +60,16 @@ function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPr
 }
 
 function TabsContent({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Content>) {
+  // Radix's `forceMount` passes every panel `hidden: false`, so a panel kept
+  // mounted that way stays visible and every tab's body stacks. Hidden is decided
+  // here instead, so a panel can keep its state without being shown.
+  const active = React.useContext(TabsValue) === props.value
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
       className={cn("outline-none", className)}
       {...props}
+      hidden={!active}
     />
   )
 }

@@ -24,6 +24,18 @@ A per-site "checking your browser" page in front of the site, part of the firewa
 Never challenged: `/.well-known/acme-challenge/`, the two challenge paths, and
 the site's exempt paths and IPs.
 
+## ModSecurity
+
+The challenge's locations carry `modsecurity off;` whenever the site's firewall
+has ModSecurity on. The puzzle fetch and the answer are the requests a visitor
+must make to get through, and the page itself is the 403 body, so a rule that
+flags any of them leaves a visitor at a check they cannot pass.
+
+The switch lives in the locations rather than in the rules file because nginx
+re-runs the request phases after the internal redirect to the page and takes the
+configuration of the location it lands in. The engine sees the rules file under
+the URI the visitor asked for, so a `SecRule` there would not cover the page.
+
 ## Keys and secrets
 
 - Per-site secrets come from `data/secret.key` through HKDF (`pbpanel guard v1 cookie|puzzle <domain>`).
@@ -32,9 +44,12 @@ the site's exempt paths and IPs.
   has since lost the key renders as off, so visitors are never locked out.
 - Puzzles are stateless: `<expires>.<random>.<difficulty>.<hmac>`, bound to the
   client address and user agent, valid for 5 minutes.
-- The Turnstile secret is sealed with `secretbox` (AAD `waf.turnstile:<domain>`) inside
-  the `site_waf` JSON. The API never returns it (`turnstile_secret_set` instead), and an
-  empty value on PUT keeps the stored one.
+- The Turnstile site key and secret key are panel settings (`waf.turnstile.site_key`,
+  `waf.turnstile.secret`), shared by every site that uses Turnstile. The firewall
+  reads them on each check, so a change applies to the next visitor without a
+  save or a reload, and a site can only be switched to Turnstile while both are
+  set. The site key is served to the page by `/.pb-challenge/config`, never
+  written into the page on disk.
 - At most 16 `siteverify` calls run at once.
 
 ## nginx traps found against a real nginx
@@ -64,9 +79,13 @@ HTTPS pages. A Go test runs it in Node against Go's `sha256`.
 - `internal/guard`: cookie format, puzzles, the handler for both checks, CSP hashes, and the JS SHA-256 vs Go.
 - `internal/waf/challenge_test.go`: validation, rendering, files, refusal without keys, sealing.
 - `internal/sites/challenge_test.go`: `SetWAF` end to end, secret redaction and keeping.
+- `internal/waf/waf_test.go` `TestChallengeExemptFromModSecurity`: the challenge
+  locations turn ModSecurity off, and nothing else does.
+- `cmd/panel/nginx_test.go` `TestTurnstileKeysComeFromSettings`: the firewall's
+  Turnstile source reads the two settings, live, and satisfies the engine's check.
 - `internal/waf/challenge_nginx_integration_test.go` (`-tags integration`): the rendered
   config in stock `nginx:1.28-alpine` with the real handler on the socket, for both checks.
-  Passed 2026-11-18 in WSL Docker.
+  Passed 2026-11-19 in WSL Docker.
 
 ## Not done
 
