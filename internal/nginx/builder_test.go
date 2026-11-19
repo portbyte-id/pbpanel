@@ -49,7 +49,7 @@ func TestDockerfileForFillsEveryPlaceholder(t *testing.T) {
 	}
 	for _, want := range []string{
 		"FROM ubuntu:26.04",
-		"nginx-1.30",
+		`grep -oE "nginx-1\.30\.[0-9]+\.tar\.gz"`,
 		`P="/www/panel/nginx/versions/` + testID + `"`,
 		"--conf-path=\"/www/panel/nginx/nginx.conf\"",
 		"openssl-3.5",
@@ -65,7 +65,10 @@ func TestDockerfileForFillsEveryPlaceholder(t *testing.T) {
 }
 
 func TestVersionHandling(t *testing.T) {
-	for v, ok := range map[string]bool{"1.30": true, "1.9": true, "1.2.3": false, "pqc-1.30": false, "": false, "1.30; rm": false} {
+	for v, ok := range map[string]bool{
+		"1.30": true, "1.9": true, "1.30.1": true, "1.30.12": true,
+		"1.2.3.4": false, "pqc-1.30": false, "": false, "1.30; rm": false, "1": false, "1.30.": false,
+	} {
 		if got := CheckVersion(v) == nil; got != ok {
 			t.Errorf("CheckVersion(%q) ok = %v, want %v", v, got, ok)
 		}
@@ -73,6 +76,31 @@ func TestVersionHandling(t *testing.T) {
 	// A version stored by the post-quantum flavor keeps working as its series.
 	if got := NormalizeVersion("pqc-1.30"); got != "1.30" {
 		t.Errorf("NormalizeVersion = %q", got)
+	}
+	for v, want := range map[string]string{"1.30": "1.30", "1.30.1": "1.30", "1.9": "1.9"} {
+		if got := Series(v); got != want {
+			t.Errorf("Series(%q) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+func TestDockerfileForPinsAReleaseAndLooksUpASeries(t *testing.T) {
+	series := string(DockerfileFor("ubuntu:26.04", testID, "1.30", testPaths))
+	if !strings.Contains(series, `if [ -n "" ]`) {
+		t.Error("a series build is not built from the series branch")
+	}
+	if !strings.Contains(series, `grep -oE "nginx-1\.30\.[0-9]+\.tar\.gz"`) {
+		t.Errorf("a series build does not look up its newest patch:\n%s", series)
+	}
+
+	release := string(DockerfileFor("ubuntu:26.04", testID, "1.30.1", testPaths))
+	if !strings.Contains(release, `if [ -n "1.30.1" ]`) {
+		t.Errorf("a release build is not built from the pinned branch:\n%s", release)
+	}
+	for name, d := range map[string]string{"series": series, "release": release} {
+		if i := strings.Index(d, "@"); i >= 0 {
+			t.Errorf("%s: a placeholder is left: %q", name, d[i:min(i+30, len(d))])
+		}
 	}
 }
 
@@ -127,7 +155,7 @@ func buildArchive(t *testing.T, id string) []byte {
 		name string
 		dir  bool
 		body string
-	}{{id + "/", true, ""}, {id + "/sbin/", true, ""}, {id + "/sbin/nginx", false, "ELF"}} {
+	}{{id + "/", true, ""}, {id + "/sbin/", true, ""}, {id + "/sbin/nginx", false, "ELF"}, {id + "/version", false, "1.30.1"}} {
 		hdr := &tar.Header{Name: e.name, Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(e.body))}
 		if e.dir {
 			hdr.Typeflag, hdr.Size = tar.TypeDir, 0

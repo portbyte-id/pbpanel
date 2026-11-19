@@ -196,6 +196,11 @@ export interface ImageBuild {
   finished_at: string | null
   current: boolean
   previous: boolean
+  /**
+   * nginx only: the release the build compiled, patch level included (1.30.1).
+   * A series build learns it while it runs; empty for a build that was pruned.
+   */
+  nginx_version?: string
 }
 
 /** One entry of the curated PHP extension catalogue. */
@@ -570,6 +575,11 @@ export interface NginxImage {
   repo: string
   /** The nginx version that serves, and the versions the page offers. */
   version: string
+  /**
+   * The release the serving build compiled, patch level included: 1.30.1 even when
+   * the series 1.30 was chosen. Empty when no build serves.
+   */
+  release: string
   versions: string[]
   /** True when nginx was stopped from the panel and is left stopped. */
   stopped: boolean

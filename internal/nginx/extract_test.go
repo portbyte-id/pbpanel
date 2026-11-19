@@ -54,6 +54,7 @@ func goodBuild(t *testing.T) *bytes.Reader {
 		entry{name: testID + "/", typ: tar.TypeDir, mode: 0o755},
 		entry{name: testID + "/sbin/", typ: tar.TypeDir, mode: 0o755},
 		entry{name: testID + "/sbin/nginx", body: "ELF", mode: 0o755},
+		entry{name: testID + "/version", body: "1.30.1\n"},
 		entry{name: testID + "/lib/libz.so.1", body: "lib"},
 		entry{name: testID + "/conf/mime.types", body: "types {}"},
 	)
@@ -118,6 +119,26 @@ func TestExtractBuildNeedsABinary(t *testing.T) {
 	err := ExtractBuild(archive(t, entry{name: testID + "/lib/libz.so.1", body: "lib"}), dir, testID)
 	if err == nil || !strings.Contains(err.Error(), "sbin/nginx") {
 		t.Errorf("an archive without a binary = %v", err)
+	}
+}
+
+func TestExtractBuildNeedsTheCompiledVersion(t *testing.T) {
+	dir := t.TempDir()
+	err := ExtractBuild(archive(t,
+		entry{name: testID + "/sbin/nginx", body: "ELF", mode: 0o755},
+	), dir, testID)
+	if err == nil || !strings.Contains(err.Error(), "no version") {
+		t.Errorf("an archive without a version = %v", err)
+	}
+}
+
+func TestBuildVersionReadsWhatTheBuildCompiled(t *testing.T) {
+	p := Paths{Root: filepath.ToSlash(t.TempDir())}
+	if err := ExtractBuild(goodBuild(t), filepath.FromSlash(p.VersionsDir()), testID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := BuildVersion(p, testID); err != nil || got != "1.30.1" {
+		t.Errorf("BuildVersion = %q, %v; want 1.30.1", got, err)
 	}
 }
 

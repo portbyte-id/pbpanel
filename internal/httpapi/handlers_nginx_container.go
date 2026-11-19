@@ -87,7 +87,7 @@ func (s *server) handleSetNginxVersion(n *NginxDeps, w http.ResponseWriter, r *h
 	}
 	version := strings.TrimSpace(req.Version)
 	if err := nginx.CheckVersion(version); err != nil {
-		invalidField(w, "version", "choose a version such as 1.29")
+		invalidField(w, "version", "choose a version such as 1.29, or type a release such as 1.29.0")
 		return
 	}
 	if version == imgs.Version() {

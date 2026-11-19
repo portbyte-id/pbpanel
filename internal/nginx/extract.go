@@ -113,11 +113,25 @@ func ExtractBuild(r io.Reader, versionsDir, id string) error {
 	if _, err := os.Stat(filepath.Join(stage, "sbin", "nginx")); err != nil {
 		return fmt.Errorf("nginx: the build archive holds no sbin/nginx: %w", err)
 	}
+	// The version the build compiled. A series build looks up its patch release
+	// while it runs, so this file is the only record of what is actually here.
+	if _, err := os.Stat(filepath.Join(stage, "version")); err != nil {
+		return fmt.Errorf("nginx: the build archive holds no version: %w", err)
+	}
 	if err := os.Rename(stage, final); err != nil {
 		return err
 	}
 	ok = true
 	return nil
+}
+
+// BuildVersion is the nginx release a build holds, as the build recorded it.
+func BuildVersion(p Paths, id string) (string, error) {
+	b, err := os.ReadFile(filepath.FromSlash(p.VersionFile(id)))
+	if err != nil {
+		return "", fmt.Errorf("nginx: read the version of build %s: %w", id, err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 type linkEntry struct{ name, target string }

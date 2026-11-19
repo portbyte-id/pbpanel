@@ -41,11 +41,15 @@ RUN set -eux; \
     mkdir crs; tar -xzf "coreruleset-@CRS_VERSION@-minimal.tar.gz" -C crs --strip-components=1; \
     test -d crs/rules
 
-# The newest patch release of each series is looked up at build time, so an update
-# is a rebuild that picks up fixes. The OpenSSL tarball is checked against the
-# digest published beside it.
+# A series (1.30) takes the newest patch release at build time, so an update is a
+# rebuild that picks up fixes; a full version (1.30.1) pins that one release. The
+# OpenSSL tarball is checked against the digest published beside it.
 RUN set -eux; \
-    nginx_tgz=$(curl -fsSL https://nginx.org/download/ | grep -oE "nginx-@SERIES@\.[0-9]+\.tar\.gz" | sort -uV | tail -n1); \
+    if [ -n "@NGINX_EXACT@" ]; then \
+      nginx_tgz="nginx-@NGINX_EXACT@.tar.gz"; \
+    else \
+      nginx_tgz=$(curl -fsSL https://nginx.org/download/ | grep -oE "nginx-@NGINX_SERIES_RE@\.[0-9]+\.tar\.gz" | sort -uV | tail -n1); \
+    fi; \
     test -n "$nginx_tgz"; \
     curl -fsSL "https://nginx.org/download/$nginx_tgz" | tar -xz; \
     mv "${nginx_tgz%.tar.gz}" nginx; \
@@ -103,9 +107,13 @@ RUN set -eux; P="@PREFIX@"; mkdir -p "$P/lib" "$P/conf"; \
     mkdir -p "$P/modsec/crs"; cp -r /build/crs/rules "$P/modsec/crs/rules"; \
     rm -rf "$P/html" "$P/logs"
 
-# A build that does not do what the panel expects of it is not kept.
+# A build that does not do what the panel expects of it is not kept. The version
+# it actually compiled is written beside the binary: a series build picks the
+# newest patch at build time, so the answer is only known here.
 RUN set -eux; P="@PREFIX@"; \
     "$P/sbin/nginx" -V 2>&1 | grep -q "built with OpenSSL @OPENSSL_SERIES@"; \
+    "$P/sbin/nginx" -v 2>&1 | sed -e 's|^nginx version: nginx/||' > "$P/version"; \
+    grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' "$P/version"; \
     test -f "$P/modules/ngx_http_modsecurity_module.so"; \
     test -f "$P/modsec/crs/rules/REQUEST-901-INITIALIZATION.conf"; \
     test -f "$P/conf/mime.types"; test -f "$P/conf/fastcgi_params"; \

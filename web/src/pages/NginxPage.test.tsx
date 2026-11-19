@@ -39,11 +39,12 @@ const image = (over: Partial<NginxImage> = {}): NginxImage => ({
   base: "nginx:1.29",
   repo: "panel/nginx:1.29",
   version: "1.29",
+  release: "1.29.0",
   versions: ["1.30", "1.29", "1.28"],
   stopped: false,
   present: true,
   busy: false,
-  current: build({ id: "current-build", current: true }),
+  current: build({ id: "current-build", current: true, nginx_version: "1.29.0" }),
   previous: null,
   builds: [],
   ...over,
@@ -63,6 +64,7 @@ describe("nginx build card", () => {
     vi.mocked(api.nginxImage).mockReset()
     vi.mocked(api.updateNginxImage).mockReset()
     vi.mocked(api.activateNginxImageBuild).mockReset()
+    vi.mocked(api.setNginxVersion).mockReset()
     // A started job opens its output stream; jsdom has no EventSource.
     class FakeEventSource {
       readyState = 0
@@ -76,7 +78,7 @@ describe("nginx build card", () => {
     vi.unstubAllGlobals()
   })
 
-  it("switches version only after another one is picked", async () => {
+  it("switches to a series picked from the suggestions", async () => {
     const user = userEvent.setup()
     vi.mocked(api.nginxImage).mockResolvedValue(image())
     vi.mocked(api.setNginxVersion).mockResolvedValue({ id: "job-v", kind: "nginx.version", state: "running" })
@@ -84,10 +86,45 @@ describe("nginx build card", () => {
 
     const button = await screen.findByRole("button", { name: "Switch version" })
     expect(button).toBeDisabled()
-    await user.selectOptions(screen.getByLabelText("nginx version"), "1.28")
+    await user.type(screen.getByLabelText("nginx version"), "1.28")
     expect(button).toBeEnabled()
     await user.click(button)
     await waitFor(() => expect(api.setNginxVersion).toHaveBeenCalledWith("1.28"))
+  })
+
+  it("accepts a full release typed with its patch, and clears the box after starting", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.nginxImage).mockResolvedValue(image())
+    vi.mocked(api.setNginxVersion).mockResolvedValue({ id: "job-v", kind: "nginx.version", state: "running" })
+    renderCard()
+
+    const input = await screen.findByLabelText("nginx version")
+    await user.type(input, "1.30.1")
+    await user.click(screen.getByRole("button", { name: "Switch version" }))
+    await waitFor(() => expect(api.setNginxVersion).toHaveBeenCalledWith("1.30.1"))
+    await waitFor(() => expect(input).toHaveValue(""))
+  })
+
+  it("refuses a version the server would reject, without starting a job", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.nginxImage).mockResolvedValue(image())
+    renderCard()
+
+    const input = await screen.findByLabelText("nginx version")
+    await user.type(input, "1.2.3.4")
+    expect(screen.getByRole("button", { name: "Switch version" })).toBeDisabled()
+    expect(input).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByText(/Use a version such as 1\.30, or a full release/)).toBeInTheDocument()
+    expect(api.setNginxVersion).not.toHaveBeenCalled()
+  })
+
+  it("shows the compiled release, patch level included, not just the series", async () => {
+    vi.mocked(api.nginxImage).mockResolvedValue(
+      image({ version: "1.30", release: "1.30.3", current: build({ current: true, nginx_version: "1.30.3" }) }),
+    )
+    renderCard()
+
+    expect(await screen.findByText("nginx 1.30.3")).toBeInTheDocument()
   })
 
   it("disables Update image while a build is running", async () => {
@@ -156,12 +193,14 @@ describe("nginx build card", () => {
     expect(screen.getByText("Built from")).toBeInTheDocument()
   })
 
-  it("names the versions without a flavour suffix", async () => {
+  it("offers the series as suggestions while the box starts empty", async () => {
     vi.mocked(api.nginxImage).mockResolvedValue(image())
     renderCard()
 
-    const select = await screen.findByLabelText("nginx version")
-    expect(select).toHaveDisplayValue("1.29 (running)")
-    expect(screen.getByRole("option", { name: "1.30" })).toBeInTheDocument()
+    const input = await screen.findByLabelText("nginx version")
+    expect(input).toHaveValue("")
+    const list = document.getElementById("nginx-versions")
+    expect(list).not.toBeNull()
+    expect([...list!.querySelectorAll("option")].map((o) => o.value)).toEqual(["1.30", "1.29", "1.28"])
   })
 })

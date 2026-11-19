@@ -208,6 +208,28 @@ func nginxImages(n *NginxDeps, w http.ResponseWriter) (NginxImages, bool) {
 	return n.Images, true
 }
 
+// nginxBuild is one build of the nginx family as the page reads it: the catalogue
+// row plus the release the build compiled, which a series build only learns while
+// it runs.
+type nginxBuild struct {
+	images.Build
+	NginxVersion string `json:"nginx_version"`
+}
+
+// withVersions adds the compiled release to every build whose files are still on
+// disk. A build that has been pruned keeps its row and has none.
+func withVersions(p nginx.Paths, builds []images.Build) []nginxBuild {
+	out := make([]nginxBuild, 0, len(builds))
+	for _, b := range builds {
+		nb := nginxBuild{Build: b}
+		if v, err := nginx.BuildVersion(p, b.ID); err == nil {
+			nb.NginxVersion = v
+		}
+		out = append(out, nb)
+	}
+	return out
+}
+
 // handleGetNginxImage answers the nginx image: what serves, what served before,
 // every build, and whether an operation is running.
 func (s *server) handleGetNginxImage(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
@@ -231,34 +253,45 @@ func (s *server) handleGetNginxImage(n *NginxDeps, w http.ResponseWriter, r *htt
 		s.writeInternal(w, r, err)
 		return
 	}
-	var current, previous *images.Build
+	rows := withVersions(n.Paths, builds)
+	var current, previous *nginxBuild
 	if has {
-		current = &cur
-	}
-	for i := range builds {
-		if builds[i].Previous {
-			previous = &builds[i]
+		one := withVersions(n.Paths, []images.Build{cur})
+		current = &one[0]
+		for i := range rows {
+			if rows[i].Previous {
+				previous = &rows[i]
+			}
 		}
 	}
-	if builds == nil {
-		builds = []images.Build{}
-	}
 	writeJSON(w, http.StatusOK, struct {
-		Base     string         `json:"base"`
-		Repo     string         `json:"repo"`
-		Version  string         `json:"version"`
-		Versions []string       `json:"versions"`
-		Stopped  bool           `json:"stopped"`
-		Present  bool           `json:"present"`
-		Busy     bool           `json:"busy"`
-		Current  *images.Build  `json:"current"`
-		Previous *images.Build  `json:"previous"`
-		Builds   []images.Build `json:"builds"`
+		Base    string `json:"base"`
+		Repo    string `json:"repo"`
+		Version string `json:"version"`
+		// Release is the release the serving build compiled, patch level included;
+		// empty when no build serves.
+		Release  string       `json:"release"`
+		Versions []string     `json:"versions"`
+		Stopped  bool         `json:"stopped"`
+		Present  bool         `json:"present"`
+		Busy     bool         `json:"busy"`
+		Current  *nginxBuild  `json:"current"`
+		Previous *nginxBuild  `json:"previous"`
+		Builds   []nginxBuild `json:"builds"`
 	}{
 		Base: nginx.BuildSource, Repo: nginx.Repo + ":" + imgs.Version(), Present: present,
-		Version: imgs.Version(), Versions: suggested(imgs.Version()), Stopped: n.Container != nil && n.Container.Stopped(ctx),
-		Busy: imgs.Idle() != nil, Current: current, Previous: previous, Builds: builds,
+		Version: imgs.Version(), Release: current.release(), Versions: suggested(imgs.Version()),
+		Stopped: n.Container != nil && n.Container.Stopped(ctx),
+		Busy:    imgs.Idle() != nil, Current: current, Previous: previous, Builds: rows,
 	})
+}
+
+// release is the build's compiled release, empty when there is no build.
+func (b *nginxBuild) release() string {
+	if b == nil {
+		return ""
+	}
+	return b.NginxVersion
 }
 
 // handleUpdateNginxImage builds the image again from the newest base image. The
