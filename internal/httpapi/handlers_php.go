@@ -4,11 +4,14 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"strconv"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/jobs"
+	"github.com/portbyte-id/server-panel/internal/native"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/sites"
 )
@@ -33,7 +36,9 @@ type PHPManager interface {
 	ReadIni(ctx context.Context, ver string) ([]byte, error)
 	WriteIni(ctx context.Context, ver string, content []byte) (confedit.Result, error)
 	Service(ver string, start bool) confedit.Service
-	ContainerState(ctx context.Context, ver string) (docker.Container, bool, error)
+	// Status is a version's unit as systemd reports it; the bool is false when
+	// the unit does not exist yet.
+	Status(ctx context.Context, ver string) (native.Status, bool, error)
 }
 
 // phpRoutes registers the routes of development plan step 2.8. h is the
@@ -77,6 +82,32 @@ type phpVersionJSON struct {
 	Sites []string `json:"sites"`
 }
 
+// unitWord is a unit's state in the word the container shape used, so the SPA's
+// badge logic reads the same strings it always did.
+func unitWord(st native.Status) string {
+	switch {
+	case st.Active:
+		return "running"
+	case st.State == "activating":
+		return "restarting"
+	case st.State == "failed":
+		return "failed"
+	}
+	return "exited"
+}
+
+// unitSince is when the unit entered its current state, as the wall clock.
+// systemd reports it monotonic, so it is converted: a unit that has not been up
+// long enough to say anything yields no time rather than a wrong one.
+func unitSince(st native.Status) (time.Time, bool) {
+	usec, err := strconv.ParseUint(st.Since, 10, 64)
+	if err != nil || usec == 0 {
+		return time.Time{}, false
+	}
+	up := time.Duration(usec) * time.Microsecond
+	return time.Now().Add(-up), true
+}
+
 func (s *server) handleListPHP(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
 	versions, err := n.PHP.List(r.Context())
 	if err != nil {
@@ -103,15 +134,15 @@ func (s *server) handleListPHP(n *NginxDeps, w http.ResponseWriter, r *http.Requ
 		}
 		row.Container.Status = "missing"
 		if v.State == php.StateReady {
-			c, found, err := n.PHP.ContainerState(r.Context(), v.Version)
+			st, found, err := n.PHP.Status(r.Context(), v.Version)
 			switch {
 			case err != nil:
-				s.logger.WarnContext(r.Context(), "php container state", "version", v.Version, "error", err)
-				row.Container = containerJSON{Error: "Docker did not answer; is the Docker service running?"}
+				s.logger.WarnContext(r.Context(), "php unit state", "version", v.Version, "error", err)
+				row.Container = containerJSON{Error: "systemd did not answer; see the daemon log"}
 			case found:
-				row.Container = containerJSON{Exists: true, Running: c.State.Running, Status: c.State.Status}
-				if !c.State.StartedAt.IsZero() {
-					row.Container.StartedAt = &c.State.StartedAt
+				row.Container = containerJSON{Exists: true, Running: st.Active, Status: unitWord(st)}
+				if since, ok := unitSince(st); ok {
+					row.Container.StartedAt = &since
 				}
 			}
 		}

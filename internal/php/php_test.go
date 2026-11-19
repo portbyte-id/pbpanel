@@ -4,16 +4,17 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/native"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -224,82 +225,90 @@ func TestParseVersions(t *testing.T) {
 
 // --- fakes -------------------------------------------------------------------
 
-type fakeEngine struct {
-	mu        sync.Mutex
-	container *docker.Container
-	images    map[string]bool
-	exec, run docker.ExecResult
-	pullErr   error
-	buildErr  error
-	calls     []string
+// fakeBuild is the build hook: it makes a build directory with both programs in
+// it, as the native builder leaves one, and records what it was asked for.
+type fakeBuild struct {
+	p     Paths
+	calls []string
+	err   error
 }
 
-func (f *fakeEngine) log(s string) {
-	f.mu.Lock()
-	f.calls = append(f.calls, s)
-	f.mu.Unlock()
+func (f *fakeBuild) build(_ context.Context, id, ver string, exts []Extension, progress docker.Progress) error {
+	f.calls = append(f.calls, "build "+ver+" "+id+" "+strings.Join(ExtensionNames(exts), ","))
+	if progress != nil {
+		progress("building php " + ver)
+	}
+	if f.err != nil {
+		return f.err
+	}
+	prefix := filepath.FromSlash(f.p.BuildPrefix(ver, id))
+	for _, rel := range []string{"sbin/php-fpm", "bin/php"} {
+		file := filepath.Join(prefix, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(file, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "etc"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "version"), []byte("8.3.37\n"), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "source-sha256"), []byte("3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427\n"), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(prefix, "etc", "php.ini-production"), []byte("; production ini\n"), 0o644)
 }
 
-func (f *fakeEngine) called(prefix string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+// hostRunner answers the host commands of the manager rig: the two validators,
+// and systemctl. service_test.go's fakeRunner is the scriptable one the service
+// and runtime tests use.
+type hostRunner struct {
+	calls   []string
+	envs    []string
+	modules string
+	// active is what systemctl says about every unit; fail makes every command
+	// fail.
+	active bool
+	fail   bool
+}
+
+func (f *hostRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return f.RunEnv(ctx, nil, name, args...)
+}
+
+func (f *hostRunner) RunEnv(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	f.envs = append(f.envs, strings.Join(env, ","))
+	if f.fail {
+		return []byte("boom"), errors.New("exit status 1")
+	}
+	switch {
+	case name == "systemctl" && len(args) > 0 && args[0] == "show":
+		state, pid, since := "inactive", 0, "0"
+		if f.active {
+			state, pid, since = "active", 7, "100"
+		}
+		return show("loaded", state, pid, since), nil
+	case strings.HasSuffix(name, "/sbin/php-fpm"):
+		return []byte("NOTICE: configuration file test is successful\n"), nil
+	case strings.HasSuffix(name, "/bin/php"):
+		return []byte(f.modules), nil
+	}
+	return nil, nil
+}
+
+// called reports whether a host command starting with prefix ran.
+func (f *hostRunner) called(prefix string) bool {
 	for _, c := range f.calls {
 		if strings.HasPrefix(c, prefix) {
 			return true
 		}
 	}
 	return false
-}
-
-func (f *fakeEngine) ImageInspect(_ context.Context, ref string) (docker.Image, error) {
-	if f.images != nil && !f.images[ref] {
-		return docker.Image{}, docker.ErrNotFound
-	}
-	return docker.Image{ID: "sha256:x"}, nil
-}
-func (f *fakeEngine) ContainerInspect(context.Context, string) (docker.Container, error) {
-	if f.container == nil {
-		return docker.Container{}, docker.ErrNotFound
-	}
-	return *f.container, nil
-}
-func (f *fakeEngine) ContainerCreate(_ context.Context, name string, _ docker.ContainerConfig) (string, error) {
-	f.log("create " + name)
-	return "id", nil
-}
-func (f *fakeEngine) ContainerStart(_ context.Context, id string) error {
-	f.log("start " + id)
-	return nil
-}
-func (f *fakeEngine) ContainerStop(context.Context, string, time.Duration) error { return nil }
-func (f *fakeEngine) ContainerRemove(context.Context, string, bool) error        { return nil }
-func (f *fakeEngine) ContainerKill(_ context.Context, id, sig string) error {
-	f.log("kill " + id + " " + sig)
-	return nil
-}
-func (f *fakeEngine) Exec(_ context.Context, id string, o docker.ExecOptions) (docker.ExecResult, error) {
-	f.log("exec " + id + " " + strings.Join(o.Cmd, " ") + " env=" + strings.Join(o.Env, ","))
-	return f.exec, nil
-}
-func (f *fakeEngine) RunOnce(_ context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error) {
-	f.log("run " + name + " " + strings.Join(append(cfg.Entrypoint, cfg.Cmd...), " "))
-	if len(cfg.Entrypoint) > 0 && cfg.Entrypoint[0] == "cat" {
-		return docker.ExecResult{Stdout: []byte("; production ini\n")}, nil
-	}
-	return f.run, nil
-}
-func (f *fakeEngine) ImagePull(_ context.Context, ref string, p docker.Progress) (docker.Image, error) {
-	f.log("pull " + ref)
-	p("pulling layer 1")
-	if f.pullErr != nil {
-		return docker.Image{}, f.pullErr
-	}
-	return docker.Image{ID: "sha256:base", RepoDigests: []string{"php@sha256:abc"}}, nil
-}
-func (f *fakeEngine) ImageBuild(_ context.Context, o docker.BuildOptions, p docker.Progress) (docker.Image, error) {
-	f.log("build " + o.Tag)
-	p("Step 1/2")
-	return docker.Image{ID: "sha256:derived"}, f.buildErr
 }
 
 // memApplier records changes and writes them into a map, or fails them.
@@ -327,31 +336,79 @@ func (a *memApplier) read(name string) ([]byte, error) {
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
 
+// rig is a Manager over a temporary root, with the build, the host commands and
+// the applier faked.
 type rig struct {
 	m   *Manager
-	eng *fakeEngine
+	b   *fakeBuild
+	run *hostRunner
 	ap  *memApplier
+	p   Paths
 }
 
 func newRig(t *testing.T) *rig {
+	t.Helper()
+	return newRigAt(t, Paths{Root: filepath.ToSlash(t.TempDir())})
+}
+
+// newRigAt is newRig over a given Paths layout, so a test can name the files it
+// expects.
+func newRigAt(t *testing.T, p Paths) *rig {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	eng := &fakeEngine{}
+	b := &fakeBuild{p: p}
+	run := &hostRunner{modules: "[PHP Modules]\nCore\n"}
 	ap := &memApplier{files: map[string][]byte{}}
 	m, err := New(Options{
-		Store: st, Engine: eng, Applier: ap, Paths: testPaths, Read: ap.read,
-		Scratch:   t.TempDir(),
+		Store: st, Engine: &fakeEngine{}, Applier: ap, Paths: p, Read: ap.read,
+		Build: b.build, Run: run, UnitDir: t.TempDir(),
 		Supported: func(context.Context) ([]string, error) { return []string{"8.3", "8.4"}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &rig{m: m, eng: eng, ap: ap}
+	return &rig{m: m, b: b, run: run, ap: ap, p: p}
 }
+
+// fakeEngine is what php.Options still requires for the Docker client. Nothing in
+// the runtime path calls it any more, so a test that reaches it has found a leak
+// and says so rather than silently passing.
+type fakeEngine struct{}
+
+func (fakeEngine) ImageInspect(context.Context, string) (docker.Image, error) {
+	return docker.Image{}, docker.ErrNotFound
+}
+func (fakeEngine) ContainerInspect(context.Context, string) (docker.Container, error) {
+	return docker.Container{}, docker.ErrNotFound
+}
+func (fakeEngine) ContainerCreate(context.Context, string, docker.ContainerConfig) (string, error) {
+	return "", errors.New("the runtime path must not create containers")
+}
+func (fakeEngine) ContainerStart(context.Context, string) error               { return nil }
+func (fakeEngine) ContainerStop(context.Context, string, time.Duration) error { return nil }
+func (fakeEngine) ContainerRemove(context.Context, string, bool) error        { return nil }
+func (fakeEngine) ContainerKill(context.Context, string, string) error        { return nil }
+func (fakeEngine) Exec(context.Context, string, docker.ExecOptions) (docker.ExecResult, error) {
+	return docker.ExecResult{}, errors.New("the runtime path must not exec in a container")
+}
+func (fakeEngine) RunOnce(context.Context, string, docker.ContainerConfig) (docker.ExecResult, error) {
+	return docker.ExecResult{}, errors.New("the runtime path must not run a container")
+}
+func (fakeEngine) ImagePull(context.Context, string, docker.Progress) (docker.Image, error) {
+	return docker.Image{}, errors.New("the native builder pulls its own image")
+}
+func (fakeEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
+	return docker.Image{}, errors.New("the native builder builds its own image")
+}
+func (fakeEngine) ContainerArchive(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("the runtime path must not archive a container")
+}
+func (fakeEngine) ImageTag(context.Context, string, string) error { return nil }
+func (fakeEngine) ImageRemove(context.Context, string) error      { return nil }
 
 func (r *rig) pull(t *testing.T, ver string) {
 	t.Helper()
@@ -407,11 +464,12 @@ func TestPullStateTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := r.state(t, "8.3")
-	if v.State != StateReady || v.Digest != "php@sha256:abc" || v.Output != "" || v.UpdatedAt == nil {
+	if v.State != StateReady || v.Image != "8.3.37" || v.Digest != "3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427" ||
+		v.Output != "" || v.UpdatedAt == nil {
 		t.Errorf("after Pull: %+v", v)
 	}
-	if !r.eng.called("pull php:8.3-fpm") || !r.eng.called("build panel/php:8.3-") || len(lines) != 2 {
-		t.Errorf("calls = %v, lines = %v", r.eng.calls, lines)
+	if len(r.b.calls) != 1 || !strings.HasPrefix(r.b.calls[0], "build 8.3 ") || len(lines) != 1 {
+		t.Errorf("builds = %v, lines = %v", r.b.calls, lines)
 	}
 	if err := r.m.Usable(ctx, "8.3"); err != nil {
 		t.Errorf("Usable after a pull = %v", err)
@@ -419,29 +477,24 @@ func TestPullStateTransitions(t *testing.T) {
 }
 
 func TestFailedPullLeavesFailedWithOutput(t *testing.T) {
-	for name, set := range map[string]func(*fakeEngine){
-		"pull":  func(e *fakeEngine) { e.pullErr = errors.New("manifest unknown") },
-		"build": func(e *fakeEngine) { e.buildErr = errors.New("groupadd failed") },
-	} {
-		r := newRig(t)
-		set(r.eng)
-		if err := r.m.StartPull(ctx, "8.4"); err != nil {
-			t.Fatal(err)
-		}
-		if err := r.m.Pull(ctx, "8.4", nil, nil); err == nil {
-			t.Fatalf("%s: Pull succeeded", name)
-		}
-		v := r.state(t, "8.4")
-		if v.State != StateFailed || !strings.Contains(v.Output, "pulling layer 1") ||
-			(!strings.Contains(v.Output, "manifest unknown") && !strings.Contains(v.Output, "groupadd failed")) {
-			t.Errorf("%s: %+v, want failed with the output and the error", name, v)
-		}
-		// A failed version can be pulled again.
-		r.eng.pullErr, r.eng.buildErr = nil, nil
-		r.pull(t, "8.4")
-		if got := r.state(t, "8.4"); got.State != StateReady || got.Output != "" {
-			t.Errorf("%s: retry left %+v", name, got)
-		}
+	r := newRig(t)
+	r.b.err = errors.New("the command returned a non-zero code: 2")
+	if err := r.m.StartPull(ctx, "8.4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.m.Pull(ctx, "8.4", nil, nil); err == nil {
+		t.Fatal("Pull succeeded")
+	}
+	v := r.state(t, "8.4")
+	if v.State != StateFailed || !strings.Contains(v.Output, "building php 8.4") ||
+		!strings.Contains(v.Output, "the command returned a non-zero code") {
+		t.Errorf("%+v, want failed with the output and the error", v)
+	}
+	// A failed version can be built again.
+	r.b.err = nil
+	r.pull(t, "8.4")
+	if got := r.state(t, "8.4"); got.State != StateReady || got.Output != "" {
+		t.Errorf("retry left %+v", got)
 	}
 }
 
@@ -461,15 +514,43 @@ func TestReconcileCorrectsTheCatalogue(t *testing.T) {
 	if err := r.m.StartPull(ctx, "8.4"); err != nil {
 		t.Fatal(err)
 	}
-	r.eng.images = map[string]bool{} // every image is gone
+	// 8.3's build directory is gone; 8.4 was mid-install.
+	if err := os.RemoveAll(filepath.FromSlash(r.p.VersionsDir("8.3"))); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.m.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.state(t, "8.3").State; got != StateAbsent {
-		t.Errorf("8.3 = %s, want absent: its image is gone", got)
+		t.Errorf("8.3 = %s, want absent: its build is gone", got)
 	}
 	if got := r.state(t, "8.4"); got.State != StateFailed || !strings.Contains(got.Output, "interrupted") {
-		t.Errorf("8.4 = %+v, want failed: its pull was interrupted", got)
+		t.Errorf("8.4 = %+v, want failed: its install was interrupted", got)
+	}
+}
+
+// The link is the only thing a swap changes, so the boot reconcile points it back
+// at the build the catalogue serves: a host whose link was lost still starts the
+// right binary.
+func TestReconcileRepairsTheCurrentLink(t *testing.T) {
+	r := newRig(t)
+	r.pull(t, "8.3")
+	cur, err := r.m.CurrentTag(ctx, "8.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.FromSlash(r.p.CurrentLink("8.3"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readLink(r.p, "8.3")
+	if err != nil {
+		t.Fatalf("the link was not repaired: %v", err)
+	}
+	if id, _ := native.IDOfTag(cur, product); got != id {
+		t.Errorf("the link names %s, want %s", got, id)
 	}
 }
 
@@ -487,16 +568,16 @@ func TestBaseFilesProvisionOnceAndLeavePHPIniAlone(t *testing.T) {
 		paths = append(paths, f.Path)
 		r.ap.files[f.Path] = f.Content
 	}
-	want := "/www/panel/php/8.3/php-fpm.conf /www/panel/php/8.3/conf.d/zz-panel.ini /www/panel/php/8.3/php.ini"
+	want := r.p.FPMConf("8.3") + " " + r.p.FormIni("8.3") + " " + r.p.IniPath("8.3")
 	if strings.Join(paths, " ") != want {
-		t.Errorf("first BaseFiles = %v", paths)
+		t.Errorf("first BaseFiles = %v, want %s", paths, want)
 	}
-	if string(r.ap.files["/www/panel/php/8.3/php.ini"]) != "; production ini\n" {
-		t.Error("php.ini was not copied from the image")
+	if string(r.ap.files[r.p.IniPath("8.3")]) != "; production ini\n" {
+		t.Error("php.ini was not copied from the build")
 	}
 
 	// The operator edits php.ini; it is theirs from here on.
-	r.ap.files["/www/panel/php/8.3/php.ini"] = []byte("; mine\n")
+	r.ap.files[r.p.IniPath("8.3")] = []byte("; mine\n")
 	if files, err = r.m.BaseFiles(ctx, "8.3"); err != nil || len(files) != 0 {
 		t.Errorf("second BaseFiles = %v, %v, want nothing to write", files, err)
 	}
@@ -514,7 +595,7 @@ func TestSetSettingsAppliesAndRollsBack(t *testing.T) {
 	if _, err := r.m.SetSettings(ctx, "8.3", s); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(r.ap.files["/www/panel/php/8.3/conf.d/zz-panel.ini"]), "memory_limit = 512M") {
+	if !strings.Contains(string(r.ap.files[r.p.FormIni("8.3")]), "memory_limit = 512M") {
 		t.Error("the form's ini was not written")
 	}
 	if got := r.ap.applied[0].Services[0].Name(); got != "php-8.3" {
@@ -555,7 +636,7 @@ func TestIniReadAndWrite(t *testing.T) {
 	for _, f := range r.ap.applied[0].Files {
 		seen[f.Path]++
 	}
-	if seen["/www/panel/php/8.3/php.ini"] != 1 || seen["/www/panel/php/8.3/php-fpm.conf"] != 1 {
+	if seen[r.p.IniPath("8.3")] != 1 || seen[r.p.FPMConf("8.3")] != 1 {
 		t.Errorf("files = %v", seen)
 	}
 
@@ -566,16 +647,4 @@ func TestIniReadAndWrite(t *testing.T) {
 	if b, _ = r.m.ReadIni(ctx, "8.3"); string(b) != "memory_limit = 1G\n" {
 		t.Errorf("php.ini after a rejected write = %q", b)
 	}
-}
-
-// ImageTag and ImageRemove complete the fake as a php.Engine. The fake keeps
-// no tags: a build is found by inspect whenever the test set no image map.
-func (f *fakeEngine) ImageTag(_ context.Context, src, dst string) error {
-	f.log("tag " + src + " " + dst)
-	return nil
-}
-
-func (f *fakeEngine) ImageRemove(_ context.Context, ref string) error {
-	f.log("rmi " + ref)
-	return nil
 }

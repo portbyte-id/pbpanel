@@ -49,7 +49,8 @@ RUN set -eux; \
     curl -fsSL -o php.tar.xz "https://www.php.net/distributions/php-${rel}.tar.xz"; \
     echo "$want  php.tar.xz" | sha256sum -c -; \
     tar -xJf php.tar.xz; mv "php-${rel}" php; \
-    printf '%s\n' "$rel" > /build/php-release
+    printf '%s\n' "$rel" > /build/php-release; \
+    printf '%s\n' "$want" > /build/php-sha256
 
 # The prefix is the build's own directory, so extension_dir and the compiled-in
 # scan dir point at the build that is loading them, and a candidate never loads
@@ -140,6 +141,7 @@ RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; rel=$(cat /
     "$P/bin/php" -v | head -1; \
     "$P/bin/php" -v | grep -q "PHP ${rel}"; \
     printf '%s\n' "$rel" > "$P/version"; \
+    printf '%s\n' "$(cat /build/php-sha256)" > "$P/source-sha256"; \
     printf '[global]\nerror_log=/dev/stderr\ndaemonize=no\n[www]\nuser=%s\ngroup=%s\nlisten=/tmp/t.sock\npm=static\npm.max_children=1\n' \
       "www" "www" > /tmp/fpm.conf; \
     "$P/sbin/php-fpm" -t -y /tmp/fpm.conf; \

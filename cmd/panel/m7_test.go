@@ -237,7 +237,10 @@ func TestReopenContainerLogsSignalsOnlyRunningContainers(t *testing.T) {
 	}
 }
 
-func TestPanelContainersFollowsTheVersionSetting(t *testing.T) {
+// The panel runs no containers: nginx and PHP are systemd units. The versions
+// setting names the units the Services page shows, so it is followed on every
+// call.
+func TestPanelUnitsFollowTheVersionSetting(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -251,10 +254,18 @@ func TestPanelContainersFollowsTheVersionSetting(t *testing.T) {
 	if err := reg.Set(ctx, settings.KeyPHPVersions, "8.3,8.4"); err != nil {
 		t.Fatal(err)
 	}
-	got := panelContainers(ctx, reg)
-	want := []string{"panel-php-8.3", "panel-php-8.4"} // nginx runs under systemd, not in a container
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("got %v, want %v", got, want)
+	if got := panelContainers(ctx, reg); len(got) != 0 {
+		t.Fatalf("panel containers = %v, want none", got)
+	}
+	want := []string{"panel-php-8.3.service", "panel-php-8.4.service"}
+	if got := panelUnits(ctx, reg); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("units = %v, want %v", got, want)
+	}
+	if err := reg.Set(ctx, settings.KeyPHPVersions, "8.5"); err != nil {
+		t.Fatal(err)
+	}
+	if got := panelUnits(ctx, reg); len(got) != 1 || got[0] != "panel-php-8.5.service" {
+		t.Fatalf("units after the setting changed = %v", got)
 	}
 }
 

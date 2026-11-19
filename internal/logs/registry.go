@@ -15,13 +15,14 @@ import (
 type Kind string
 
 const (
-	KindPanel  Kind = "panel"
-	KindAudit  Kind = "audit"
-	KindNginx  Kind = "nginx"
-	KindSite   Kind = "site"
-	KindApp    Kind = "app"
-	KindCron   Kind = "cron"
-	KindDocker Kind = "docker"
+	KindPanel   Kind = "panel"
+	KindAudit   Kind = "audit"
+	KindNginx   Kind = "nginx"
+	KindSite    Kind = "site"
+	KindApp     Kind = "app"
+	KindCron    Kind = "cron"
+	KindDocker  Kind = "docker"
+	KindJournal Kind = "journal"
 )
 
 var (
@@ -39,16 +40,21 @@ var (
 var (
 	idPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	containerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	// unitPattern is a systemd unit name: it is passed to journalctl as one
+	// argument, and nothing with a path separator or a shell character is one.
+	unitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,127}$`)
 )
 
-// Source is one readable log. Exactly one of Path and Container is set. Path
-// and Container are server-side only and never serialised.
+// Source is one readable log. Exactly one of Path, Container and Unit is set.
+// Path, Container and Unit are server-side only and never serialised.
 type Source struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
 	Kind      Kind   `json:"kind"`
 	Path      string `json:"-"`
 	Container string `json:"-"`
+	// Unit is a systemd unit whose journal is the log.
+	Unit string `json:"-"`
 }
 
 func (s Source) validate() error {
@@ -58,19 +64,29 @@ func (s Source) validate() error {
 	if s.Label == "" || s.Kind == "" {
 		return fmt.Errorf("%w: %s needs a label and kind", ErrInvalidSource, s.ID)
 	}
+	set := 0
+	for _, v := range []string{s.Path, s.Container, s.Unit} {
+		if v != "" {
+			set++
+		}
+	}
 	switch {
-	case s.Path != "" && s.Container != "":
-		return fmt.Errorf("%w: %s sets both path and container", ErrInvalidSource, s.ID)
+	case set > 1:
+		return fmt.Errorf("%w: %s sets more than one of path, container and unit", ErrInvalidSource, s.ID)
 	case s.Container != "":
 		if !containerPattern.MatchString(s.Container) {
 			return fmt.Errorf("%w: %s container name", ErrInvalidSource, s.ID)
+		}
+	case s.Unit != "":
+		if !unitPattern.MatchString(s.Unit) {
+			return fmt.Errorf("%w: %s unit name", ErrInvalidSource, s.ID)
 		}
 	case s.Path != "":
 		if strings.ContainsRune(s.Path, 0) || (!strings.HasPrefix(s.Path, "/") && !isAbs(s.Path)) {
 			return fmt.Errorf("%w: %s path must be absolute", ErrInvalidSource, s.ID)
 		}
 	default:
-		return fmt.Errorf("%w: %s has no path or container", ErrInvalidSource, s.ID)
+		return fmt.Errorf("%w: %s has no path, container or unit", ErrInvalidSource, s.ID)
 	}
 	return nil
 }
@@ -102,9 +118,25 @@ type DockerLogs interface {
 	ContainerLogs(ctx context.Context, name string, opts DockerOptions) (io.ReadCloser, error)
 }
 
+// JournalOptions selects what a unit's journal stream returns.
+type JournalOptions struct {
+	// Tail is the number of trailing lines to start from; 0 means all.
+	Tail int
+	// Follow keeps the stream open for new lines.
+	Follow bool
+}
+
+// JournalLogs is the narrow view of journalctl the viewer needs for a unit that
+// runs natively. The stream is one line per newline; closing it must abort a
+// blocked Read.
+type JournalLogs interface {
+	JournalLogs(ctx context.Context, unit string, opts JournalOptions) (io.ReadCloser, error)
+}
+
 // Registry resolves source ids. It is safe for concurrent use.
 type Registry struct {
-	docker DockerLogs
+	docker  DockerLogs
+	journal JournalLogs
 
 	mu        sync.RWMutex
 	static    []Source
@@ -114,6 +146,13 @@ type Registry struct {
 // NewRegistry returns an empty registry. docker may be nil; Docker sources then
 // report ErrUnavailable.
 func NewRegistry(docker DockerLogs) *Registry { return &Registry{docker: docker} }
+
+// WithJournal supplies the journal reader that unit sources use. Without it a
+// unit source reports ErrUnavailable.
+func (r *Registry) WithJournal(j JournalLogs) *Registry {
+	r.journal = j
+	return r
+}
 
 // Add registers a fixed source. A duplicate id is rejected.
 func (r *Registry) Add(s Source) error {

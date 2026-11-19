@@ -28,7 +28,7 @@ func (h *nginxHarness) waitJob(out map[string]any) jobs.Job {
 // The extension catalogue is served as is, so the UI can offer the same list
 // the build accepts.
 func TestExtensionsCatalogueIsServed(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	code, out := h.call(http.MethodGet, "/api/php/extensions", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET extensions = %d %v", code, out)
@@ -45,7 +45,7 @@ func TestExtensionsCatalogueIsServed(t *testing.T) {
 // A name that is not a package name never reaches the Dockerfile: the request
 // is refused with the field named, and the version's state is untouched.
 func TestBuildRefusesAShellLikeExtensionName(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	if done := h.pull("8.3"); done.State != jobs.StateSucceeded {
 		t.Fatalf("pull job = %+v", done)
 	}
@@ -58,7 +58,7 @@ func TestBuildRefusesAShellLikeExtensionName(t *testing.T) {
 // A rebuild is a job; once it has run, the builds list shows both builds and
 // the one that serves.
 func TestBuildRunsAsAJobAndIsListed(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	if done := h.pull("8.3"); done.State != jobs.StateSucceeded {
 		t.Fatalf("pull job = %+v", done)
 	}
@@ -90,7 +90,7 @@ func TestBuildRunsAsAJobAndIsListed(t *testing.T) {
 // Removing a version with nothing using it stops it and leaves the catalogue
 // row absent, so the version can be installed again.
 func TestRemoveAVersionNobodyUses(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	if done := h.pull("8.3"); done.State != jobs.StateSucceeded {
 		t.Fatalf("pull job = %+v", done)
 	}
@@ -165,7 +165,7 @@ func (f *fakeNginxImages) Activate(context.Context, string) (images.Build, error
 // The nginx image answers what serves and what served before, and an
 // activation of the build that already serves is refused.
 func TestNginxImageShowsCurrentAndPrevious(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	h.deps.Nginx.Images = &fakeNginxImages{builds: []images.Build{
 		{ID: "20261117120001-aaaaaa", State: images.StateReady, Tag: "panel/nginx:1.29-20261117120001-aaaaaa", Current: true},
 		{ID: "20261117120000-bbbbbb", State: images.StateReady, Tag: "panel/nginx:1.29-20261117120000-bbbbbb", Previous: true},
@@ -202,7 +202,7 @@ func TestNginxImageShowsCurrentAndPrevious(t *testing.T) {
 
 func imagesHarness(t *testing.T, imgs *fakeNginxImages, c *fakeNginxContainer) *nginxHarness {
 	t.Helper()
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	h.deps.Nginx.Images = imgs
 	if c != nil {
 		h.deps.Nginx.Container = c

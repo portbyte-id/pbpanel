@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -54,9 +53,9 @@ func (f *fakePHP) BaseFiles(_ context.Context, ver string) ([]confedit.File, err
 	}
 	return []confedit.File{{Path: conf, Content: []byte("[global]\n")}}, nil
 }
-func (f *fakePHP) EnsureContainer(_ context.Context, ver string) (docker.EnsureResult, error) {
+func (f *fakePHP) EnsureRunning(_ context.Context, ver string) (php.EnsureResult, error) {
 	f.ensured = append(f.ensured, ver)
-	return docker.EnsureResult{Action: docker.ActionNone, Reason: "running"}, nil
+	return php.EnsureResult{Action: php.ActionNone, Reason: "running"}, nil
 }
 
 type phpRig struct {

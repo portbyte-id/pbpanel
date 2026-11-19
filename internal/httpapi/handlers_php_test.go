@@ -3,7 +3,11 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -59,19 +63,101 @@ func (phpEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progres
 }
 func (phpEngine) ImageTag(context.Context, string, string) error { return nil }
 func (phpEngine) ImageRemove(context.Context, string) error      { return nil }
+func (phpEngine) ContainerArchive(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("the runtime path must not archive a container")
+}
 
-func newPHPHarness(t *testing.T, eng phpEngine) *nginxHarness {
+// phpHost is the native side of the PHP manager in these tests: a build hook that
+// leaves a real prefix on disk, and a runner that answers the two validators and
+// systemctl. Nothing here touches Docker.
+type phpHost struct {
+	p        php.Paths
+	unitDir  string
+	modules  string
+	buildErr error
+	active   bool
+	calls    []string
+}
+
+func (h *phpHost) build(_ context.Context, id, ver string, _ []php.Extension, progress docker.Progress) error {
+	h.calls = append(h.calls, "build "+ver+" "+id)
+	if progress != nil {
+		progress("building php " + ver)
+	}
+	if h.buildErr != nil {
+		return h.buildErr
+	}
+	prefix := filepath.FromSlash(h.p.BuildPrefix(ver, id))
+	for _, rel := range []string{"sbin/php-fpm", "bin/php"} {
+		file := filepath.Join(prefix, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(file, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "etc"), 0o755); err != nil {
+		return err
+	}
+	for name, body := range map[string]string{
+		"version":       "8.3.37\n",
+		"source-sha256": "3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427\n",
+	} {
+		if err := os.WriteFile(filepath.Join(prefix, name), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(filepath.Join(prefix, "etc", "php.ini-production"), []byte("; php.ini-production\n"), 0o644)
+}
+
+func (h *phpHost) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return h.RunEnv(ctx, nil, name, args...)
+}
+
+func (h *phpHost) RunEnv(_ context.Context, _ []string, name string, args ...string) ([]byte, error) {
+	h.calls = append(h.calls, name+" "+strings.Join(args, " "))
+	switch {
+	case name == "systemctl" && len(args) > 0 && args[0] == "show":
+		unit := args[len(args)-1]
+		// systemd knows only the units whose file was written, as on a host.
+		if _, err := os.Stat(filepath.Join(h.unitDir, unit)); err != nil {
+			return fmt.Appendf(nil, "LoadState=not-found\nActiveState=inactive\nMainPID=0\nActiveEnterTimestampMonotonic=0\n"), nil
+		}
+		state, pid, since := "inactive", 0, "0"
+		if h.active {
+			state, pid, since = "active", 7, "100"
+		}
+		return fmt.Appendf(nil, "LoadState=loaded\nActiveState=%s\nMainPID=%d\nActiveEnterTimestampMonotonic=%s\n", state, pid, since), nil
+	case strings.HasSuffix(name, "/sbin/php-fpm"):
+		return []byte("NOTICE: configuration file test is successful\n"), nil
+	case strings.HasSuffix(name, "/bin/php"):
+		return []byte(h.modules), nil
+	}
+	return nil, nil
+}
+
+func newPHPHarness(t *testing.T, host *phpHost) *nginxHarness {
 	t.Helper()
 	h := newHarness(t)
-	paths := nginx.Paths{Root: "/www"}
+	// One root for both products: a pool's web root has to be inside the PHP
+	// layout's sites tree for the pool file to render, and the build writes a real
+	// prefix under it.
+	root := filepath.ToSlash(t.TempDir())
+	paths := nginx.Paths{Root: root}
 	mfs := &memFS{files: map[string][]byte{}, dirs: map[string]bool{}}
 	ap := &memApplier{fs: mfs}
 	svc := &fakeNginx{status: &nginx.Status{Loaded: true, Active: true, State: "active"}}
 	hist := &fakeHistory{versions: map[string][]confedit.Version{}, content: map[string]string{}}
 
+	host.p = php.Paths{Root: root}
+	host.unitDir = t.TempDir()
+	if host.modules == "" {
+		host.modules = "[PHP Modules]\nCore\nintl\n"
+	}
 	phpMgr, err := php.New(php.Options{
-		Store: h.store, Engine: eng, Applier: ap, Paths: php.Paths{Root: "/www"}, Read: mfs.ReadFile,
-		Scratch:   t.TempDir(),
+		Store: h.store, Engine: phpEngine{}, Applier: ap, Paths: host.p, Read: mfs.ReadFile,
+		Build: host.build, Run: host, UnitDir: host.unitDir,
 		Supported: func(context.Context) ([]string, error) { return []string{"8.3", "8.4"}, nil },
 	})
 	if err != nil {
@@ -95,7 +181,7 @@ func newPHPHarness(t *testing.T, eng phpEngine) *nginxHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &nginxHarness{harness: h, s: h.login(), fs: mfs, applier: ap, svc: svc, history: hist}
+	return &nginxHarness{harness: h, s: h.login(), fs: mfs, applier: ap, svc: svc, history: hist, php: host.p}
 }
 
 // pull starts the pull job over HTTP and waits for it to end.
@@ -141,7 +227,7 @@ func TestPHPRoutesAnswer503WithoutPHP(t *testing.T) {
 }
 
 func TestPHPListAndPull(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	vs := phpVersions(h)
 	if len(vs) != 2 || vs["8.3"]["state"] != "absent" || vs["8.3"]["image"] != "php:8.3-fpm" || vs["8.3"]["supported"] != true {
 		t.Fatalf("versions = %v", vs)
@@ -152,7 +238,7 @@ func TestPHPListAndPull(t *testing.T) {
 	}
 	vs = phpVersions(h)
 	row := vs["8.3"]
-	if row["state"] != "ready" || row["digest"] != "php@sha256:abc" {
+	if row["state"] != "ready" || row["image"] != "8.3.37" || row["digest"] == "" {
 		t.Errorf("after pull: %v", row)
 	}
 	if c := row["container"].(map[string]any); c["exists"] != false || c["status"] != "missing" {
@@ -173,7 +259,7 @@ func TestPHPListAndPull(t *testing.T) {
 }
 
 func TestFailedPullIsReportedWithItsOutput(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{pullErr: errors.New("manifest unknown")})
+	h := newPHPHarness(t, &phpHost{buildErr: errors.New("manifest unknown")})
 	if done := h.pull("8.4"); done.State != jobs.StateFailed {
 		t.Fatalf("pull job = %+v, want failed", done)
 	}
@@ -184,7 +270,7 @@ func TestFailedPullIsReportedWithItsOutput(t *testing.T) {
 }
 
 func TestPHPSettingsRoutes(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	code, out := h.call(http.MethodGet, "/api/php/8.3/settings", nil)
 	if code != http.StatusOK || out["memory_limit"] != "256M" || out["date_timezone"] != "UTC" {
 		t.Fatalf("defaults: %d %v", code, out)
@@ -201,7 +287,7 @@ func TestPHPSettingsRoutes(t *testing.T) {
 	if code != http.StatusOK || out["memory_limit"] != "512M" || out["date_timezone"] != "Europe/Rome" {
 		t.Fatalf("PUT: %d %v", code, out)
 	}
-	form, _ := h.fs.ReadFile("/www/panel/php/8.3/conf.d/zz-panel.ini")
+	form, _ := h.fs.ReadFile(h.php.FormIni("8.3"))
 	if !strings.Contains(string(form), "memory_limit = 512M") || !strings.Contains(string(form), "date.timezone = Europe/Rome") {
 		t.Errorf("zz-panel.ini:\n%s", form)
 	}
@@ -231,7 +317,7 @@ func TestPHPSettingsRoutes(t *testing.T) {
 }
 
 func TestPHPIniRoutes(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	if code, _ := h.call(http.MethodGet, "/api/php/8.3/ini", nil); code != http.StatusConflict {
 		t.Fatalf("GET ini of an absent version: %d", code)
 	}
@@ -239,7 +325,7 @@ func TestPHPIniRoutes(t *testing.T) {
 
 	code, out := h.call(http.MethodGet, "/api/php/8.3/ini", nil)
 	if code != http.StatusOK || out["content"] != "; php.ini-production\n" ||
-		out["path"] != "/www/panel/php/8.3/php.ini" || out["history_file"] != "php/8.3/php.ini" {
+		out["path"] != h.php.IniPath("8.3") || out["history_file"] != "php/8.3/php.ini" {
 		t.Fatalf("GET ini: %d %v", code, out)
 	}
 	if code, out := h.call(http.MethodPut, "/api/php/8.3/ini", map[string]string{"content": "memory_limit = 1G\n"}); code != http.StatusOK {
@@ -260,11 +346,11 @@ func TestPHPIniRoutes(t *testing.T) {
 	}
 
 	// History: php.ini is restored through its own version's service.
-	h.history.content["/www/panel/php/8.3/php.ini#1"] = "; old\n"
+	h.history.content[h.php.IniPath("8.3")+"#1"] = "; old\n"
 	if code, out := h.call(http.MethodPost, "/api/config-history/php%2F8.3%2Fphp.ini/1/restore", nil); code != http.StatusOK {
 		t.Fatalf("restore: %d %v", code, out)
 	}
-	if len(h.history.restored) != 1 || h.history.restored[0] != "/www/panel/php/8.3/php.ini#1 via php-8.3" {
+	if len(h.history.restored) != 1 || h.history.restored[0] != h.php.IniPath("8.3")+"#1 via php-8.3" {
 		t.Errorf("restored = %v", h.history.restored)
 	}
 	for _, file := range []string{"php%2F8.3%2Fpool.d%2Fa.conf", "php%2F..%2Fnginx.conf", "php%2F8.3%2Fphp-fpm.conf"} {
@@ -275,7 +361,7 @@ func TestPHPIniRoutes(t *testing.T) {
 }
 
 func TestPHPSiteRoutes(t *testing.T) {
-	h := newPHPHarness(t, phpEngine{})
+	h := newPHPHarness(t, &phpHost{})
 	create := map[string]any{"domain": "a.test", "kind": "php", "php_version": "8.3", "phpinfo": true}
 
 	code, out := h.call(http.MethodPost, "/api/sites", create)
@@ -288,7 +374,7 @@ func TestPHPSiteRoutes(t *testing.T) {
 	if code != http.StatusCreated || site["kind"] != "php" || site["php_version"] != "8.3" || site["php_pool"] != "a_test" {
 		t.Fatalf("create: %d %v", code, out)
 	}
-	if b, _ := h.fs.ReadFile("/www/services/sites/a.test/index.php"); string(b) != "<?php phpinfo();\n" {
+	if b, _ := h.fs.ReadFile(h.php.SitesRoot() + "/a.test/index.php"); string(b) != "<?php phpinfo();\n" {
 		t.Errorf("index.php = %q", b)
 	}
 	if users := phpVersions(h)["8.3"]["sites"].([]any); len(users) != 1 || users[0] != "a.test" {
@@ -298,7 +384,7 @@ func TestPHPSiteRoutes(t *testing.T) {
 	// The pool.
 	code, out = h.call(http.MethodGet, "/api/sites/a.test/pool", nil)
 	settings, _ := out["settings"].(map[string]any)
-	if code != http.StatusOK || out["name"] != "a_test" || out["socket"] != "/www/panel/run/php-8.3-a_test.sock" || settings["pm"] != "dynamic" {
+	if code != http.StatusOK || out["name"] != "a_test" || out["socket"] != h.php.Socket("8.3", "a_test") || settings["pm"] != "dynamic" {
 		t.Fatalf("GET pool: %d %v", code, out)
 	}
 	pool := map[string]any{"pm": "static", "max_children": 7, "start_servers": 0, "min_spare_servers": 0, "max_spare_servers": 0, "max_requests": 0, "idle_timeout": 10}
@@ -331,7 +417,7 @@ func TestPHPSiteRoutes(t *testing.T) {
 	if code != http.StatusOK || out["site"].(map[string]any)["php_version"] != "8.4" {
 		t.Fatalf("switch: %d %v", code, out)
 	}
-	if _, out = h.call(http.MethodGet, "/api/sites/a.test/pool", nil); out["socket"] != "/www/panel/run/php-8.4-a_test.sock" ||
+	if _, out = h.call(http.MethodGet, "/api/sites/a.test/pool", nil); out["socket"] != h.php.Socket("8.4", "a_test") ||
 		out["settings"].(map[string]any)["max_children"] != float64(7) {
 		t.Errorf("pool after the switch = %v", out)
 	}

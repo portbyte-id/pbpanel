@@ -176,6 +176,23 @@ func (r *Registry) Search(ctx context.Context, id string, q Query, opts SearchOp
 		return stats, searchErr(ctx, err)
 	}
 
+	if src.Unit != "" {
+		if r.journal == nil {
+			return stats, fmt.Errorf("%w: the journal is not available", ErrUnavailable)
+		}
+		rc, err := r.journal.JournalLogs(ctx, src.Unit, JournalOptions{Tail: dockerSearchTail})
+		if err != nil {
+			return stats, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
+		defer func() { _ = rc.Close() }()
+		stop := context.AfterFunc(ctx, func() { _ = rc.Close() })
+		defer stop()
+		cr := &countReader{r: io.LimitReader(rc, opts.budget()), n: &stats.BytesScanned}
+		stats.Files = 1
+		err = scan(src.Unit, cr, false)
+		return stats, searchErr(ctx, err)
+	}
+
 	files, err := rotatedFiles(src.Path)
 	if err != nil {
 		return stats, err
