@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -16,12 +17,30 @@ type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
+// EnvRunner is a Runner that can add environment variables to one command.
+// PHP needs it: the scan directory is a setting, and no command line carries
+// one. It is a separate interface so a Runner that has no use for it (and
+// every test fake) stays a Runner.
+type EnvRunner interface {
+	Runner
+	RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
+}
+
 // ExecRunner runs commands on this host.
 type ExecRunner struct{}
 
 // Run implements Runner.
-func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+func (e ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return e.RunEnv(ctx, nil, name, args...)
+}
+
+// RunEnv implements EnvRunner. env is added to this process's own.
+func (ExecRunner) RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	return cmd.CombinedOutput()
 }
 
 // ExitCode is a failed command's exit status, and false when the command did not

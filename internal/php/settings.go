@@ -170,11 +170,14 @@ const idlePool = "panel_idle"
 
 const fpmConfTemplate = `; Managed by PB panel. Rewritten when it differs; edit pools and php.ini instead.
 [global]
-error_log = /proc/self/fd/2
+; A real file, not /proc/self/fd/2 or /dev/stderr: under systemd neither is
+; openable and FPM exits 78 before it reads a pool. The unit lists this file in
+; ReadWritePaths and the panel creates it before the first start.
+error_log = {{.ErrorLog}}
 daemonize = no
 
 ; FPM does not start without a pool. This one serves no site; it keeps the
-; container up when the last PHP site on this version is removed.
+; version up when the last PHP site on it is removed.
 [` + idlePool + `]
 user = {{.User}}
 group = {{.User}}
@@ -248,8 +251,8 @@ func (p Paths) RenderFPMConf(ver string) ([]byte, error) {
 	if err := CheckVersion(ver); err != nil {
 		return nil, err
 	}
-	return execute("php-fpm.conf", struct{ User, IdleSocket, PoolGlob string }{
-		WWWUser, p.Socket(ver, idlePool), path.Join(p.PoolDir(ver), "*.conf"),
+	return execute("php-fpm.conf", struct{ User, IdleSocket, PoolGlob, ErrorLog string }{
+		WWWUser, p.Socket(ver, idlePool), path.Join(p.PoolDir(ver), "*.conf"), p.FPMErrorLog(ver),
 	})
 }
 

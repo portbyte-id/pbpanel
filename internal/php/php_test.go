@@ -302,10 +302,6 @@ func (f *fakeEngine) ImageBuild(_ context.Context, o docker.BuildOptions, p dock
 	return docker.Image{ID: "sha256:derived"}, f.buildErr
 }
 
-func running() *docker.Container {
-	return &docker.Container{State: docker.ContainerState{Running: true, Status: "running", Pid: 7, StartedAt: time.Unix(100, 0)}}
-}
-
 // memApplier records changes and writes them into a map, or fails them.
 type memApplier struct {
 	files   map[string][]byte
@@ -374,110 +370,6 @@ func (r *rig) state(t *testing.T, ver string) Version {
 		t.Fatal(err)
 	}
 	return v
-}
-
-// --- service -----------------------------------------------------------------
-
-func TestValidateExecsInTheRunningContainer(t *testing.T) {
-	eng := &fakeEngine{container: running(), exec: docker.ExecResult{Stderr: []byte("NOTICE: configuration file test is successful\n")}}
-	if _, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
-		t.Fatalf("Validate = %v", err)
-	}
-	want := "exec panel-php-8.3 php-fpm -t -y /www/panel/php/8.3/php-fpm.conf -c /www/panel/php/8.3/php.ini env=PHP_INI_SCAN_DIR=:/www/panel/php/8.3/conf.d"
-	if !eng.called(want) {
-		t.Errorf("calls = %v, want %q", eng.calls, want)
-	}
-}
-
-func TestValidateRunsAOneShotWhenTheContainerIsDown(t *testing.T) {
-	eng := &fakeEngine{}
-	if _, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
-		t.Fatalf("Validate = %v", err)
-	}
-	if !eng.called("run panel-php-8.3-validate php-fpm -t -y ") {
-		t.Errorf("calls = %v, want a one-shot php-fpm -t", eng.calls)
-	}
-}
-
-func TestValidateRejects(t *testing.T) {
-	for name, res := range map[string]docker.ExecResult{
-		"non-zero exit":       {ExitCode: 78, Stderr: []byte("ERROR: failed to load configuration file\n")},
-		"ini syntax, exit 0":  {Stderr: []byte("PHP:  syntax error, unexpected '=' in /www/panel/php/8.3/php.ini on line 3\nNOTICE: test is successful\n")},
-		"bad extension":       {Stdout: []byte("\nWarning: PHP Startup: Unable to load dynamic library 'nope.so'\n")},
-		"fpm error with zero": {Stderr: []byte("[17-Nov-2026 12:00:00] ERROR: [pool a] bad value\n")},
-	} {
-		eng := &fakeEngine{container: running(), exec: res}
-		out, err := NewService(eng, testPaths, "8.3", false, fixedImage).Validate(ctx)
-		if err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-		if !strings.Contains(out, res.Output()) {
-			t.Errorf("%s: output = %q, want the validator's text verbatim", name, out)
-		}
-	}
-	// A notice or a warning about an empty include pattern is not a rejection.
-	ok := docker.ExecResult{Stderr: []byte("WARNING: Nothing matches the include pattern '/www/panel/php/8.3/pool.d/*.conf'\nNOTICE: configuration file test is successful\n")}
-	if _, err := NewService(&fakeEngine{container: running(), exec: ok}, testPaths, "8.3", false, fixedImage).Validate(ctx); err != nil {
-		t.Errorf("a clean test was rejected: %v", err)
-	}
-}
-
-func TestReloadSignalsARunningContainer(t *testing.T) {
-	eng := &fakeEngine{container: running()}
-	if err := NewService(eng, testPaths, "8.3", false, fixedImage).Reload(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !eng.called("kill panel-php-8.3 USR2") {
-		t.Errorf("calls = %v, want USR2", eng.calls)
-	}
-}
-
-// Step 2.7: a version nobody uses stays down through a settings edit, and
-// comes up with its first site.
-func TestReloadStartsTheContainerOnlyWhenAsked(t *testing.T) {
-	eng := &fakeEngine{}
-	plain := NewService(eng, testPaths, "8.3", false, fixedImage)
-	if err := plain.Reload(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := plain.Healthy(ctx); err != nil {
-		t.Fatalf("a version with no container is not unhealthy: %v", err)
-	}
-	if len(eng.calls) != 0 {
-		t.Fatalf("a plain reload touched Docker: %v", eng.calls)
-	}
-
-	starting := NewService(eng, testPaths, "8.3", true, fixedImage)
-	if err := starting.Reload(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !eng.called("create panel-php-8.3") || !eng.called("start id") {
-		t.Errorf("calls = %v, want create and start", eng.calls)
-	}
-	if err := starting.Healthy(ctx); err == nil {
-		t.Error("a starting service reported healthy with no container running")
-	}
-}
-
-type restartingEngine struct {
-	fakeEngine
-	n int
-}
-
-func (r *restartingEngine) ContainerInspect(context.Context, string) (docker.Container, error) {
-	r.n++
-	c := *r.container
-	c.State.StartedAt = time.Unix(int64(100*r.n), 0)
-	return c, nil
-}
-
-func TestHealthyCatchesARestart(t *testing.T) {
-	eng := &restartingEngine{fakeEngine: fakeEngine{container: running()}}
-	svc := NewService(eng, testPaths, "8.3", false, fixedImage)
-	svc.wait = time.Millisecond
-	if err := svc.Healthy(ctx); err == nil || !strings.Contains(err.Error(), "restarted") {
-		t.Errorf("Healthy = %v, want a restart to be reported", err)
-	}
 }
 
 // --- catalogue ---------------------------------------------------------------
@@ -675,9 +567,6 @@ func TestIniReadAndWrite(t *testing.T) {
 		t.Errorf("php.ini after a rejected write = %q", b)
 	}
 }
-
-// fixedImage is the image a test service runs.
-var fixedImage ImageFunc = func(context.Context) (string, error) { return "panel/php:8.3-test", nil }
 
 // ImageTag and ImageRemove complete the fake as a php.Engine. The fake keeps
 // no tags: a build is found by inspect whenever the test set no image map.
