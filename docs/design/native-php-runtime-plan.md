@@ -34,8 +34,8 @@ so it does not care what runs behind them. The PHP containers already use host n
 | # | Decision | Recommendation |
 |---|---|---|
 | D1 | Replace the Docker PHP runtime or keep both | **Replace**, as nginx did. Build on a branch with the Docker path intact until step 8 passes, then delete it in step 9 |
-| D2 | How extensions are built | **PHP core once, every extension as a shared `.so` built with `phpize`**, which is what `docker-php-ext-install` does. Keeps a rebuild cheap (core layer cached by version) and treats bundled and PECL extensions the same. Alternative (static, everything in `./configure`) means a 3-6 min full recompile for every extension change |
-| D3 | How much confinement the unit gives | **Parity with the container's mounts**: `ProtectSystem=strict` with `ReadWritePaths=` = run dir, site log dir, sites root, allowed web roots; plus `PrivateTmp`, `InaccessiblePaths=` for the panel's own data. Reads outside those stay possible for the `www` user, as for any local account. Changing the allowed roots rewrites the unit and restarts the running PHP units, as it recreates the containers today |
+| D2 | How extensions are built | **PHP core once, every extension as a shared `.so` built with `phpize`**, which is what `docker-php-ext-install` does. Keeps a rebuild cheap (core layer cached by version) and treats bundled and PECL extensions the same. Alternative (static, everything in `./configure`) means a 3-6 min full recompile for every extension change. **Step 0 correction: the extension list must not be a Docker build argument**, or BuildKit re-runs every later layer and the core recompiles each time (see step 0) |
+| D3 | How much confinement the unit gives | **Parity with the container's mounts**: `ProtectSystem=strict` with `ReadWritePaths=` = run dir, site log dir, sites root, allowed web roots; plus `PrivateTmp`, `InaccessiblePaths=` for the panel's own data. Reads outside those stay possible for the `www` user, as for any local account. Changing the allowed roots rewrites the unit and restarts the running PHP units, as it recreates the containers today. **Step 0 correction: `ProtectHome=read-only`, not `true`** (a `true` hides `/home` from `ReadWritePaths` too), and FPM's own log must be a real file, not fd 2 (see step 0) |
 | D4 | PECL pinning | **Parity first**: `pecl install <name>` as today (latest, unpinned). Pinning version + sha256 per extension per PHP series is a supply-chain improvement worth a later step, not part of this one |
 | D5 | Hosts still on 8.2 | The builder takes **any `php.versions` entry**, so a host that still lists 8.2 gets it built natively during the upgrade like the others. Only `DefaultVersions` changes to `8.3,8.4,8.5`. Nothing keeps running in Docker |
 | D6 | Host `php` on PATH | **No.** The binary is at `/www/panel/php/<ver>/current/bin/php` and the Apps/cron features may use it later. A `php` on PATH would fight a distro package. There is no PHP CLI shim in the repo today, so nothing is lost |
@@ -105,12 +105,15 @@ Per version, mirroring `nginx.Service` / `nginx.Runtime`:
 - `Healthy`: same `MainPID` and `ActiveEnterTimestampMonotonic` across the settle window. USR2
   re-execs the master in place, so a changed PID or start time means the master died on the new config.
 - Unit text:
-  - `Type=simple` (or `notify` if the build uses `--with-fpm-systemd`; decided in step 0),
+  - `Type=notify` (step 0: `--with-fpm-systemd` works and FPM sends `READY=1`),
     `ExecStartPre` = the `-t` check, `ExecStart` = `php-fpm -F -y … -c …`
   - `Environment=PHP_INI_SCAN_DIR=:…`, `KillSignal=SIGQUIT`, `Restart=on-failure`, `LimitNOFILE`
   - the D3 sandbox. Not `NoNewPrivileges`: it would break a `sendmail` wrapper that relies on a
     setgid helper. The FPM master stays root and each pool drops to `www`
-  - `[global] error_log = /proc/self/fd/2` already in `php-fpm.conf` goes to the journal under systemd
+  - `[global] error_log` becomes a **file** the unit can open (for example
+    `/www/panel/logs/php-<ver>-fpm.log`), listed in `ReadWritePaths=` and created before the
+    unit starts. The container's `/proc/self/fd/2` cannot be opened under systemd: FPM exits 78
+    before it reads a pool (step 0)
 - `Runtime`: `EnsureRunning`, `Start`, `Stop` (disable + stop, remembered per version as
   `php.<ver>.stopped`), `Restart`, `Status`; writes the unit and `daemon-reload` only when the text changed.
 
@@ -146,6 +149,67 @@ Answer, with numbers:
 - `opcache` as `zend_extension=opcache`
 
 **Gate:** a one-page result and a go/no-go on D2 and D3. Delete the spike afterwards.
+
+#### Step 0 result (2026-11-19, Ubuntu 26.04.1 sandbox, 4 vCPU)
+
+Spike scripts: `scripts/spikes/native-php/{Dockerfile,run.sh}` (untracked, throwaway). The
+sandbox had been wiped by a reboot, so the box was rebuilt from nothing; Docker 29.9.3 was
+already there.
+
+| Question | Answer |
+|---|---|
+| Checksum source | `https://www.php.net/releases/index.php?json&version=8.3` returns the newest 8.3.x (`version`) and a `sha256` per tarball in `source[]`. `?version=8.3.28` pins one release. Stable enough to build on; the `?json` parameter is required |
+| Core build | **300 s** (`configure` + `make -j4` + `make install`) on 4 vCPU |
+| One extension, core cached | **3–5 s** for bundled `opcache`/`mysqli`/`pdo_mysql`; **11 s** `gd`, **28 s** `intl`, **26 s** `imagick` (PECL) |
+| Prefix, lean | **74 MB** (core + opcache, mysqli, pdo_mysql), of which **30 MB** is bundled libraries |
+| Prefix, + intl + gd + imagick | **131 MB**, of which **87 MB** is bundled libraries (ICU, ImageMagick, their dependencies) |
+| `Type=notify` vs `simple` | **`notify` works.** `--with-fpm-systemd` links libsystemd, FPM sends `READY=1`, and systemd shows `Type=notify NotifyAccess=main` with the master as `MainPID`. Use it: a pool that fails to start is then a failed unit, not a started one |
+| `ReadWritePaths` under `/home` | **`ProtectHome=true` wins over `ReadWritePaths=`** — FPM fails with `the chdir path '/home/testsite' does not exist or is not a directory`. `ProtectHome=read-only` and `ProtectHome=false` both work. D3 must use `read-only`, not `true` |
+| `InaccessiblePaths=` on panel data | **Works.** With `/www/panel/data` listed, a world-readable `panel.db` is unreadable from the pool (`panel-data DENIED`), and the path is hidden even when it exists |
+| Relative RUNPATH | **Works.** `opcache.so` carries `$ORIGIN/../../..`, `php-fpm` carries `$ORIGIN/../lib`, and `ldd` finds no unresolved library |
+| `opcache` as `zend_extension` | **Works**; `php -m` lists it under `[Zend Modules]` |
+| `PHP_INI_SCAN_DIR=:<conf.d>` | Works: a `memory_limit` in `conf.d/zz-panel.ini` is seen with the env var and not without |
+
+Serving end to end: the unit starts under systemd, native nginx on `:8080` proxies to the
+pool socket, `GET /` returns the `phpinfo()` page, a write into the pool's own root succeeds,
+a read of panel data is denied, and `systemctl reload` (USR2) keeps the same `MainPID`.
+
+**D2: go, with one correction.** Extensions as shared `.so` files on a core built once is
+right — a single extension is seconds, not a recompile. But **the "core layer stays cached
+when the extension list changes" premise is wrong**: BuildKit invalidates every layer after an
+`ARG` when that argument's value changes, whether or not the layer reads it. Measured on a
+minimal Dockerfile: changing an unused `ARG` re-ran both later `RUN` layers. Since the
+extension list is a build argument, **every extension change recompiles the core (~5 min)**.
+To get the caching D2 assumes, the extension list must not be a build argument: either the
+Dockerfile is generated with the list baked into the extension layer (the plan's existing
+`DockerfileFor` pattern, and how `internal/php` works today), or one `.so` per layer with a
+fixed extension sequence and the core in a separate, argument-free stage.
+
+**D3: go, with two corrections.** `ProtectSystem=strict` + `ReadWritePaths=` + `PrivateTmp` +
+`InaccessiblePaths=` gives the container's confinement. Two things the plan did not expect:
+
+1. `ProtectHome=true` breaks any allowed web root under `/home`; use `ProtectHome=read-only`.
+2. **`[global] error_log = /proc/self/fd/2` does not work under systemd.** Neither does
+   `/dev/stderr`: FPM exits 78 with `failed to open error_log (...): No such device or address`
+   before it reads a pool, because systemd hands the unit a journal socket, not a tty. The
+   native runtime must log to a **file** under the panel's log directory, and that file must be
+   in `ReadWritePaths=` **and exist before the unit starts** (systemd refuses the unit with
+   `226/NAMESPACE` otherwise). This changes the plan's claim that the existing
+   `error_log = /proc/self/fd/2` "goes to the journal under systemd": it does not, and
+   `php-fpm.conf` has to be rendered differently for the native runtime.
+
+Other findings worth carrying into `internal/php/builder.go`:
+
+- PHP has no `--with-ld-opt` (that is nginx's flag); pass `LDFLAGS=-Wl,-rpath,...`.
+- The builder needs the `file` package (`phpize` calls `/usr/bin/file`).
+- The build's own `php-fpm -t` resolves `user = www`, so the **builder image must carry the
+  `www` account** (1500:1500), as the official image carries `www-data`.
+- `--with-sodium=shared` builds `sodium.so` but **nothing enables it**; the official image has a
+  `conf.d` file for it. Without one, `php -m` silently differs from the container's list, which
+  is exactly what step 2's gate compares.
+- Bundling must glob only regular files (`find "$P/lib" -maxdepth 1 -type f`); a bare `lib/*`
+  hits the `lib/php` directory and `patchelf` fails.
+- The official `php:8.3-fpm` image is **704 MB**; the plan's "~680 MB" was close.
 
 ### Step 1: lift the shared native pieces out of `internal/nginx` (behaviour-preserving)
 
