@@ -222,6 +222,24 @@ becomes a client of it.
 **Gate:** every existing nginx test passes unchanged, and smoke 1, 7 and 8 pass on the sandbox as
 before. No PHP change in this step.
 
+#### Step 1 result (2026-11-19, commit `3c3e2b9`)
+
+`internal/native` holds `Runner`/`ExecRunner`/`ExitCode`, `Unit` + `StatusOf` + `Stable` +
+`Running`, `Host`/`ReadHost`/`BuilderImage`/`ErrUnsupportedHost`, `ExtractBuild`/`BuildVersion`,
+`Store` + `ReadLink`/`SetLink`, and a generic `DockerBuilder`. `internal/nginx` keeps its exported
+surface as thin wrappers and type aliases, so no caller and no existing test changed. Gate: `go
+build`, `go vet`, `go test ./cmd/... ./internal/...` all green; `internal/php` untouched.
+
+Three things the step description missed, all now parameters rather than nginx constants: the
+product label is needed in `BuilderImage`'s `ErrUnsupportedHost` text and in the store's link
+errors, not only in the unit name; `BuildVersion` takes the version-file path rather than `Paths`;
+and `ExtractBuild`'s "is this a real build" check is a list of required paths, not a hardcoded
+`sbin/nginx`.
+
+The smoke 1/7/8 clause was not run: the sandbox was in step 0 spike state (distro nginx, no panel
+install, no `panel-*` units), so there was no panel to smoke. It moves to step 8, where a real
+install happens anyway.
+
 ### Step 2: PHP builder and recipe, 8.3 only, minimal extension set
 
 `internal/php/builder.go` + `builder.Dockerfile`; `DockerfileFor` golden-file tests; `Paths` gains
@@ -230,6 +248,38 @@ the official core set plus `opcache`, `mysqli`, `pdo_mysql`.
 
 **Gate:** a build on the sandbox produces a prefix that passes its own end-of-recipe checks, and
 `php -m` matches the official `php:8.3-fpm` module list for the same set.
+
+#### Step 2 result (2026-11-20, commit `15caa31`)
+
+Built on the sandbox with the real builder: **prefix 74 MB** (30 MB of it bundled libraries), core
+compile **344 s**, whole build **6m19 s**, PHP **8.3.37**, `ldd` reports **0** unresolved
+libraries, and `php -m` is **36 modules against the official image's 34** — nothing missing, and
+exactly `mysqli` and `pdo_mysql` extra (`opcache` is already in the official list).
+
+Four corrections to the plan:
+
+1. **D2's caching premise is wrong a second time, and the step 0 correction did not catch it.**
+   The build ID is compiled into `--prefix` inside the *core* configure line, because
+   `extension_dir` and the scan dir must point at the build that loads them. So every build
+   recompiles the core, even with an identical extension list. Step 0's "3-5 s with the core
+   cached" came from reusing `BUILD_ID=spike`, which is not what a real build does. Buying the
+   cache back needs a fixed staging prefix plus a runtime `extension_dir` override, and that
+   trades away candidate isolation. Isolation was kept: a candidate that silently loads the
+   serving build's `.so` files is the failure the risk table warns about. **Every build is ~6
+   minutes, not seconds.** Step 7 must budget for that three times over.
+2. **`mysqli` and `pdo_mysql` had no `Configure` entries**, contrary to the plan's assumption that
+   they were already there.
+3. **The catalogue field is `Configure`, not `ConfigureFlags`.** It already held the
+   `docker-php-ext-configure` arguments and now also drives the native `./configure` line. No new
+   field.
+4. **A `Paths` covers every version**, so id-bearing paths take both: `BuildPrefix(ver, id)`, not
+   the plan's `BuildDir(id)`. The name `BuildPrefix` avoids colliding with the existing
+   `BuildDir(ver, id)`, which is the Docker build context and stays until step 4 retires it.
+
+Two defects the worker hit and fixed, both now pinned by tests: a `FROM` without `AS build` breaks
+`COPY --from` on the classic builder the panel uses (BuildKit is not guaranteed on a host), and
+per-extension `-dev` packages must be installed in that extension's own layer or they invalidate
+the core layer.
 
 ### Step 3: PHP `Service`, `Runtime` and unit
 
