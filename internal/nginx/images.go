@@ -57,7 +57,8 @@ func NewImages(p Paths, run Runner, b Builder, cat *images.Catalog, log *slog.Lo
 	return i, nil
 }
 
-// family returns the family of one version, creating it on first use.
+// family returns the family of one version, creating it on first use. A version is
+// what the operator typed: a series such as 1.30 or one release such as 1.30.1.
 func (i *Images) family(version string) (*images.Family, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -105,7 +106,9 @@ func (i *Images) configPresent() bool {
 	return err == nil
 }
 
-// Version is the nginx version that serves.
+// Version is the nginx version that serves: the series the operator chose, or the
+// release it names when one was typed. The release the build compiled is read from
+// the build itself (BuildVersion), since a series build picks its patch while it runs.
 func (i *Images) Version() string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -178,6 +181,9 @@ func (i *Images) Activate(ctx context.Context, id string) (images.Build, error) 
 // the live configuration is checked against it before nginx is touched, and a
 // failed swap puts the old build back. The new version is recorded only once it
 // serves.
+//
+// version may be a series (1.30) or one release of it (1.30.1). A series takes the
+// newest patch nginx.org has at build time; a release pins that one.
 func (i *Images) SetVersion(ctx context.Context, version string, progress docker.Progress) (images.Build, error) {
 	if err := CheckVersion(version); err != nil {
 		return images.Build{}, err
@@ -198,10 +204,15 @@ func (i *Images) SetVersion(ctx context.Context, version string, progress docker
 	if err != nil {
 		return images.Build{}, err
 	}
+	// A family keeps the build it promoted last, and a series build holds whichever
+	// patch was newest when it ran: it is reused when it is the release asked for,
+	// or any release of the series when a series was asked for.
 	reuse := false
 	if has && cur.State == images.StateReady {
 		if _, ierr := (dirStore{i.p}).ImageInspect(ctx, cur.Tag); ierr == nil {
-			reuse = true
+			if rel, rerr := BuildVersion(i.p, cur.ID); rerr == nil {
+				reuse = rel == version || (exactRelease(version) == "" && Series(rel) == version)
+			}
 		}
 	}
 	if reuse {

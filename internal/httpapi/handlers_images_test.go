@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -268,5 +270,61 @@ func TestNginxVersionSwitch(t *testing.T) {
 	}
 	if got := waitRan(t, imgs.switched); got != "1.28" {
 		t.Errorf("switched to %q", got)
+	}
+}
+
+// A full release is a version the route takes, not only a series.
+func TestNginxVersionSwitchAcceptsARelease(t *testing.T) {
+	imgs := &fakeNginxImages{switched: make(chan string, 1)}
+	h := imagesHarness(t, imgs, &fakeNginxContainer{ran: make(chan string, 1)})
+
+	code, out := h.call(http.MethodPost, "/api/nginx/image/version", map[string]any{"version": "1.30.1"})
+	if code != http.StatusAccepted {
+		t.Fatalf("switch to a release = %d %v", code, out)
+	}
+	if got := waitRan(t, imgs.switched); got != "1.30.1" {
+		t.Errorf("switched to %q", got)
+	}
+	for _, bad := range []string{"1.2.3.4", "1.30."} {
+		if code, _ := h.call(http.MethodPost, "/api/nginx/image/version", map[string]any{"version": bad}); code != http.StatusBadRequest {
+			t.Errorf("%q = %d, want 400", bad, code)
+		}
+	}
+}
+
+// The response names the release that serves and every build row carries the one it
+// compiled, so the page can show 1.30.1 where the series is 1.30.
+func TestNginxImageShowsTheCompiledRelease(t *testing.T) {
+	p := nginx.Paths{Root: filepath.ToSlash(t.TempDir())}
+	write := func(id, release string) {
+		dir := filepath.FromSlash(p.BuildDir(id))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "version"), []byte(release+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("20261117120001-aaaaaa", "1.30.1")
+	write("20261117120000-bbbbbb", "1.29.4")
+
+	h := imagesHarness(t, &fakeNginxImages{
+		version: "1.30",
+		builds: []images.Build{
+			{ID: "20261117120001-aaaaaa", State: images.StateReady, Current: true},
+			{ID: "20261117120000-bbbbbb", State: images.StateReady, Previous: true},
+		},
+	}, &fakeNginxContainer{ran: make(chan string, 1)})
+	h.deps.Nginx.Paths = p
+
+	code, out := h.call(http.MethodGet, "/api/nginx/image", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET = %d %v", code, out)
+	}
+	if out["release"] != "1.30.1" {
+		t.Errorf("release = %v, want 1.30.1", out["release"])
+	}
+	if prev := out["previous"].(map[string]any); prev["nginx_version"] != "1.29.4" {
+		t.Errorf("previous nginx_version = %v", prev["nginx_version"])
 	}
 }

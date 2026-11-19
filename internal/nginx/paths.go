@@ -46,6 +46,11 @@ func (p Paths) Binary() string { return path.Join(p.CurrentLink(), "sbin", "ngin
 // BinaryOf is the executable of one build, for checking a candidate before it serves.
 func (p Paths) BinaryOf(id string) string { return path.Join(p.BuildDir(id), "sbin", "nginx") }
 
+// VersionFile is where a build records the nginx release it compiled. A series
+// build picks its patch release while it runs, so the family version does not say
+// which one is on disk.
+func (p Paths) VersionFile(id string) string { return path.Join(p.BuildDir(id), "version") }
+
 // MimeTypes is the media type table shipped with every build.
 func (p Paths) MimeTypes() string { return path.Join(p.CurrentLink(), "conf", "mime.types") }
 

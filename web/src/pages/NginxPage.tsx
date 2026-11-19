@@ -183,6 +183,20 @@ function StatusBody({ status }: { status: NginxServiceStatus }) {
 }
 
 /**
+ * What the server accepts: a series such as 1.30, or one release of it such as
+ * 1.30.1. The rule is nginx.CheckVersion, repeated here so a typo is caught before
+ * a job is started.
+ */
+export const NGINX_VERSION_PATTERN = /^[1-9][0-9]?\.[0-9]{1,2}(\.[0-9]{1,2})?$/
+
+/** Why the server would refuse this version, or null when it would accept it. */
+export function validateNginxVersion(raw: string): string | null {
+  if (raw === "") return null
+  if (NGINX_VERSION_PATTERN.test(raw)) return null
+  return "Use a version such as 1.30, or a full release such as 1.30.1."
+}
+
+/**
  * The nginx builds: which one serves, the one it rolls back to, and the rebuild that
  * compiles a new one from the newest sources. A build's job is watched in the drawer.
  */
@@ -193,7 +207,8 @@ export function BuildCard() {
   const activate = useActivateNginxImageBuild()
   const setVersion = useSetNginxVersion()
   const [jobId, setJobId] = useState<string | null>(null)
-  const [pick, setPick] = useState<string | null>(null)
+  const [draft, setDraft] = useState("")
+  const draftError = draft.trim() === "" ? null : validateNginxVersion(draft.trim())
 
   return (
     <Card>
@@ -223,29 +238,37 @@ export function BuildCard() {
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="nginx-version">nginx version</Label>
               <div className="flex flex-wrap items-center gap-3">
-                <select
+                <Input
                   id="nginx-version"
-                  value={pick ?? data.version}
-                  onChange={(e) => setPick(e.target.value)}
-                  className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                >
+                  list="nginx-versions"
+                  value={draft}
+                  placeholder="1.30 or 1.30.1"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={draftError !== null}
+                  aria-describedby="nginx-version-hint"
+                  onChange={(e) => setDraft(e.target.value)}
+                  className="w-40 font-mono"
+                />
+                <datalist id="nginx-versions">
                   {data.versions.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                      {v === data.version ? " (running)" : ""}
-                    </option>
+                    <option key={v} value={v} />
                   ))}
-                </select>
+                </datalist>
                 <Button
                   variant="outline"
                   disabled={
-                    data.busy || setVersion.isPending || pick === null || pick === data.version
+                    data.busy ||
+                    setVersion.isPending ||
+                    draftError !== null ||
+                    draft === "" ||
+                    draft === data.version
                   }
                   onClick={() =>
-                    setVersion.mutate(pick ?? "", {
+                    setVersion.mutate(draft, {
                       onSuccess: (job: JobRef) => {
                         setJobId(job.id)
-                        setPick(null)
+                        setDraft("")
                       },
                     })
                   }
@@ -253,21 +276,30 @@ export function BuildCard() {
                   {setVersion.isPending ? "Starting…" : "Switch version"}
                 </Button>
               </div>
-              <p className="text-muted-foreground text-xs">
-                The new version is built, your current configuration is checked against it with
-                nginx -t, and only then is nginx swapped over. If it fails, the running version
-                stays.
+              <p id="nginx-version-hint" className="text-muted-foreground text-xs">
+                {draftError ?? (
+                  <>
+                    A series such as <span className="font-mono">1.30</span> takes the newest patch
+                    nginx.org has when it builds; type the patch as well —{" "}
+                    <span className="font-mono">1.30.1</span> — to pin that release. The new version
+                    is built, your current configuration is checked against it with nginx -t, and
+                    only then is nginx swapped over. If it fails, the running version stays.
+                  </>
+                )}
               </p>
               <ApplyError error={setVersion.error} fallback="The version could not be changed." />
             </div>
 
             <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[max-content_1fr]">
-              <dt className="text-muted-foreground">Built from</dt>
-              <dd className="text-xs">{data.base}</dd>
               <dt className="text-muted-foreground">Serving</dt>
               <dd>
                 {data.current ? (
-                  <BuildSummary build={data.current} />
+                  <span className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-medium">
+                      nginx {data.release || data.current.nginx_version || data.version}
+                    </span>
+                    <BuildSummary build={data.current} />
+                  </span>
                 ) : (
                   <span className="text-muted-foreground">No build yet.</span>
                 )}
@@ -276,10 +308,17 @@ export function BuildCard() {
                 <>
                   <dt className="text-muted-foreground">Previous</dt>
                   <dd>
-                    <BuildSummary build={data.previous} />
+                    <span className="flex flex-wrap items-baseline gap-2">
+                      {data.previous.nginx_version && (
+                        <span className="font-medium">nginx {data.previous.nginx_version}</span>
+                      )}
+                      <BuildSummary build={data.previous} />
+                    </span>
                   </dd>
                 </>
               )}
+              <dt className="text-muted-foreground">Built from</dt>
+              <dd className="text-xs">{data.base}</dd>
             </dl>
 
             <div className="flex flex-wrap items-center gap-3">

@@ -32,6 +32,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
+	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
 	"github.com/portbyte-id/server-panel/internal/settings"
@@ -187,8 +188,8 @@ func (f *fakeNginx) Name() string                             { return "nginx" }
 func (f *fakeNginx) Validate(context.Context) (string, error) { return "", nil }
 func (f *fakeNginx) Reload(context.Context) error             { return nil }
 func (f *fakeNginx) Healthy(context.Context) error            { return nil }
-func (f *fakeNginx) State(context.Context) (docker.Container, bool, error) {
-	return docker.Container{State: docker.ContainerState{Running: true, Status: "running", StartedAt: time.Now().UTC()}}, true, nil
+func (f *fakeNginx) State(context.Context) (nginx.Status, bool, error) {
+	return nginx.Status{Loaded: true, Active: true, State: "active", PID: 1, Since: "1"}, true, nil
 }
 
 func (f *fakeNginx) Status() sites.Status {
@@ -214,7 +215,61 @@ func fakeNginxDeps(st *store.Store) (*httpapi.NginxDeps, error) {
 		Sites:   mgr,
 		Global:  nginx.NewGlobal(st, fake, fake, paths).ReadWith(mfs.ReadFile),
 		History: fake, Service: fake, Reconciler: fake, Paths: paths,
+		Images: newFakeNginxBuilds(paths),
 	}, nil
+}
+
+// fakeNginxBuilds answers the build routes without Docker. Each build gets a real
+// directory holding the release it compiled, so the page shows 1.30.2 where the
+// family version is 1.30. A switch records what it was asked for and does not
+// build, since a real build takes 5 to 8 minutes.
+type fakeNginxBuilds struct {
+	paths   nginx.Paths
+	version string
+}
+
+func newFakeNginxBuilds(paths nginx.Paths) *fakeNginxBuilds {
+	f := &fakeNginxBuilds{paths: paths, version: "1.30"}
+	for id, release := range map[string]string{"20261118120000-aaaaaa": "1.30.2", "20261117090000-bbbbbb": "1.29.4"} {
+		dir := filepath.FromSlash(paths.BuildDir(id))
+		_ = os.MkdirAll(dir, 0o755)
+		_ = os.WriteFile(filepath.Join(dir, "version"), []byte(release+"\n"), 0o644)
+	}
+	return f
+}
+
+func (f *fakeNginxBuilds) builds() []images.Build {
+	return []images.Build{
+		{ID: "20261118120000-aaaaaa", Kind: images.KindNginx, Version: "1.30", State: images.StateReady, Current: true,
+			CreatedAt: time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)},
+		{ID: "20261117090000-bbbbbb", Kind: images.KindNginx, Version: "1.29", State: images.StateReady, Previous: true,
+			CreatedAt: time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)},
+	}
+}
+
+func (f *fakeNginxBuilds) Idle() error { return nil }
+func (f *fakeNginxBuilds) Builds(context.Context) ([]images.Build, error) {
+	return f.builds(), nil
+}
+func (f *fakeNginxBuilds) Current(context.Context) (images.Build, bool, error) {
+	for _, b := range f.builds() {
+		if b.Current {
+			return b, true, nil
+		}
+	}
+	return images.Build{}, false, nil
+}
+func (f *fakeNginxBuilds) Present(context.Context) (bool, error) { return true, nil }
+func (f *fakeNginxBuilds) Build(context.Context, docker.Progress) (images.Build, error) {
+	return images.Build{}, nil
+}
+func (f *fakeNginxBuilds) Activate(context.Context, string) (images.Build, error) {
+	return images.Build{}, nil
+}
+func (f *fakeNginxBuilds) Version() string { return f.version }
+func (f *fakeNginxBuilds) SetVersion(_ context.Context, v string, _ docker.Progress) (images.Build, error) {
+	f.version = v
+	return images.Build{}, nil
 }
 
 // fakeApps stands in for supervisord and the config editor at once, the way

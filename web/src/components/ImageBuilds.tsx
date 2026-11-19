@@ -113,6 +113,9 @@ export function BuildHistory({
                 <Badge variant={badge.variant}>{badge.label}</Badge>
                 {build.current && <Badge variant="default">serving</Badge>}
                 {build.previous && <Badge variant="outline">previous</Badge>}
+                {build.nginx_version && (
+                  <span className="font-mono text-xs">nginx {build.nginx_version}</span>
+                )}
                 <span className="font-mono text-muted-foreground text-xs">{build.id}</span>
                 {showExtensions && (
                   <span className="flex-1">

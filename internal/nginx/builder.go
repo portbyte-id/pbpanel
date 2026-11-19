@@ -32,18 +32,42 @@ const (
 const BuildSource = "nginx.org source, OpenSSL " + openSSLSeries + ", ModSecurity"
 
 // SuggestedVersions are the nginx series the Nginx page offers, newest first. Any
-// MAJOR.MINOR nginx.org publishes works; one that does not exist fails at the
-// download inside the build, before anything serving is touched.
+// MAJOR.MINOR nginx.org publishes works, and so does a full MAJOR.MINOR.PATCH that
+// pins one release; one that does not exist fails at the download inside the build,
+// before anything serving is touched.
 var SuggestedVersions = []string{"1.30", "1.29", "1.28"}
 
-var versionPattern = regexp.MustCompile(`^[1-9][0-9]?\.[0-9]{1,2}$`)
+var versionPattern = regexp.MustCompile(`^[1-9][0-9]?\.[0-9]{1,2}(\.[0-9]{1,2})?$`)
 
-// CheckVersion reports whether v is a series the panel will build.
+// seriesPattern is the MAJOR.MINOR part of a version, which the build matches
+// tarball names on.
+var seriesPattern = regexp.MustCompile(`^[1-9][0-9]?\.[0-9]{1,2}$`)
+
+// CheckVersion reports whether v is a version the panel will build: a series such
+// as 1.30, whose newest patch the build looks up, or a release such as 1.30.1.
 func CheckVersion(v string) error {
 	if !versionPattern.MatchString(v) {
-		return fmt.Errorf("nginx: version %q must look like 1.30", v)
+		return fmt.Errorf("nginx: version %q must look like 1.30 or 1.30.1", v)
 	}
 	return nil
+}
+
+// Series is the MAJOR.MINOR part of a version: 1.30.1 is a release of 1.30.
+func Series(v string) string {
+	major, rest, ok := strings.Cut(v, ".")
+	if !ok {
+		return v
+	}
+	minor, _, _ := strings.Cut(rest, ".")
+	return major + "." + minor
+}
+
+// exactRelease is v when it names one release, and "" when it names a series.
+func exactRelease(v string) string {
+	if seriesPattern.MatchString(v) {
+		return ""
+	}
+	return v
 }
 
 // NormalizeVersion maps a version stored before there was one build to its
@@ -132,12 +156,14 @@ func BuilderImage(h Host) (string, error) {
 	return "", fmt.Errorf("%w: %s %s is not supported yet", ErrUnsupportedHost, h.ID, h.VersionID)
 }
 
-// DockerfileFor is the build recipe for one build ID on a builder image.
-func DockerfileFor(base, id, series string, p Paths) []byte {
+// DockerfileFor is the build recipe for one build ID on a builder image, for a
+// series (the newest patch is looked up) or one release.
+func DockerfileFor(base, id, version string, p Paths) []byte {
 	return []byte(strings.NewReplacer(
 		"@BASE@", base,
 		"@BUILD_ID@", id,
-		"@SERIES@", series,
+		"@NGINX_SERIES_RE@", strings.ReplaceAll(Series(version), ".", `\.`),
+		"@NGINX_EXACT@", exactRelease(version),
 		"@OPENSSL_SERIES@", openSSLSeries,
 		"@MODSEC_VERSION@", modSecurityVersion,
 		"@MODSEC_NGINX_VERSION@", modSecurityNginxVersion,
@@ -160,7 +186,7 @@ func say(p docker.Progress, line string) {
 
 // Builder makes the build with one ID: a finished directory under VersionsDir.
 type Builder interface {
-	Build(ctx context.Context, id, series string, progress docker.Progress) error
+	Build(ctx context.Context, id, version string, progress docker.Progress) error
 }
 
 // BuildEngine is the part of the Docker client the builder uses. Docker only
@@ -182,9 +208,9 @@ type DockerBuilder struct {
 	OSRelease string
 }
 
-// Build compiles build id of series and leaves it at P.BuildDir(id). The builder
+// Build compiles build id of version and leaves it at P.BuildDir(id). The builder
 // image and container are removed whether or not it worked.
-func (b DockerBuilder) Build(ctx context.Context, id, series string, progress docker.Progress) error {
+func (b DockerBuilder) Build(ctx context.Context, id, version string, progress docker.Progress) error {
 	file := b.OSRelease
 	if file == "" {
 		file = "/etc/os-release"
@@ -197,12 +223,12 @@ func (b DockerBuilder) Build(ctx context.Context, id, series string, progress do
 	if err != nil {
 		return err
 	}
-	say(progress, "building nginx "+series+" on "+base)
+	say(progress, "building nginx "+version+" on "+base)
 
 	tag := "panel/nginx-build:" + id
 	bg := context.WithoutCancel(ctx)
 	if _, err := b.Eng.ImageBuild(ctx, docker.BuildOptions{
-		Tag: tag, Dockerfile: DockerfileFor(base, id, series, b.P), Pull: true,
+		Tag: tag, Dockerfile: DockerfileFor(base, id, version, b.P), Pull: true,
 		Labels: map[string]string{docker.LabelManaged: "true"},
 	}, progress); err != nil {
 		return err
