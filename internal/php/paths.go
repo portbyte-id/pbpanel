@@ -21,8 +21,8 @@ const (
 var versionRe = regexp.MustCompile(`^[0-9]\.[0-9]{1,2}$`)
 
 // CheckVersion accepts a `major.minor` version and nothing else. The version is
-// written into paths, container names and image references, so this check is
-// what keeps a request parameter from becoming any of those.
+// written into paths, unit names and build references, so this check is what
+// keeps a request parameter from becoming any of those.
 func CheckVersion(v string) error {
 	if !versionRe.MatchString(v) {
 		return fmt.Errorf("php: %q is not a PHP version such as 8.3", v)
@@ -30,36 +30,17 @@ func CheckVersion(v string) error {
 	return nil
 }
 
-// ContainerName is the container of one version.
-func ContainerName(ver string) string { return "panel-php-" + ver }
-
-// BaseImage is the official image a version runs on.
-func BaseImage(ver string) string { return "php:" + ver + "-fpm" }
-
-// Repo is the repository of the derived images: `panel/php:<ver>-<build-id>`.
-// Which build serves is a pointer in the database (package images), never a
-// mutable tag.
+// Repo is the repository part of a build's catalogue reference:
+// `panel/php:<ver>-<build-id>`. Which build serves is a pointer in the database
+// (package images), never a mutable tag.
 const Repo = "panel/php"
-
-// LegacyImage is the reference the derived image had before builds had IDs. It
-// is adopted at boot and not written again.
-func LegacyImage(ver string) string { return Repo + ":" + ver + "-fpm" }
-
-// BuildDir is the build context of one build on the host. The panel writes the
-// Dockerfile there and sends the directory to the Engine.
-//
-// The native runtime does not use it: it compiles in a builder image and extracts
-// the finished prefix to VersionsDir. It stays until the Docker path is removed.
-func (p Paths) BuildDir(ver, id string) string {
-	return path.Join(p.Root, "panel", "build", "php", ver, id)
-}
 
 // ServiceName is the confedit service name, which keys the apply lock.
 func ServiceName(ver string) string { return "php-" + ver }
 
 // Paths is where PHP's files live. Like nginx.Paths every path is a Linux path
-// built with package path: the same string is written into config files and
-// mounted into containers.
+// built with package path: the same string is written into config files, the
+// systemd unit and the build prefixes.
 type Paths struct {
 	// Root is the install root, `/www` in production.
 	Root string

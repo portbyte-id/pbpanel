@@ -245,7 +245,7 @@ func (i *Images) SetVersion(ctx context.Context, version string, progress docker
 // build whose files have gone, and points the CurrentLink at the build the
 // catalogue says serves. It reports whether a build serves.
 func (i *Images) Reconcile(ctx context.Context) (bool, error) {
-	ok, err := i.activeFamily().Reconcile(ctx, "")
+	ok, err := i.activeFamily().Reconcile(ctx)
 	if err != nil || !ok {
 		return ok, err
 	}

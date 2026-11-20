@@ -1,6 +1,7 @@
 package php
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,22 +16,19 @@ func rootedPHPPaths(t *testing.T, roots ...string) Paths {
 	return Paths{Root: "/www", Roots: h}
 }
 
-func TestSpecMountsAllowedRootsReadWrite(t *testing.T) {
-	spec := Spec(rootedPHPPaths(t, "/www/wwwroot"), "8.3", "img")
-	found := false
-	for _, m := range spec.Mounts {
-		if m.Path == "/www/wwwroot" {
-			found = true
-			if m.ReadOnly {
-				t.Fatal("an allowed web root is read-only in the PHP container; applications cannot write their uploads")
-			}
+// An allowed root must be writable by the pool, or an application under it
+// cannot write its uploads. Under systemd that is the unit's ReadWritePaths.
+func TestUnitTextAllowsWritableRoots(t *testing.T) {
+	p := rootedPHPPaths(t, "/www/wwwroot")
+	u := UnitText(p, "8.3")
+	rw := ""
+	for line := range strings.SplitSeq(u, "\n") {
+		if v, ok := strings.CutPrefix(line, "ReadWritePaths="); ok {
+			rw = v
 		}
 	}
-	if !found {
-		t.Fatalf("no mount for the allowed root: %+v", spec.Mounts)
-	}
-	if err := spec.Validate("/www"); err != nil {
-		t.Fatalf("the spec with an allowed root does not validate: %v", err)
+	if !slices.Contains(strings.Fields(rw), "/www/wwwroot") {
+		t.Fatalf("ReadWritePaths lacks the allowed root: %q", rw)
 	}
 }
 

@@ -54,9 +54,9 @@ describe("describeVersion", () => {
     expect(up).toEqual({ badge: "running", ok: true, text: "Serving 2 sites." })
   })
 
-  it("reports the image states", () => {
+  it("reports the build states", () => {
     expect(describeVersion(version({ state: "absent" })).badge).toBe("not installed")
-    expect(describeVersion(version({ state: "pulling" })).badge).toBe("pulling")
+    expect(describeVersion(version({ state: "pulling" })).badge).toBe("installing")
     expect(describeVersion(version({ state: "failed" })).ok).toBe(false)
   })
 })

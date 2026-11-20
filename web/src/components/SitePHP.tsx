@@ -49,7 +49,7 @@ function VersionSwitch({ detail }: { detail: SiteDetail }) {
         </p>
       ) : others.length === 0 ? (
         <p role="status" className="text-muted-foreground text-sm">
-          No other PHP version is installed. Pull one on the PHP page to switch.
+          No other PHP version is installed. Install one on the PHP page to switch.
         </p>
       ) : (
         <div className="flex flex-wrap items-end gap-3">

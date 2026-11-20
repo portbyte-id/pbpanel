@@ -111,8 +111,10 @@ type Applier interface {
 
 // Options configures a Manager.
 type Options struct {
-	Store   *store.Store
-	Engine  Engine
+	Store *store.Store
+	// Engine is the Docker client the native builder compiles in. Nothing it
+	// makes keeps running: the host runs the build.
+	Engine  native.BuildEngine
 	Applier Applier
 	Paths   Paths
 	// Build compiles one build. It defaults to the native builder over Engine and
@@ -129,7 +131,8 @@ type Options struct {
 	// Retire removes the container a version ran in before the native runtime.
 	// It runs right before the version's first start under systemd, while the
 	// container is still serving the pools the new master is about to take over.
-	// Nil on hosts that never had the container runtime; tests set a fake.
+	// Nil on hosts that never had the container runtime; tests set a fake. It is
+	// the upgrade path for a host still on an older release, so it stays.
 	Retire func(ctx context.Context, ver string) error
 	// Read defaults to os.ReadFile.
 	Read func(string) ([]byte, error)
@@ -444,7 +447,7 @@ func (m *Manager) List(ctx context.Context) ([]Version, error) {
 	for _, name := range names {
 		v, ok := rows[name]
 		if !ok {
-			v = Version{Version: name, Image: BaseImage(name), State: StateAbsent}
+			v = Version{Version: name, Image: name, State: StateAbsent}
 		}
 		v.Supported = isSup[name]
 		fam, err := m.family(name)
@@ -510,7 +513,7 @@ func (m *Manager) setState(ctx context.Context, v Version) error {
 // the builder wrote, so they are read from disk rather than through Read, which
 // sees the config tree.
 func (m *Manager) buildIdentity(ver, id string) (image, digest string) {
-	image = BaseImage(ver)
+	image = ver
 	if rel, err := native.BuildVersion(filepath.FromSlash(m.p.VersionFile(ver, id)), id, product); err == nil && rel != "" {
 		image = rel
 	}
@@ -543,7 +546,7 @@ func (m *Manager) StartPull(ctx context.Context, ver string) error {
 	if err := fam.Idle(); err != nil {
 		return ErrBusy
 	}
-	v.State, v.Output, v.Image = StatePulling, "", BaseImage(ver)
+	v.State, v.Output, v.Image = StatePulling, "", ver
 	return m.setState(ctx, v)
 }
 
@@ -583,7 +586,7 @@ func (m *Manager) Pull(ctx context.Context, ver string, exts []Extension, progre
 	if err != nil {
 		return errors.Join(buildErr, err)
 	}
-	v := Version{Version: ver, Image: BaseImage(ver)}
+	v := Version{Version: ver, Image: ver}
 	if has {
 		v.State = StateReady
 		v.Image, v.Digest = m.buildIdentity(ver, cur.ID)
@@ -714,7 +717,7 @@ func (m *Manager) Remove(ctx context.Context, ver string, inUse func(context.Con
 	if err := os.RemoveAll(filepath.FromSlash(m.p.VersionsDir(ver))); err != nil {
 		return fmt.Errorf("php %s: remove the builds: %w", ver, err)
 	}
-	return m.setState(context.WithoutCancel(ctx), Version{Version: ver, Image: BaseImage(ver), State: StateAbsent})
+	return m.setState(context.WithoutCancel(ctx), Version{Version: ver, Image: ver, State: StateAbsent})
 }
 
 // retire stops and disables a version's unit and removes its unit file, so the
@@ -753,9 +756,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		// No legacy image: a build is a directory on the host now, so an image a
-		// version ran in before is not one, and step 5 retires the container.
-		serving, err := fam.Reconcile(ctx, "")
+		// A build is a directory on the host now, so there is no image to adopt:
+		// step 5 retires the container a version ran in before.
+		serving, err := fam.Reconcile(ctx)
 		if err != nil {
 			return err
 		}
@@ -819,9 +822,9 @@ func (m *Manager) EnsureRunning(ctx context.Context, ver string) (EnsureResult, 
 }
 
 // ApplyUnits rewrites the unit of every version whose text changed and restarts
-// the versions that are running: the native equivalent of recreating a container
-// so it mounts new web roots. A version with no build, or one that is not
-// running, is left alone.
+// the versions that are running: the native equivalent of recreating the
+// container so it mounts new web roots. A version with no build, or one that is
+// not running, is left alone.
 func (m *Manager) ApplyUnits(ctx context.Context) error {
 	vs, err := m.List(ctx)
 	if err != nil {

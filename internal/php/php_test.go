@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
@@ -73,33 +72,6 @@ func TestGoldenFiles(t *testing.T) {
 	golden(t, "pool-static.conf", b, err)
 }
 
-// The spec is small enough to read as a golden value: every field decides what
-// the container is.
-func TestSpec(t *testing.T) {
-	spec := Spec(testPaths, "8.3", "panel/php:8.3-test")
-	if err := spec.Validate(testPaths.Root); err != nil {
-		t.Fatalf("the php spec breaks the mount rule: %v", err)
-	}
-	cfg := spec.Config()
-	got := strings.Join([]string{
-		spec.Name, cfg.Image, cfg.NetworkMode, cfg.RestartPolicy, cfg.StopSignal,
-		strings.Join(cfg.Entrypoint, " "), strings.Join(cfg.Cmd, " "),
-		strings.Join(cfg.Env, " "), strings.Join(cfg.Binds, " "),
-	}, "\n")
-	want := strings.Join([]string{
-		"panel-php-8.3", "panel/php:8.3-test", "host", "unless-stopped", "SIGQUIT",
-		"php-fpm", "-F -y /www/panel/php/8.3/php-fpm.conf -c /www/panel/php/8.3/php.ini",
-		"PHP_INI_SCAN_DIR=:/www/panel/php/8.3/conf.d",
-		"/www/panel/php/8.3:/www/panel/php/8.3:ro /www/panel/run:/www/panel/run /www/panel/logs/sites:/www/panel/logs/sites /www/services/sites:/www/services/sites",
-	}, "\n")
-	if got != want {
-		t.Errorf("spec:\n--- want\n%s\n--- got\n%s", want, got)
-	}
-	if Spec(testPaths, "8.3", "panel/php:8.3-test").Hash() == Spec(testPaths, "8.4", "panel/php:8.4-test").Hash() {
-		t.Error("two versions share a spec hash")
-	}
-}
-
 // No rendered file may open a TCP listener: every `listen` is a socket path.
 func TestNoTCPListener(t *testing.T) {
 	conf, _ := testPaths.RenderFPMConf("8.3")
@@ -108,9 +80,6 @@ func TestNoTCPListener(t *testing.T) {
 		if v, ok := strings.CutPrefix(line, "listen = "); ok && !strings.HasPrefix(v, "/www/panel/run/") {
 			t.Errorf("listener outside the socket directory: %q", line)
 		}
-	}
-	if strings.Contains(string(Dockerfile("8.3", nil)), "EXPOSE") {
-		t.Error("the derived image exposes a port")
 	}
 }
 
@@ -375,41 +344,27 @@ func newRigAt(t *testing.T, p Paths) *rig {
 	return &rig{m: m, b: b, run: run, ap: ap, p: p}
 }
 
-// fakeEngine is what php.Options still requires for the Docker client. Nothing in
-// the runtime path calls it any more, so a test that reaches it has found a leak
-// and says so rather than silently passing.
+// fakeEngine is what php.Options still requires for the Docker client, which is
+// now only the native builder's. The rig replaces the build hook, so nothing in
+// the runtime path calls it: a test that reaches it has found a leak and says so
+// rather than silently passing.
 type fakeEngine struct{}
 
-func (fakeEngine) ImageInspect(context.Context, string) (docker.Image, error) {
-	return docker.Image{}, docker.ErrNotFound
-}
-func (fakeEngine) ContainerInspect(context.Context, string) (docker.Container, error) {
-	return docker.Container{}, docker.ErrNotFound
+func (fakeEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
+	return docker.Image{}, errors.New("the native builder builds its own image")
 }
 func (fakeEngine) ContainerCreate(context.Context, string, docker.ContainerConfig) (string, error) {
 	return "", errors.New("the runtime path must not create containers")
 }
-func (fakeEngine) ContainerStart(context.Context, string) error               { return nil }
-func (fakeEngine) ContainerStop(context.Context, string, time.Duration) error { return nil }
-func (fakeEngine) ContainerRemove(context.Context, string, bool) error        { return nil }
-func (fakeEngine) ContainerKill(context.Context, string, string) error        { return nil }
-func (fakeEngine) Exec(context.Context, string, docker.ExecOptions) (docker.ExecResult, error) {
-	return docker.ExecResult{}, errors.New("the runtime path must not exec in a container")
-}
-func (fakeEngine) RunOnce(context.Context, string, docker.ContainerConfig) (docker.ExecResult, error) {
-	return docker.ExecResult{}, errors.New("the runtime path must not run a container")
-}
-func (fakeEngine) ImagePull(context.Context, string, docker.Progress) (docker.Image, error) {
-	return docker.Image{}, errors.New("the native builder pulls its own image")
-}
-func (fakeEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
-	return docker.Image{}, errors.New("the native builder builds its own image")
-}
 func (fakeEngine) ContainerArchive(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("the runtime path must not archive a container")
 }
-func (fakeEngine) ImageTag(context.Context, string, string) error { return nil }
-func (fakeEngine) ImageRemove(context.Context, string) error      { return nil }
+func (fakeEngine) ContainerRemove(context.Context, string, bool) error {
+	return errors.New("the runtime path must not remove containers")
+}
+func (fakeEngine) ImageRemove(context.Context, string) error {
+	return errors.New("the runtime path must not remove images")
+}
 
 func (r *rig) pull(t *testing.T, ver string) {
 	t.Helper()
@@ -487,7 +442,7 @@ func TestListShowsSupportedVersionsAsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[0].Version != "8.3" || list[0].State != StateAbsent || !list[0].Supported || list[0].Image != "php:8.3-fpm" {
+	if len(list) != 2 || list[0].Version != "8.3" || list[0].State != StateAbsent || !list[0].Supported || list[0].Image != "8.3" {
 		t.Errorf("List = %+v", list)
 	}
 	if _, err := r.m.Get(ctx, "7.4"); !errors.Is(err, ErrUnknownVersion) {

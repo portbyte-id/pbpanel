@@ -1,13 +1,10 @@
 package php
 
 import (
-	"fmt"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
-
-	"github.com/portbyte-id/server-panel/internal/osdep"
 )
 
 // MaxExtensions bounds a build request. Each extension is a layer's worth of
@@ -127,48 +124,6 @@ func ExtensionNames(exts []Extension) []string {
 		out = append(out, e.Name)
 	}
 	return out
-}
-
-// Dockerfile is the derived image of a version: the official one, the `www`
-// account at the fixed IDs (decision 1.1), and the extensions. Every line that
-// reaches the shell is a constant from the catalogue or a validated PECL name.
-func Dockerfile(ver string, exts []Extension) []byte {
-	var b strings.Builder
-	fmt.Fprintf(&b, "FROM %s\n", BaseImage(ver))
-	fmt.Fprintf(&b, "RUN groupadd -g %d %s && useradd -u %d -g %s -M -d /nonexistent -s /usr/sbin/nologin %s\n",
-		WWWGID, WWWUser, WWWUID, WWWUser, WWWUser)
-
-	var packages []string
-	var bundled, pecl []Extension
-	for _, e := range exts {
-		packages = append(packages, e.Packages...)
-		if e.Kind == "pecl" {
-			pecl = append(pecl, e)
-		} else {
-			bundled = append(bundled, e)
-		}
-	}
-	packages = sortedUnique(packages)
-	if len(packages) > 0 || len(pecl) > 0 {
-		var extra []string
-		if len(pecl) > 0 {
-			extra = append(extra, "${PHPIZE_DEPS}")
-		}
-		fmt.Fprintf(&b, "RUN %s\n", osdep.ImageInstallCommand(packages, extra...))
-	}
-	for _, e := range bundled {
-		if len(e.Configure) > 0 {
-			fmt.Fprintf(&b, "RUN docker-php-ext-configure %s %s\n", e.Name, strings.Join(e.Configure, " "))
-		}
-	}
-	if len(bundled) > 0 {
-		fmt.Fprintf(&b, "RUN docker-php-ext-install -j$(nproc) %s\n", strings.Join(ExtensionNames(bundled), " "))
-	}
-	if len(pecl) > 0 {
-		names := strings.Join(ExtensionNames(pecl), " ")
-		fmt.Fprintf(&b, "RUN pecl install %s && docker-php-ext-enable %s\n", names, names)
-	}
-	return []byte(b.String())
 }
 
 func sortedUnique(in []string) []string {

@@ -336,34 +336,19 @@ func TestRemoveKeepsImagesWhenTheServiceDoesNotStop(t *testing.T) {
 	}
 }
 
-func TestReconcileFailsInterruptedBuildsAndAdoptsLegacy(t *testing.T) {
+func TestReconcileFailsInterruptedBuilds(t *testing.T) {
 	r := newRig(t)
 	if err := r.cat.insert(bg, Build{ID: "20261117100000-aaaaaa", Kind: KindPHP, Version: "8.3", Tag: "panel/php:8.3-20261117100000-aaaaaa", State: StateBuilding, CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	r.imgs.have["panel/php:8.3-fpm"] = docker.Image{ID: "sha256:legacy"}
 
-	serving, err := r.fam.Reconcile(bg, "panel/php:8.3-fpm")
-	if err != nil || !serving {
-		t.Fatalf("Reconcile = %v, %v; want the adopted build serving", serving, err)
+	serving, err := r.fam.Reconcile(bg)
+	if err != nil || serving {
+		t.Fatalf("Reconcile = %v, %v; want nothing serving", serving, err)
 	}
 	builds, _ := r.fam.Builds(bg)
-	var adopted, interrupted Build
-	for _, b := range builds {
-		if b.ImageID == "sha256:legacy" {
-			adopted = b
-		} else {
-			interrupted = b
-		}
-	}
-	if !adopted.Current || adopted.State != StateReady || !strings.HasPrefix(adopted.Output, "adopted from") {
-		t.Errorf("adopted = %+v", adopted)
-	}
-	if interrupted.State != StateFailed || !strings.Contains(interrupted.Output, "interrupted") {
-		t.Errorf("interrupted = %+v", interrupted)
-	}
-	if !r.imgs.has(adopted.Tag) || !r.imgs.has("panel/php:8.3-fpm") {
-		t.Error("adoption must tag the legacy image, not move it")
+	if len(builds) != 1 || builds[0].State != StateFailed || !strings.Contains(builds[0].Output, "interrupted") {
+		t.Errorf("builds = %+v; want the interrupted build failed", builds)
 	}
 }
 
@@ -374,7 +359,7 @@ func TestReconcileDropsACurrentBuildWhoseImageIsGone(t *testing.T) {
 	delete(r.imgs.have, a.Tag)
 	r.imgs.mu.Unlock()
 
-	serving, err := r.fam.Reconcile(bg, "")
+	serving, err := r.fam.Reconcile(bg)
 	if err != nil || serving {
 		t.Fatalf("Reconcile = %v, %v; want nothing serving", serving, err)
 	}

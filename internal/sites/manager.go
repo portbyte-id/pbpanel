@@ -318,7 +318,7 @@ func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 	return site, nil
 }
 
-// checkRoot keeps a web root where the container can see it: below
+// checkRoot keeps a web root where PHP can be given it: below
 // /www/services/sites, as a clean path, never the directory itself.
 func (m *Manager) checkRoot(root string) error {
 	if !path.IsAbs(root) || path.Clean(root) != root || strings.ContainsAny(root, " \t\r\n;{}$\"'\\#\x00") {
@@ -491,7 +491,7 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 	services := []confedit.Service{m.svc}
 	if s.Kind == KindPHP && m.php != nil && s.PHPVersion != nil && s.PHPPool != "" {
 		// nginx lets go of the socket first, then FPM drops the pool. The
-		// container stays up even when this was its last site (step 2.7).
+		// master stays up even when this was its last site (step 2.7).
 		files = append(files, confedit.File{Path: m.php.Paths().PoolFile(*s.PHPVersion, s.PHPPool), Delete: true})
 		services = append(services, m.php.Service(*s.PHPVersion, false))
 	}

@@ -34,7 +34,7 @@ type Settings struct {
 	DateTimezone     string `json:"date_timezone"`
 }
 
-// DefaultSettings are what a freshly pulled version renders.
+// DefaultSettings are what a freshly installed version renders.
 func DefaultSettings() Settings {
 	return Settings{
 		MemoryLimit:       "256M",
@@ -163,7 +163,7 @@ type Pool struct {
 }
 
 // idlePool is the pool php-fpm.conf itself defines. FPM refuses to run with no
-// pool at all, and the container must stay up after its last site is removed
+// pool at all, and the master must stay up after its last site is removed
 // (step 2.7), so one pool that serves nothing always exists. It listens on a
 // Unix socket, never on TCP.
 const idlePool = "panel_idle"
@@ -283,7 +283,7 @@ func (p Paths) RenderPool(pool Pool) ([]byte, error) {
 		}
 	}
 	if !p.ServesRoot(pool.Root) || path.Clean(pool.Root) != pool.Root {
-		return nil, fmt.Errorf("php: web root %q is outside %s and the allowed web roots, where the container cannot see it", pool.Root, p.SitesRoot())
+		return nil, fmt.Errorf("php: web root %q is outside %s and the allowed web roots, where FPM cannot be given it", pool.Root, p.SitesRoot())
 	}
 	return execute("pool", struct {
 		Name, Domain, User, Socket, Root, ErrorLog string

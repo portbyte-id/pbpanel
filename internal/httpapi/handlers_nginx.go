@@ -129,9 +129,9 @@ func (s *server) writeNginxError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, php.ErrUnknownVersion):
 		writeError(w, http.StatusNotFound, errNotFound, "no such PHP version")
 	case errors.Is(err, php.ErrNotReady):
-		writeError(w, http.StatusConflict, errConflict, "that PHP version is not installed; pull it first")
+		writeError(w, http.StatusConflict, errConflict, "that PHP version is not installed; install it first")
 	case errors.Is(err, php.ErrBusy):
-		writeError(w, http.StatusConflict, errConflict, "that PHP version is already being pulled")
+		writeError(w, http.StatusConflict, errConflict, "that PHP version is already being installed or built")
 	case errors.Is(err, php.ErrInUse):
 		writeError(w, http.StatusConflict, errConflict, err.Error())
 	case errors.Is(err, images.ErrBusy):
