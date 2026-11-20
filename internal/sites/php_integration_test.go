@@ -93,7 +93,7 @@ func TestRealPHPEndToEnd(t *testing.T) {
 		dirs:  []string{"panel/php", "panel/run"},
 		roots: []string{"panel/php"},
 	})
-	phpPaths := php.Paths{Root: h.root}
+	phpPaths := php.Paths{Root: h.root, DataDir: h.root + "/panel/data"}
 	phpMgr, err := php.New(php.Options{
 		Store: h.st, Engine: eng, Applier: h.ed, Paths: phpPaths,
 		Supported: func(context.Context) ([]string, error) { return []string{verA, verB}, nil },

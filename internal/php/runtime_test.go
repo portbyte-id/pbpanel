@@ -17,7 +17,15 @@ import (
 // current link are real files.
 func runtimePaths(t *testing.T) Paths {
 	t.Helper()
-	return Paths{Root: filepath.ToSlash(t.TempDir())}
+	return tempPaths(t)
+}
+
+// tempPaths is Paths rooted in a temp directory with the data directory the
+// layout would give it, which a unit cannot be written without.
+func tempPaths(t *testing.T) Paths {
+	t.Helper()
+	root := filepath.ToSlash(t.TempDir())
+	return Paths{Root: root, DataDir: root + "/panel/data"}
 }
 
 // installBuild makes the current link point at a build that has an FPM master.
@@ -86,6 +94,41 @@ func TestEnsureRunningWritesTheUnitAndStartsTheVersion(t *testing.T) {
 		if st, err := os.Stat(filepath.FromSlash(d)); err != nil || !st.IsDir() {
 			t.Errorf("%s was not created: %v", d, err)
 		}
+	}
+}
+
+// The directory the unit hides is the one the panel was given, not a path worked out
+// from the root: a layout that moves the data must move the confinement with it.
+func TestUnitTextHidesTheDataDirItWasGiven(t *testing.T) {
+	p := testPaths
+	p.DataDir = "/srv/pb/state"
+	u := UnitText(p, "8.3")
+	if !strings.Contains(u, "InaccessiblePaths=/srv/pb/state\n") {
+		t.Errorf("the unit does not hide the given data dir:\n%s", u)
+	}
+	if strings.Contains(u, "/www/panel/data") {
+		t.Errorf("the unit still names the path derived from the root:\n%s", u)
+	}
+}
+
+// A unit without a data dir would leave the database readable by the pool, so none
+// is written and the version is not started.
+func TestEnsureRunningRefusesWithoutADataDir(t *testing.T) {
+	p := runtimePaths(t)
+	installBuild(t, p, "8.3")
+	p.DataDir = ""
+	unitDir := t.TempDir()
+	run := &fakeRunner{fn: unitState("loaded", "inactive", 0, "0")}
+
+	_, err := NewRuntime(p, run, "8.3").WithUnitDir(unitDir).EnsureRunning(context.Background())
+	if !errors.Is(err, ErrNoDataDir) {
+		t.Fatalf("EnsureRunning error = %v, want ErrNoDataDir", err)
+	}
+	if _, err := os.Stat(filepath.Join(unitDir, UnitName("8.3"))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a unit was written without a data dir: %v", err)
+	}
+	if contains(run.calls, "systemctl start panel-php-8.3.service") {
+		t.Errorf("the version was started: %v", run.calls)
 	}
 }
 

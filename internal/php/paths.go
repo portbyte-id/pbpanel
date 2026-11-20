@@ -31,8 +31,10 @@ func CheckVersion(v string) error {
 }
 
 // Repo is the repository part of a build's catalogue reference:
-// `panel/php:<ver>-<build-id>`. Which build serves is a pointer in the database
-// (package images), never a mutable tag.
+// `panel/php:<ver>-<build-id>`. That reference names the builder image the build
+// was compiled in, not a runtime: PHP runs natively from versions/<build-id>.
+// Which build serves is a pointer in the database (package images), never a
+// mutable tag.
 const Repo = "panel/php"
 
 // ServiceName is the confedit service name, which keys the apply lock.
@@ -47,6 +49,12 @@ type Paths struct {
 	// Roots is the allowlist of folders outside the sites tree that sites may
 	// use as web roots; see nginx.Paths.Roots. Nil allows none.
 	Roots *webroots.Holder
+	// DataDir is the panel's own data directory (the database and the secret key),
+	// `install.Layout.DataDir()` in production. The unit hides it from the pool, so
+	// it is passed in rather than derived: a copy of the layout here would keep
+	// confining the old path after the layout moved. A unit is never written
+	// without it (ErrNoDataDir).
+	DataDir string
 }
 
 // Base holds one directory per version.

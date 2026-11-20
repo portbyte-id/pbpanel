@@ -123,7 +123,7 @@ func newPHPHarness(t *testing.T, host *phpHost) *nginxHarness {
 	svc := &fakeNginx{status: &nginx.Status{Loaded: true, Active: true, State: "active"}}
 	hist := &fakeHistory{versions: map[string][]confedit.Version{}, content: map[string]string{}}
 
-	host.p = php.Paths{Root: root}
+	host.p = php.Paths{Root: root, DataDir: root + "/panel/data"}
 	host.unitDir = t.TempDir()
 	if host.modules == "" {
 		host.modules = "[PHP Modules]\nCore\nintl\n"

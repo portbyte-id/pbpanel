@@ -80,7 +80,7 @@ func TestRealBuildLifecycle(t *testing.T) {
 	}
 	// Cleanups run last in first-out order: the unit goes before the root does.
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	p := Paths{Root: root}
+	p := Paths{Root: root, DataDir: root + "/panel/data"}
 	// The pools run as www, so every directory on the way to the socket and the
 	// web root must be traversable by it; MkdirTemp makes them 0700.
 	for _, dir := range []string{"", p.Dir(ver), p.ConfDir(ver), p.PoolDir(ver), p.RunDir(), p.SiteLogDir(), p.SitesRoot(), filepath.Join(root, "panel", "data")} {

@@ -170,14 +170,14 @@ type nginxStack struct {
 // newNginxStack wires the Docker client, the config editor, the nginx service
 // and the sites model. Nothing here touches Docker, systemd or the disk: a daemon
 // on a host without Docker still starts, and the reconcile reports what is
-// missing. Docker is only the builder of nginx and the runtime of PHP-FPM; nginx
-// itself runs natively under systemd.
+// missing. Docker is only the builder of nginx and PHP; both run natively under
+// systemd.
 func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layout, jobsMgr *jobs.Manager, ed *confedit.Editor, tlsState sites.TLSState, logger *slog.Logger) (*nginxStack, error) {
 	// The allowed web roots are one holder both services read, so the Settings
 	// page changes what the next spec and render see.
 	roots := webroots.NewHolder()
 	paths := nginx.Paths{Root: filepath.ToSlash(layout.Root), Roots: roots}
-	phpPaths := php.Paths{Root: paths.Root, Roots: roots}
+	phpPaths := php.Paths{Root: paths.Root, Roots: roots, DataDir: filepath.ToSlash(layout.DataDir())}
 
 	eng, err := docker.New(docker.DefaultSocket)
 	if err != nil {
