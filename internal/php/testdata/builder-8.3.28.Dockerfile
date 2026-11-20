@@ -100,14 +100,17 @@ RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; mkdir -p "$
 # names the build ID, so the core layer is unique per build either way. See the
 # step 2 report; the two cannot both hold, because one binary has one
 # compiled-in prefix.
-RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
+RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
     ( cd ext/mysqli && phpize && ./configure --with-mysqli=mysqlnd && make -j"$(nproc)" && make install ); \
+    echo "TIMING mysqli $(( $(date +%s) - t0 ))s"; \
     echo "extension=mysqli" > "$P/etc/conf.d/30-mysqli.ini"
-RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
+RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
     ( cd ext/opcache && phpize && ./configure --enable-opcache && make -j"$(nproc)" && make install ); \
+    echo "TIMING opcache $(( $(date +%s) - t0 ))s"; \
     echo "zend_extension=opcache" > "$P/etc/conf.d/10-opcache.ini"
-RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
+RUN set -eux; P="/www/panel/php/8.3/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
     ( cd ext/pdo_mysql && phpize && ./configure --with-pdo-mysql=mysqlnd && make -j"$(nproc)" && make install ); \
+    echo "TIMING pdo_mysql $(( $(date +%s) - t0 ))s"; \
     echo "extension=pdo_mysql" > "$P/etc/conf.d/30-pdo_mysql.ini"
 
 # Bundle every shared library the binaries and extensions need, except the glibc

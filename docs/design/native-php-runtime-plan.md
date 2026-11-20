@@ -390,11 +390,55 @@ Two findings for steps 8 and 9:
 
 ### Step 6: full extension catalogue
 
-Fill `ConfigureFlags` for all 25 entries; build each alone and the whole set together; check
+Fill `Configure` for all entries; build each alone and the whole set together; check
 `php -m`. The libraries that need care are `intl` (ICU), `imagick` (ImageMagick), `ldap`, `gd`
 (freetype, jpeg, png, webp) and `memcached`.
 
 **Gate:** each extension loads from a native 8.3 build. Sizes recorded in this document.
+
+#### Step 6 result (2026-11-20)
+
+The catalogue is **26 entries**, not the 25 this step text said: `mbstring` is compiled into the
+core and `sodium` is built shared by the core and enabled by its conf.d file, so neither gets a
+layer. The full-set build on the sandbox compiled all 26 with **no PECL casualty** — every entry,
+PECL included, builds on 8.3 today, so no official-container comparison was needed.
+
+Recipe and catalogue corrections, all pinned by tests and goldens:
+
+1. **`xdebug` loads as a `zend_extension`**, like opcache; `extension=xdebug` does not load
+   xdebug 3, and the build's own `php -m` check would have failed the whole build.
+2. **PECL installs run under `yes ''`**, not `printf '\n'`: memcached alone asks five configure
+   prompts, and one newline only answered the first.
+3. Catalogue `Packages` corrections: `ldap` needs `libldap-common` beside `libldap2-dev`;
+   `mongodb` needs `pkg-config` beside `libssl-dev`; `xsl` needs `libxml2-dev` beside
+   `libxslt1-dev`. All names verified present on ubuntu:26.04. ldap's
+   `--with-libdir="lib/$(uname -m)-linux-gnu"` flag is a deliberate shell expansion and works
+   as-is natively.
+4. Each extension layer now emits a `TIMING <name> <seconds>` line, matching the core's.
+
+Evidence, on the native 8.3 recipe (sandbox, ubuntu:26.04 builder, 4 vCPU):
+
+- **Full set, all 26 together:** `php -m` lists every catalogue module (`Zend OPcache` under
+  `[Zend Modules]` included), `ldd` finds no unresolved library, `php-fpm -t` passes, 62 modules
+  total. Wall **11m41s**, of which the core is ~344 s. Prefix **142 MB**, of which **98 MB** is
+  bundled libraries (lean build: **74 MB**, 29 MB of libraries — ICU and ImageMagick dominate
+  the difference).
+- **Per extension, from the recipe's TIMING lines, full set (seconds):** mongodb 175, xdebug 32,
+  redis 23, intl 21, imagick 16, apcu 13, gd 10, igbinary 9, memcached 9, soap 7, ldap 6,
+  pgsql 6, bcmath 6, zip 6, mysqli 5, pcntl 5, pdo_pgsql 5, calendar 5, sockets 5, bz2 4,
+  exif 4, opcache 4, pdo_mysql 4, xsl 4.
+- **Alone:** every entry also built in its own small group (nine groups, the core recompiling in
+  each per the step 2 caveat, 6-7 min per group): apcu 21, igbinary 9, redis 33, memcached 19,
+  mongodb 182, imagick 17, xdebug 47, gd 10, intl 22, ldap 6, soap 8, xsl 5, bz2 4, calendar 5,
+  exif 4, mysqli 5, opcache 4, pcntl 5, pdo_mysql 4, pdo_pgsql 5, pgsql 6, sockets 6, zip 6 —
+  every group passing the recipe's own end-of-recipe checks, which include `php -m` naming every
+  requested module. Alone-times run a little longer than full-set ones (builder-cache warm from
+  the shared base layers in the full run).
+
+Probe builds went to a scratch prefix and were deleted after measuring; the serving panel on the
+sandbox was untouched throughout (site on :80 answered 200 during the builds). Sandbox note:
+the classic builder leaves every finished layer as a dangling image under the containerd
+snapshotter — `docker image prune -f` reclaimed 19 GB after nine builds.
 
 ### Step 7: PHP 8.4 and 8.5, default versions
 

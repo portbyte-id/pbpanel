@@ -156,11 +156,14 @@ func TestExtensionRecipeShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := string(DockerfileFor("ubuntu:26.04", testID, "8.3", pecl, testPaths))
-	if !strings.Contains(p, `printf '\n' | pecl install redis;`) {
+	if !strings.Contains(p, `yes '' | pecl install redis;`) {
 		t.Errorf("a PECL extension is not installed with pecl:\n%s", p)
 	}
 	if !strings.Contains(p, `echo "extension=redis" > "$P/etc/conf.d/30-redis.ini"`) {
 		t.Errorf("a PECL extension enables no conf.d file:\n%s", p)
+	}
+	if !strings.Contains(p, `echo "TIMING redis $(( $(date +%s) - t0 ))s";`) {
+		t.Errorf("a PECL layer emits no TIMING line:\n%s", p)
 	}
 
 	gd, err := ParseExtensions([]string{"gd"})

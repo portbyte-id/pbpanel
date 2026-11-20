@@ -101,15 +101,18 @@ RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; mkdir -p "$
 # step 2 report; the two cannot both hold, because one binary has one
 # compiled-in prefix.
 RUN apt-get update && apt-get install -y --no-install-recommends libfreetype-dev libjpeg-dev libpng-dev libwebp-dev && rm -rf /var/lib/apt/lists/*
-RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
+RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
     ( cd ext/gd && phpize && ./configure --with-freetype --with-jpeg --with-webp && make -j"$(nproc)" && make install ); \
+    echo "TIMING gd $(( $(date +%s) - t0 ))s"; \
     echo "extension=gd" > "$P/etc/conf.d/30-gd.ini"
 RUN apt-get update && apt-get install -y --no-install-recommends libicu-dev && rm -rf /var/lib/apt/lists/*
-RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
+RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
     ( cd ext/intl && phpize && ./configure && make -j"$(nproc)" && make install ); \
+    echo "TIMING intl $(( $(date +%s) - t0 ))s"; \
     echo "extension=intl" > "$P/etc/conf.d/30-intl.ini"
-RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; \
-    printf '\n' | pecl install redis; \
+RUN set -eux; P="/www/panel/php/8.4/versions/20261119103000-a1b2c3"; export PATH="$P/bin:$PATH"; t0=$(date +%s); \
+    yes '' | pecl install redis; \
+    echo "TIMING redis $(( $(date +%s) - t0 ))s"; \
     echo "extension=redis" > "$P/etc/conf.d/30-redis.ini"
 
 # Bundle every shared library the binaries and extensions need, except the glibc
