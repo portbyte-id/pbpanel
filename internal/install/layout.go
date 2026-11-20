@@ -13,6 +13,15 @@ const (
 	// (plan.md §2, "Outside /www").
 	DefaultUnitPath = "/etc/systemd/system/panel.service"
 
+	// BinaryName is the installed executable's file name.
+	BinaryName = "pbp"
+
+	// DefaultLinkPath is the name on PATH: a symlink to BinaryPath so the
+	// operator types `pbp` rather than the full install path. A symlink rather
+	// than a copy, so an upgrade replaces the target and the PATH entry never
+	// goes stale holding an old binary.
+	DefaultLinkPath = "/usr/local/bin/" + BinaryName
+
 	// WWWUser is the one shared account nginx workers, PHP pools and apps run
 	// as (decision 23).
 	WWWUser = "www"
@@ -53,14 +62,18 @@ type dirMode struct {
 // Layout is where install puts things. Root is a field rather than a constant so
 // a test installs into a temporary directory; every path below is derived from
 // it, so nothing in this package hard-codes /www.
+//
+// LinkPath is a field for the same reason: it is the one path outside Root, and
+// a test that wrote /usr/local/bin/pbp would pollute the machine running it.
 type Layout struct {
 	Root     string
 	UnitPath string
+	LinkPath string
 }
 
 // DefaultLayout is the production layout from plan.md §2.
 func DefaultLayout() Layout {
-	return Layout{Root: DefaultRoot, UnitPath: DefaultUnitPath}
+	return Layout{Root: DefaultRoot, UnitPath: DefaultUnitPath, LinkPath: DefaultLinkPath}
 }
 
 // PanelDir is the panel's own tree.
@@ -71,7 +84,7 @@ func (l Layout) BinDir() string { return filepath.Join(l.PanelDir(), "bin") }
 
 // BinaryPath is the installed panel binary: what the unit runs and what upgrade
 // replaces.
-func (l Layout) BinaryPath() string { return filepath.Join(l.BinDir(), "panel") }
+func (l Layout) BinaryPath() string { return filepath.Join(l.BinDir(), BinaryName) }
 
 // DataDir holds the database and the secret key.
 func (l Layout) DataDir() string { return filepath.Join(l.PanelDir(), "data") }

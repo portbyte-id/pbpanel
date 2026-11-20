@@ -97,8 +97,8 @@ func TestCommandSetIsWellFormed(t *testing.T) {
 		if c.name == "" || c.usage == "" || c.summary == "" {
 			t.Errorf("command %+v: name, usage and summary are all required", c)
 		}
-		if !strings.HasPrefix(c.usage, "panel ") {
-			t.Errorf("command %q: usage %q must start with %q", c.name, c.usage, "panel ")
+		if !strings.HasPrefix(c.usage, "pbp ") {
+			t.Errorf("command %q: usage %q must start with %q", c.name, c.usage, "pbp ")
 		}
 		if seen[c.name] {
 			t.Errorf("command %q is registered twice", c.name)
@@ -134,7 +134,7 @@ func recordingCommand(name string, noRoot bool, runErr error, got *[]string) *co
 	return &command{
 		name:    name,
 		summary: "test command",
-		usage:   "panel " + name,
+		usage:   "pbp " + name,
 		maxArgs: -1,
 		noRoot:  noRoot,
 		run: func(_ context.Context, args []string) error {
@@ -252,7 +252,7 @@ func TestFirewallCommandsAreNotStubs(t *testing.T) {
 			t.Fatalf("command %q not found", name)
 		}
 		err := c.run(context.Background(), nil)
-		if err == nil || !strings.Contains(err.Error(), "panel install") {
+		if err == nil || !strings.Contains(err.Error(), "pbp install") {
 			t.Errorf("command %q: error = %v, want the missing-database error", name, err)
 		}
 	}

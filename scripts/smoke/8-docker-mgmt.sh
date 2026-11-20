@@ -151,13 +151,13 @@ tolerated() {
 # --- 1. the panel, and the PHP site ------------------------------------------
 step 1 "the panel is up, PHP $PHP serves a site"
 assert_equal "panel.service is active (systemctl)" active "$(vm 'systemctl is-active panel' 2>/dev/null)"
-port=$(vm "/www/panel/bin/panel info" 2>/dev/null | sed -n 's/^ *port  *\([0-9][0-9]*\).*/\1/p' | head -n 1)
+port=$(vm "/www/panel/bin/pbp info" 2>/dev/null | sed -n 's/^ *port  *\([0-9][0-9]*\).*/\1/p' | head -n 1)
 [ "$SMOKE_DRY_RUN" = 1 ] && port=8443
 assert_not_equal "panel info reports a port" "" "$port"
 
 pass=${SMOKE_PASSWORD:-}
 if [ -z "$pass" ]; then
-	reset_out=$(vm "/www/panel/bin/panel reset-password" 2>&1)
+	reset_out=$(vm "/www/panel/bin/pbp reset-password" 2>&1)
 	[ "$SMOKE_DRY_RUN" = 1 ] && reset_out="    DRYRUNNEWPASSWORD"
 	pass=$(printf '%s\n' "$reset_out" | sed -n 's/^ *\([A-Za-z0-9]\{12,\}\) *$/\1/p' | head -n 1)
 fi

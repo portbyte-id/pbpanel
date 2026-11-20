@@ -39,9 +39,9 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
               -ldflags "-s -w -X github.com/portbyte-id/server-panel/internal/version.Version=${GITHUB_REF_NAME}" \
-              -o "panel-linux-$arch" ./cmd/panel
+              -o "pbp-linux-$arch" ./cmd/panel
           done
-          sha256sum panel-linux-amd64 panel-linux-arm64 > SHA256SUMS
+          sha256sum pbp-linux-amd64 pbp-linux-arm64 > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish the release
@@ -49,5 +49,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            panel-linux-amd64 panel-linux-arm64 SHA256SUMS install.sh \
+            pbp-linux-amd64 pbp-linux-arm64 SHA256SUMS install.sh \
             --title "$GITHUB_REF_NAME" --generate-notes

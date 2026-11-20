@@ -25,7 +25,7 @@ var euid = os.Geteuid
 type command struct {
 	name    string
 	summary string // one line, shown in the command list
-	usage   string // full usage line, e.g. "panel set <key> <value>"
+	usage   string // full usage line, e.g. "pbp set <key> <value>"
 	minArgs int
 	maxArgs int // -1 means unbounded
 	noRoot  bool
@@ -90,7 +90,7 @@ func selectCommand(argv []string, cmds []*command) (selection, error) {
 	if consumed < len(argv) {
 		args = argv[consumed:]
 	}
-	// Help wins over arity: `panel set -h` asks for help, not for arguments.
+	// Help wins over arity: `pbp set -h` asks for help, not for arguments.
 	if len(args) > 0 && isHelpFlag(args[0]) {
 		return selection{cmd: cmd, help: true}, nil
 	}
@@ -196,8 +196,8 @@ func isHelpFlag(arg string) bool {
 
 func usageText(cmds []*command) string {
 	var b strings.Builder
-	b.WriteString("panel - single-server management panel\n")
-	b.WriteString("\nusage:\n  panel <command> [args]\n\ncommands:\n")
+	b.WriteString("pbp - single-server management panel\n")
+	b.WriteString("\nusage:\n  pbp <command> [args]\n\ncommands:\n")
 	for _, c := range cmds {
 		fmt.Fprintf(&b, "  %-32s %s\n", c.usage, c.summary)
 	}

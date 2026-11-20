@@ -45,12 +45,12 @@ func databasePath() string {
 
 // openStore opens the database for a one-shot command. A path that does not
 // exist is an error rather than something to create: `panel set` before
-// `panel install` must not leave an empty database behind for install to trip
+// `pbp install` must not leave an empty database behind for install to trip
 // over later.
 func openStore(path string) (*store.Store, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("no database at %s: run `panel install` first", path)
+			return nil, fmt.Errorf("no database at %s: run `pbp install` first", path)
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

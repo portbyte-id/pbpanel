@@ -233,6 +233,76 @@ func TestUpgradeRequiresRoot(t *testing.T) {
 	}
 }
 
+// TestUpgradeMovesAnOldHostOntoTheNewName is the migration path: a host
+// installed as `panel` has a unit that execs it and no PATH entry, and an
+// upgrade must leave both pointing at `pbp`.
+func TestUpgradeMovesAnOldHostOntoTheNewName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the PATH entry is a symlink")
+	}
+
+	uh := newUpgradeHost(t)
+
+	// Put the host back in its pre-rename state: the unit names the old binary.
+	oldUnit := UnitFile(filepath.Join(uh.layout.BinDir(), "panel"))
+	if err := os.WriteFile(uh.layout.UnitPath, []byte(oldUnit), 0o644); err != nil {
+		t.Fatalf("write the old unit: %v", err)
+	}
+	if err := os.Remove(uh.layout.LinkPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove the PATH entry: %v", err)
+	}
+	uh.runner.reset()
+
+	if _, err := uh.upgrader(func(context.Context) error { return nil }).Upgrade(context.Background()); err != nil {
+		t.Fatalf("Upgrade: %v\noutput:\n%s", err, uh.out.String())
+	}
+
+	unit, err := os.ReadFile(uh.layout.UnitPath)
+	if err != nil {
+		t.Fatalf("read the unit: %v", err)
+	}
+	if want := UnitFile(uh.layout.BinaryPath()); string(unit) != want {
+		t.Errorf("unit after upgrade:\n%s\nwant:\n%s", unit, want)
+	}
+	if !containsCommand(uh.runner.names(), "systemctl daemon-reload") {
+		t.Error("the unit changed but systemd was never reloaded")
+	}
+	// One restart, over the rewritten unit: a second one would mean the unit
+	// was applied after the health check had already passed.
+	restarts := 0
+	for _, c := range uh.runner.names() {
+		if c == "systemctl restart panel.service" {
+			restarts++
+		}
+	}
+	if restarts != 1 {
+		t.Errorf("panel.service restarted %d time(s), want 1:\n  %s", restarts, strings.Join(uh.runner.names(), "\n  "))
+	}
+
+	target, err := os.Readlink(uh.layout.LinkPath)
+	if err != nil {
+		t.Fatalf("%s is not a symlink after upgrade: %v", uh.layout.LinkPath, err)
+	}
+	if target != uh.layout.BinaryPath() {
+		t.Errorf("%s points at %q, want %q", uh.layout.LinkPath, target, uh.layout.BinaryPath())
+	}
+}
+
+// TestUpgradeLeavesACorrectUnitAlone keeps the migration from becoming churn: a
+// host already on the new name must not have its unit rewritten or the daemon
+// reloaded.
+func TestUpgradeLeavesACorrectUnitAlone(t *testing.T) {
+	uh := newUpgradeHost(t)
+	uh.runner.reset()
+
+	if _, err := uh.upgrader(func(context.Context) error { return nil }).Upgrade(context.Background()); err != nil {
+		t.Fatalf("Upgrade: %v", err)
+	}
+	if containsCommand(uh.runner.names(), "systemctl daemon-reload") {
+		t.Errorf("a correct unit was rewritten:\n  %s", strings.Join(uh.runner.names(), "\n  "))
+	}
+}
+
 func containsCommand(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
 }

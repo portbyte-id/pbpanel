@@ -32,7 +32,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 SMOKE_USER=${SMOKE_USER:-admin}
 SMOKE_SKIP_REBOOT=${SMOKE_SKIP_REBOOT:-0}
-PANEL=/www/panel/bin/panel
+PANEL=/www/panel/bin/pbp
 STATIC=smoke-static.test
 PROXY=smoke-proxy.test
 BACKEND_PORT=18081

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -164,11 +165,22 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 		return result, fmt.Errorf("upgrade: install the new binary: %w", err)
 	}
 
+	// A host installed under the old binary name still has that name in
+	// ExecStart: restarting first would put the new binary in place while the
+	// unit went on pointing at the old path, and the next boot would run
+	// whatever is left there. The unit is prepared before the restart so that
+	// the restart is the one the health check covers.
+	if err := u.reconcileUnits(ctx); err != nil {
+		return result, u.rollback(previous, live, err, &result)
+	}
+
 	printf(u.Out, "  restarting %s\n", unitName)
 	if err := u.Runner.Run(ctx, "systemctl", "restart", unitName); err != nil {
 		return result, u.rollback(previous, live, fmt.Errorf("upgrade: restart: %w", err), &result)
 	}
-
+	if err := u.relinkPATH(); err != nil {
+		return result, err
+	}
 	printf(u.Out, "  waiting up to %s for a health check\n", u.Timeout)
 	if err := u.waitHealthy(ctx); err != nil {
 		return result, u.rollback(previous, live, fmt.Errorf("upgrade: the new binary did not become healthy: %w", err), &result)
@@ -177,6 +189,81 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 	// The new binary is healthy, so the old one is no longer the rollback.
 	_ = os.Remove(previous)
 	return result, nil
+}
+
+// reconcileUnits rewrites the systemd units when their ExecStart no longer
+// names the installed binary, which is the rename from panel to pbp on a host
+// installed before it. It reloads systemd but never restarts a unit: the
+// caller restarts panel.service once, over the unit as rewritten here.
+//
+// The firewall unit is rewritten but never restarted: it is a oneshot that only
+// matters at the next boot.
+func (u *Upgrader) reconcileUnits(ctx context.Context) error {
+	changed, err := reconcileFile(u.Layout.UnitPath, UnitFile(u.Layout.BinaryPath()))
+	if err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+	fwPath := filepath.Join(filepath.Dir(u.Layout.UnitPath), firewallUnitName)
+	fwChanged, err := reconcileFile(fwPath, FirewallUnitFile(u.Layout.BinaryPath()))
+	if err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+	if !changed && !fwChanged {
+		return nil
+	}
+	printf(u.Out, "  updating systemd units for %s\n", BinaryName)
+	if err := u.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("upgrade: daemon-reload: %w", err)
+	}
+	return nil
+}
+
+// relinkPATH puts BinaryName on PATH, which a host installed before the rename
+// does not have. A symlink whose target is already right is left alone.
+func (u *Upgrader) relinkPATH() error {
+	if u.Layout.LinkPath == "" {
+		return nil
+	}
+	if have, err := os.Readlink(u.Layout.LinkPath); err == nil &&
+		filepath.Clean(have) == filepath.Clean(u.Layout.BinaryPath()) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(u.Layout.LinkPath), 0o755); err != nil {
+		return fmt.Errorf("upgrade: create %s: %w", filepath.Dir(u.Layout.LinkPath), err)
+	}
+	// Remove only a symlink: a regular file at that name belongs to someone
+	// else, and replacing it is not upgrade's decision to make.
+	if info, err := os.Lstat(u.Layout.LinkPath); err == nil {
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return fmt.Errorf("upgrade: %s exists and is not a symlink; move it aside to let upgrade link %s", u.Layout.LinkPath, BinaryName)
+		}
+		if err := os.Remove(u.Layout.LinkPath); err != nil {
+			return fmt.Errorf("upgrade: replace %s: %w", u.Layout.LinkPath, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("upgrade: inspect %s: %w", u.Layout.LinkPath, err)
+	}
+	if err := os.Symlink(u.Layout.BinaryPath(), u.Layout.LinkPath); err != nil {
+		return fmt.Errorf("upgrade: link %s: %w", u.Layout.LinkPath, err)
+	}
+	return nil
+}
+
+// reconcileFile writes want to path when the file differs, and reports whether
+// it wrote. A missing file is written: an absent unit is a host install never
+// finished for.
+func reconcileFile(path, want string) (bool, error) {
+	have, err := os.ReadFile(path)
+	if err == nil && string(have) == want {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
 }
 
 // rollback puts previous back at live, restarts the service, and returns the

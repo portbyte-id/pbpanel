@@ -16,14 +16,14 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "serve",
 			summary: "run the panel daemon",
-			usage:   "panel serve",
+			usage:   "pbp serve",
 			maxArgs: -1, // daemon flags arrive with step 0.7
 			run:     serve,
 		},
 		{
 			name:    "install",
 			summary: "install the panel on this host",
-			usage:   "panel install",
+			usage:   "pbp install",
 			run: func(ctx context.Context, _ []string) error {
 				return installPanel(ctx, stdout)
 			},
@@ -31,7 +31,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "upgrade",
 			summary: "replace the binary and migrate",
-			usage:   "panel upgrade",
+			usage:   "pbp upgrade",
 			run: func(ctx context.Context, _ []string) error {
 				return upgradePanel(ctx, stdout)
 			},
@@ -39,7 +39,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "info",
 			summary: "show port, URL, version and database path",
-			usage:   "panel info",
+			usage:   "pbp info",
 			run: func(ctx context.Context, _ []string) error {
 				return info(ctx, stdout, databasePath())
 			},
@@ -47,7 +47,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "reset-password",
 			summary: "set a new admin password and revoke sessions",
-			usage:   "panel reset-password",
+			usage:   "pbp reset-password",
 			run: func(ctx context.Context, _ []string) error {
 				return resetPassword(ctx, stdout, databasePath())
 			},
@@ -55,7 +55,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "set",
 			summary: "change one setting through the registry validators",
-			usage:   "panel set <key> <value>",
+			usage:   "pbp set <key> <value>",
 			help:    setHelp,
 			minArgs: 2,
 			maxArgs: 2,
@@ -66,7 +66,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "firewall restore",
 			summary: "restore the saved ruleset at boot",
-			usage:   "panel firewall restore",
+			usage:   "pbp firewall restore",
 			run: func(ctx context.Context, _ []string) error {
 				return firewallRestore(ctx, stdout, databasePath())
 			},
@@ -74,7 +74,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "firewall disable",
 			summary: "unhook and flush the panel chains from a console",
-			usage:   "panel firewall disable",
+			usage:   "pbp firewall disable",
 			run: func(ctx context.Context, _ []string) error {
 				return firewallDisable(ctx, stdout, databasePath())
 			},
@@ -82,7 +82,7 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "version",
 			summary: "print the version and exit",
-			usage:   "panel version",
+			usage:   "pbp version",
 			noRoot:  true,
 			run: func(context.Context, []string) error {
 				_, err := fmt.Fprintln(stdout, version.Version)

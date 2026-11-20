@@ -71,7 +71,8 @@ configuration, iptables firewall, and Go/Node.js apps. Ubuntu first, Rocky 9 (EL
 ```
 
 Outside `/www` (system files only): `/etc/systemd/system/panel.service`,
-`panel-supervisord.service`, `panel-firewall.service`.
+`panel-supervisord.service`, `panel-firewall.service`, and the `/usr/local/bin/pbp`
+symlink that puts the binary on PATH.
 
 Every bind mount uses the same absolute path inside the container as on the host, so a path in a
 config file means the same thing in both places and never changes between stages.

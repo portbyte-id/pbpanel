@@ -20,7 +20,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 SMOKE_BINARY=${SMOKE_BINARY:-dist/panel}
 SMOKE_NEW_PORT=${SMOKE_NEW_PORT:-9443}
-PANEL=/www/panel/bin/panel
+PANEL=/www/panel/bin/pbp
 
 smoke_init
 host=$(vm_host)

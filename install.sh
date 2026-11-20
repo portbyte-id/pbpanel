@@ -1,9 +1,9 @@
 #!/bin/sh
 # PB Panel: install or upgrade from https://github.com/portbyte-id/pbpanel
 #
-# One script for both. It installs when /www/panel/bin/panel is absent and
-# upgrades when it is present; the real work is `panel install` and
-# `panel upgrade` in the binary, which this script only fetches and runs.
+# One script for both. It installs when no panel binary is present and upgrades
+# when one is; the real work is `pbp install` and `pbp upgrade` in the binary,
+# which this script only fetches and runs.
 #
 #   sudo -E sh install.sh                      latest release
 #   sudo -E sh install.sh --version v0.2.0     a specific release
@@ -15,7 +15,7 @@
 #   export GITHUB_TOKEN=...                 (or PB_GITHUB_TOKEN)
 #
 # Where the binary comes from:
-#   1. The release's panel-linux-<arch> asset, checked against SHA256SUMS.
+#   1. The release's pbp-linux-<arch> asset, checked against SHA256SUMS.
 #   2. If the repository has no release yet (or --source is given), the source
 #      at --ref is built on this host with a Go and a Node toolchain that are
 #      downloaded into a temp directory and removed afterwards.
@@ -39,7 +39,10 @@ NODE_MAJOR=22 # keep in step with .github/workflows/ci.yml
 API=https://api.github.com/repos/$REPO
 DATA_DIR=${PB_PANEL_DATA_DIR:-/www/panel/data}
 ROOT=${DATA_DIR%/panel/data}
-LIVE=$ROOT/panel/bin/panel
+# The binary is `pbp`. `panel` is the name it had before; a host that still has
+# one is upgraded rather than installed over.
+LIVE=$ROOT/panel/bin/pbp
+LEGACY=$ROOT/panel/bin/panel
 
 WORK=
 CURLRC=
@@ -148,7 +151,7 @@ fetch_release() {
 	tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$WORK/release.json" | head -n 1)
 	[ -n "$tag" ] || die "the release response has no tag_name"
 
-	bin_name=panel-linux-$ARCH
+	bin_name=pbp-linux-$ARCH
 	bin_url=$(asset_url "$WORK/release.json" "$bin_name")
 	sum_url=$(asset_url "$WORK/release.json" SHA256SUMS)
 	[ -n "$bin_url" ] || die "release $tag has no $bin_name asset"
@@ -312,8 +315,15 @@ main() {
 	new_version=$("$WORK/panel" version 2>/dev/null) || die "the downloaded binary does not run on this host"
 	say "new binary: $new_version"
 
-	if [ -x "$LIVE" ]; then
-		old_version=$("$LIVE" version 2>/dev/null || true)
+	# A host installed before the rename has the old binary and no `pbp`. Both
+	# mean "already installed, take the upgrade path": installing over a live
+	# database would be the wrong call, and upgrade is what moves the unit and
+	# the PATH entry onto the new name.
+	installed=$LIVE
+	[ -x "$installed" ] || installed=$LEGACY
+
+	if [ -x "$installed" ]; then
+		old_version=$("$installed" version 2>/dev/null || true)
 		say "installed:  ${old_version:-unknown}"
 		if [ "$FORCE" -eq 0 ] && [ -n "$old_version" ] && [ "$old_version" = "$new_version" ]; then
 			say "already up to date (use --force to reinstall the same version)"

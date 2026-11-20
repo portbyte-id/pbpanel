@@ -61,7 +61,7 @@ func TestRootRefusalOnThisHost(t *testing.T) {
 	if code := run(context.Background(), []string{"--help"}, &stdout, &stderr); code != exitOK {
 		t.Fatalf("--help as uid %d: exit code = %d, want 0 (stderr: %q)", os.Geteuid(), code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "panel set <key> <value>") {
+	if !strings.Contains(stdout.String(), "pbp set <key> <value>") {
 		t.Fatalf("--help did not list the set command: %q", stdout.String())
 	}
 }

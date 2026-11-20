@@ -25,7 +25,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-PANEL=/www/panel/bin/panel
+PANEL=/www/panel/bin/pbp
 WORK=/var/tmp/smoke-fm-$$
 
 SMOKE_USER=${SMOKE_USER:-admin}
