@@ -127,7 +127,7 @@ ExecReload=/bin/kill -USR2 $MAINPID
 KillSignal=SIGQUIT  KillMode=mixed  TimeoutStopSec=25  Restart=on-failure  LimitNOFILE=65536
 ProtectSystem=strict  ProtectHome=read-only  PrivateTmp=true
 ReadWritePaths=<run dir> <site log dir> <FPM log> <sites root> <allowed web roots>
-InaccessiblePaths=/www/panel/data
+InaccessiblePaths=<panel data dir>     install.Layout.DataDir(), passed in as php.Paths.DataDir
 ```
 
 The master stays root and each pool drops to `www`, as the container did. `ProtectHome=read-only`,

@@ -404,8 +404,9 @@ Fill `Configure` for all entries; build each alone and the whole set together; c
 
 The catalogue is **26 entries**, not the 25 this step text said: `mbstring` is compiled into the
 core and `sodium` is built shared by the core and enabled by its conf.d file, so neither gets a
-layer. The full-set build on the sandbox compiled all 26 with **no PECL casualty** — every entry,
-PECL included, builds on 8.3 today, so no official-container comparison was needed.
+layer. That leaves **24 extension layers**, and the full-set build on the sandbox compiled all 24
+with **no PECL casualty** — every entry, PECL included, builds on 8.3 today, so no
+official-container comparison was needed. All 26 load (`php -m`).
 
 Recipe and catalogue corrections, all pinned by tests and goldens:
 
@@ -472,11 +473,15 @@ instead of shipping without a bytecode cache.
 | 8.4 minimal | 8.4.28 | 6m29s | 74 MB | 36 | +`mysqli`, `pdo_mysql` |
 | 8.5 full catalogue | 8.5.13 | 30m6s | 157 MB | 60 | +the 24 catalogue modules |
 
+The 8.5 build took **30m6s**, against 11m41s for the same catalogue on 8.3. **Nothing in this step
+explains the gap** and no cause was investigated, so do not budget a full-catalogue build at the
+8.3 figure; 8.5's extra time may be the PECL builds or the sandbox's load at the time.
+
 `php -m` compared against `docker run php:8.4-fpm php -m` and `php:8.5-fpm php -m` for the same
 set: nothing missing on either, and exactly `mysqli` and `pdo_mysql` extra on 8.4. On 8.5 the
 extra modules are the whole catalogue, which the official image does not carry.
 
-**PECL on 8.5: no casualty.** All six PECL entries (`apcu`, `igbinary`, `imagick`, `memcached`,
+**PECL on 8.5: no casualty.** All seven PECL entries (`apcu`, `igbinary`, `imagick`, `memcached`,
 `mongodb`, `redis`, `xdebug`) compiled and load on 8.5. One **transient** failure is worth
 recording: the first 8.4 full-set build died at `pecl install redis` with
 `No releases available for package "pecl.php.net/redis"` — a channel lookup failure, not a
@@ -589,6 +594,25 @@ started a `php.pull` job and whose row then read "installing — The build is co
 correction found on the way: the version's `image` field now holds the series (`8.3`) before a build,
 not `php:8.3-fpm`, and both the manager and the route tests were updated to it.
 
+#### Review follow-up (2026-11-20)
+
+A review of the finished branch re-ran gofmt, `go build`, `go vet` (also with `-tags integration`) and
+`go test ./cmd/... ./internal/...` in WSL: all green. It found one code defect and three doc errors,
+fixed afterwards:
+
+- **The unit's `InaccessiblePaths=` named a hardcoded `<root>/panel/data`**, a copy of
+  `install.Layout.DataDir()`. If the layout moved the data, the pool would have kept "hiding" the old
+  path and the database would have been readable. `php.Paths` now carries `DataDir`, set from
+  `layout.DataDir()` in `cmd/panel/nginx.go`, and `Runtime` refuses to write a unit without it
+  (`ErrNoDataDir`) instead of writing one with no confinement. Two tests pin both halves.
+- Step 6 said all 26 catalogue entries were compiled; 24 are (`mbstring` and `sodium` are core).
+- Step 7 said "all six PECL entries" and listed seven.
+- Step 7's 8.5 build time (30m6s) is now flagged as unexplained.
+
+Still open, not part of this fix: `golangci-lint` has not been run on this branch, and the two
+`-tags integration` tests have only been compiled and vetted, never run (they need root, systemd and
+Docker, see step 8).
+
 ## 5. Risks
 
 | Risk | Handling |
@@ -612,6 +636,13 @@ not `php:8.3-fpm`, and both the manager and the route tests were updated to it.
 
 ## 7. Open questions for the operator
 
+No answer from the operator is recorded for these. The build went ahead on the recommendations (D1-D6
+as written, with the step 0 corrections to D2 and D3), so read them as unratified defaults.
+
 1. D1-D6 above: any you want changed?
 2. Is a 5-8 minute first build per version acceptable, given three versions (the same gap nginx has)?
+   *Measured since: about 6 minutes for a minimal build, 12 for the full catalogue on 8.3, and 30 on
+   8.5 (step 7). Three versions with the full catalogue is on the order of an hour of builds (8.4's full-catalogue
+   time was not measured).*
 3. Should the first native build also be offered for 8.2 on hosts that list it (D5), or should those hosts be told to move sites first?
+   *Built as D5 recommends: the builder takes any listed version.*
