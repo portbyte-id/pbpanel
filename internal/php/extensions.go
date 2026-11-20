@@ -49,11 +49,11 @@ var catalogue = []Extension{
 	{Name: "igbinary", Module: "igbinary", Description: "Compact binary serialiser", Kind: "pecl"},
 	{Name: "imagick", Module: "imagick", Description: "ImageMagick bindings", Kind: "pecl", Packages: []string{"libmagickwand-dev"}},
 	{Name: "intl", Module: "intl", Description: "Internationalisation (ICU)", Kind: "bundled", Packages: []string{"libicu-dev"}},
-	{Name: "ldap", Module: "ldap", Description: "LDAP directory client", Kind: "bundled", Packages: []string{"libldap2-dev"},
+	{Name: "ldap", Module: "ldap", Description: "LDAP directory client", Kind: "bundled", Packages: []string{"libldap2-dev", "libldap-common"},
 		Configure: []string{`--with-libdir="lib/$(uname -m)-linux-gnu"`}},
 	{Name: "mbstring", Module: "mbstring", Description: "Multibyte strings", Kind: "bundled"},
 	{Name: "memcached", Module: "memcached", Description: "Memcached client", Kind: "pecl", Packages: []string{"libmemcached-dev", "zlib1g-dev"}},
-	{Name: "mongodb", Module: "mongodb", Description: "MongoDB driver", Kind: "pecl", Packages: []string{"libssl-dev"}},
+	{Name: "mongodb", Module: "mongodb", Description: "MongoDB driver", Kind: "pecl", Packages: []string{"libssl-dev", "pkg-config"}},
 	{Name: "mysqli", Module: "mysqli", Description: "MySQL improved client", Kind: "bundled",
 		Configure: []string{"--with-mysqli=mysqlnd"}},
 	{Name: "opcache", Module: "Zend OPcache", Description: "Bytecode cache", Kind: "bundled"},
@@ -67,7 +67,7 @@ var catalogue = []Extension{
 	{Name: "sodium", Module: "sodium", Description: "libsodium cryptography", Kind: "bundled", Packages: []string{"libsodium-dev"}},
 	{Name: "soap", Module: "soap", Description: "SOAP client and server", Kind: "bundled", Packages: []string{"libxml2-dev"}},
 	{Name: "xdebug", Module: "xdebug", Description: "Debugger and profiler (development only)", Kind: "pecl"},
-	{Name: "xsl", Module: "xsl", Description: "XSLT transformations", Kind: "bundled", Packages: []string{"libxslt1-dev"}},
+	{Name: "xsl", Module: "xsl", Description: "XSLT transformations", Kind: "bundled", Packages: []string{"libxml2-dev", "libxslt1-dev"}},
 	{Name: "zip", Module: "zip", Description: "Zip archives", Kind: "bundled", Packages: []string{"libzip-dev"}},
 }
 

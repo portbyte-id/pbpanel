@@ -108,13 +108,16 @@ func extensionRecipe(exts []Extension, prefix string) string {
 		if pkgs := sortedUnique(e.Packages); len(pkgs) > 0 {
 			fmt.Fprintf(&b, "RUN %s\n", osdep.ImageInstallCommand(pkgs))
 		}
-		fmt.Fprintf(&b, "RUN set -eux; P=\"%s\"; export PATH=\"$P/bin:$PATH\"; \\\n", prefix)
+		fmt.Fprintf(&b, "RUN set -eux; P=\"%s\"; export PATH=\"$P/bin:$PATH\"; t0=$(date +%%s); \\\n", prefix)
 		if e.Kind == "pecl" {
-			fmt.Fprintf(&b, "    printf '\\n' | pecl install %s; \\\n", e.Name)
+			// `yes ''` answers every configure prompt with its default, so an
+			// extension that asks several (memcached) still builds unattended.
+			fmt.Fprintf(&b, "    yes '' | pecl install %s; \\\n", e.Name)
 		} else {
 			fmt.Fprintf(&b, "    ( cd ext/%s && phpize && ./configure%s && make -j\"$(nproc)\" && make install ); \\\n",
 				e.Name, flagSuffix(configureFlags(e)))
 		}
+		fmt.Fprintf(&b, "    echo \"TIMING %s $(( $(date +%%s) - t0 ))s\"; \\\n", e.Name)
 		fmt.Fprintf(&b, "    echo \"%s=%s\" > \"$P/etc/conf.d/%s\"\n", iniDirective(e), e.Name, iniFile(e))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
@@ -138,10 +141,10 @@ func flagSuffix(flags string) string {
 	return " " + flags
 }
 
-// iniDirective is what loads an extension: opcache is a Zend extension, not a
-// PHP one, and `extension=` would not load it.
+// iniDirective is what loads an extension: opcache and xdebug are Zend
+// extensions, not PHP ones, and `extension=` would not load them.
 func iniDirective(e Extension) string {
-	if e.Name == "opcache" {
+	if e.Name == "opcache" || e.Name == "xdebug" {
 		return "zend_extension"
 	}
 	return "extension"
