@@ -43,7 +43,7 @@ SMOKE_SKIP_REBOOT=${SMOKE_SKIP_REBOOT:-0}
 SMOKE_IPV6=${SMOKE_IPV6:-0}
 P1=${SMOKE_FW_PORT:-18080}
 P2=$((P1 + 1))
-PANEL=/www/panel/bin/panel
+PANEL=/www/panel/bin/pbp
 
 smoke_init
 host=$(vm_host)

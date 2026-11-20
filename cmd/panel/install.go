@@ -14,7 +14,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
-// installPanel implements `panel install`: the step list in internal/install,
+// installPanel implements `pbp install`: the step list in internal/install,
 // with the production layout, the real host and the real runner.
 //
 // The password is read from stdin only when the account does not exist yet and

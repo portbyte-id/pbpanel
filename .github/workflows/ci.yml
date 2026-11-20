@@ -49,17 +49,17 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Build
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o panel-linux-amd64 ./cmd/panel
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o pbp-linux-amd64 ./cmd/panel
       - name: Assert the binary is static
         run: |
           set -eu
-          file panel-linux-amd64
-          if ! file panel-linux-amd64 | grep -q "statically linked"; then
-            echo "::error::panel-linux-amd64 is not statically linked"
+          file pbp-linux-amd64
+          if ! file pbp-linux-amd64 | grep -q "statically linked"; then
+            echo "::error::pbp-linux-amd64 is not statically linked"
             exit 1
           fi
-          if readelf -l panel-linux-amd64 | grep -q "INTERP"; then
-            echo "::error::panel-linux-amd64 has a dynamic loader"
+          if readelf -l pbp-linux-amd64 | grep -q "INTERP"; then
+            echo "::error::pbp-linux-amd64 has a dynamic loader"
             exit 1
           fi
 

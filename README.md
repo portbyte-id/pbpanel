@@ -43,7 +43,7 @@ Common options:
 | `sudo -E sh install.sh --source --ref main` | Build a branch, tag or commit on this host |
 | `sudo -E sh install.sh --force` | Reinstall even when already current |
 
-The installer downloads the `panel-linux-<arch>` release asset and checks it against `SHA256SUMS`. If the repository has no release yet, or you pass `--source`, it builds the source on the host. It uses a Go and a Node.js toolchain that it downloads into a temporary directory and removes afterwards.
+The installer downloads the `pbp-linux-<arch>` release asset and checks it against `SHA256SUMS`. If the repository has no release yet, or you pass `--source`, it builds the source on the host. It uses a Go and a Node.js toolchain that it downloads into a temporary directory and removes afterwards.
 
 > [!NOTE]
 > Set `PB_PANEL_DATA_DIR` to change the install root from the default `/www/panel/data`.
@@ -53,20 +53,20 @@ The installer downloads the `panel-linux-<arch>` release asset and checks it aga
 The same binary is the operator's recovery tool.
 
 ```sh
-panel version             # print the build version
-panel install             # first-time setup (called by install.sh)
-panel upgrade             # replace the binary with a new release
-panel serve               # run the daemon (managed by systemd)
-panel reset-password      # set a new admin password from the console
+pbp version               # print the build version
+pbp install               # first-time setup (called by install.sh)
+pbp upgrade               # replace the binary with a new release
+pbp serve                 # run the daemon (managed by systemd)
+pbp reset-password        # set a new admin password from the console
 ```
 
-Run `panel <command> -h` for each command's options.
+Run `pbp <command> -h` for each command's options.
 
 ## Layout on the host
 
 | Path | Contents |
 | --- | --- |
-| `/www/panel/bin/` | `panel` and `supervisord` |
+| `/www/panel/bin/` | `pbp` and `supervisord` |
 | `/www/panel/data/` | `panel.db` (SQLite) and `secret.key` |
 | `/www/panel/nginx/` | nginx config, generated once and then owned by the operator |
 | `/www/panel/php/<version>/` | PHP config and pool files |
@@ -81,7 +81,7 @@ Panel-owned include files are rewritten by panel actions. Files the operator has
 Requirements: Go (version in `go.mod`), Node.js 22, and npm.
 
 ```sh
-make build     # static binary at bin/panel
+make build     # static binary at bin/pbp
 make web       # npm ci, build the SPA, run its unit tests
 make test      # go test ./...
 make lint      # convention checks, plus golangci-lint when installed

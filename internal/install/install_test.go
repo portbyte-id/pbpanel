@@ -208,7 +208,8 @@ type host struct {
 }
 
 // newHost builds a temp root laid out like the production one, with the unit
-// file inside it so no test writes /etc.
+// file inside it so no test writes /etc. The PATH entry is inside the root too:
+// the production value is /usr/local/bin, which a test must never touch.
 func newHost(t *testing.T) *host {
 	t.Helper()
 	root := t.TempDir()
@@ -217,6 +218,7 @@ func newHost(t *testing.T) *host {
 		layout: Layout{
 			Root:     root,
 			UnitPath: filepath.Join(root, "etc", "systemd", "system", "panel.service"),
+			LinkPath: filepath.Join(root, "usr", "local", "bin", BinaryName),
 		},
 		runner: &fakeRunner{},
 	}
@@ -274,6 +276,7 @@ func TestInstallStepOrder(t *testing.T) {
 		"admin-password",
 		"panel-cert",
 		"binary",
+		"path-link",
 		"unit-file",
 		"firewall-unit",
 		"enable-firewall-unit",
@@ -656,10 +659,10 @@ func TestInstallCreatesTheTreeWithDocumentedModes(t *testing.T) {
 // TestUnitFileCarriesTheHardeningSet pins plan.md §3.2: every directive present,
 // and every filesystem protection absent on purpose.
 func TestUnitFileCarriesTheHardeningSet(t *testing.T) {
-	unit := UnitFile("/www/panel/bin/panel")
+	unit := UnitFile("/www/panel/bin/pbp")
 
 	for _, want := range []string{
-		"ExecStart=/www/panel/bin/panel serve",
+		"ExecStart=/www/panel/bin/pbp serve",
 		"NoNewPrivileges=yes",
 		"LockPersonality=yes",
 		"RestrictRealtime=yes",
@@ -772,7 +775,7 @@ func (h *host) executable() string {
 
 // TestInstallPutsTheBinaryWherePanelServiceRuns is the regression for the host
 // finding on the first real VM: install wrote a unit that exec'd
-// /www/panel/bin/panel but never created it, so the service crash-looped with
+// /www/panel/bin/pbp but never created it, so the service crash-looped with
 // 203/EXEC. A re-install must not replace a binary that is already there.
 func TestInstallPutsTheBinaryWherePanelServiceRuns(t *testing.T) {
 	h := newHost(t)
@@ -802,5 +805,78 @@ func TestInstallPutsTheBinaryWherePanelServiceRuns(t *testing.T) {
 	got, _ = os.ReadFile(live)
 	if string(got) != "newer" {
 		t.Errorf("re-install replaced the installed binary: %q", got)
+	}
+}
+
+// TestInstallLinksTheBinaryOntoPATH covers the PATH entry: `pbp` must resolve
+// to the installed binary, and a second install must leave it alone.
+func TestInstallLinksTheBinaryOntoPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the PATH entry is a symlink, which Windows needs a privilege for")
+	}
+
+	h := newHost(t)
+	if _, err := h.install(); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	link := h.layout.LinkPath
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("%s is not a symlink: %v", link, err)
+	}
+	if target != h.layout.BinaryPath() {
+		t.Fatalf("%s points at %q, want %q", link, target, h.layout.BinaryPath())
+	}
+
+	// It resolves, which is the property the operator typing `pbp` depends on.
+	if _, err := os.Stat(link); err != nil {
+		t.Fatalf("the PATH entry does not resolve: %v", err)
+	}
+
+	// A re-install must see it as done rather than rewriting it.
+	h.runner.reset()
+	report, err := h.install()
+	if err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	for _, s := range report.Steps {
+		if s.Name == "path-link" && !s.Skipped {
+			t.Error("the path-link step ran on a host where it was already done")
+		}
+	}
+}
+
+// TestLinkRefusesToClobberARegularFile pins the refusal: /usr/local/bin holds
+// files install did not put there, and a name collision must be an error the
+// operator can act on, not a silently overwritten binary.
+func TestLinkRefusesToClobberARegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the PATH entry is a symlink")
+	}
+
+	h := newHost(t)
+	if err := os.MkdirAll(filepath.Dir(h.layout.LinkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.layout.LinkPath, []byte("someone else's"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.install()
+	if err == nil {
+		t.Fatal("install overwrote a regular file on PATH")
+	}
+	if !strings.Contains(err.Error(), "not a symlink") {
+		t.Errorf("error = %v, want it to name the non-symlink", err)
+	}
+
+	// And the file is still there, untouched.
+	got, rerr := os.ReadFile(h.layout.LinkPath)
+	if rerr != nil {
+		t.Fatalf("read the regular file: %v", rerr)
+	}
+	if string(got) != "someone else's" {
+		t.Errorf("the regular file was modified: %q", got)
 	}
 }

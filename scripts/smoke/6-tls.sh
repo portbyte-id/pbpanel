@@ -184,7 +184,7 @@ fi
 
 # ---- configuration ------------------------------------------------------------
 SMOKE_USER=${SMOKE_USER:-admin}
-PANEL=/www/panel/bin/panel
+PANEL=/www/panel/bin/pbp
 PANEL_SSL=/www/panel/ssl
 
 if [ "$SMOKE_DRY_RUN" = 1 ]; then

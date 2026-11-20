@@ -69,7 +69,7 @@ type querier interface {
 }
 
 // Pending reports the migration versions this binary would apply to the
-// database at path. It reads the ledger and changes nothing, so `panel install`
+// database at path. It reads the ledger and changes nothing, so `pbp install`
 // can decide whether the database needs opening for migration and `panel
 // upgrade` can report what an upgrade would do.
 func Pending(path string) ([]int, error) {

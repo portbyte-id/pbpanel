@@ -169,6 +169,7 @@ func (s *runState) steps() []step {
 		{name: "admin-password", done: s.adminDone, run: s.createAdmin},
 		{name: "panel-cert", done: s.certDone, run: s.generateCert},
 		{name: "binary", done: s.binaryDone, run: s.installBinary},
+		{name: "path-link", done: s.linkDone, run: s.linkBinary},
 		{name: "unit-file", done: s.unitDone, run: s.writeUnit},
 		{name: "firewall-unit", done: s.firewallUnitDone, run: s.writeFirewallUnit},
 		{name: "enable-firewall-unit", done: s.firewallEnabledDone, run: s.enableFirewallUnit},
@@ -464,6 +465,56 @@ func (s *runState) installBinary(context.Context) error {
 	if err := os.Rename(staged, live); err != nil {
 		_ = os.Remove(staged)
 		return fmt.Errorf("install %s: %w", live, err)
+	}
+	return nil
+}
+
+// --- PATH entry ------------------------------------------------------------
+
+// linkDone is true when the PATH entry is a symlink that already resolves to the
+// installed binary. A Layout without a LinkPath has no PATH entry to make, so
+// the step skips: that is how a test keeps install inside its temp root.
+func (s *runState) linkDone(context.Context) (bool, error) {
+	if s.Layout.LinkPath == "" {
+		return true, nil
+	}
+	have, err := os.Readlink(s.Layout.LinkPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		// Present but not a symlink, or unreadable: let linkBinary decide, so a
+		// regular file in the way produces a real error rather than a crash.
+		return false, nil
+	}
+	return filepath.Clean(have) == filepath.Clean(s.Layout.BinaryPath()), nil
+}
+
+// linkBinary points the PATH entry at the installed binary.
+//
+// It refuses to replace anything that is not a symlink: /usr/local/bin holds
+// files the operator and the distribution put there, and install has no
+// business overwriting one because its name collided.
+func (s *runState) linkBinary(context.Context) error {
+	link := s.Layout.LinkPath
+	if link == "" {
+		return nil
+	}
+	if info, err := os.Lstat(link); err == nil {
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return fmt.Errorf("%s exists and is not a symlink; move it aside to let install link %s", link, BinaryName)
+		}
+		if err := os.Remove(link); err != nil {
+			return fmt.Errorf("replace %s: %w", link, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect %s: %w", link, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(link), err)
+	}
+	if err := os.Symlink(s.Layout.BinaryPath(), link); err != nil {
+		return fmt.Errorf("link %s: %w", link, err)
 	}
 	return nil
 }

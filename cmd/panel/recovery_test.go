@@ -143,7 +143,7 @@ func TestInfoWithoutADatabaseSaysHowToFixIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("info on a missing database returned no error")
 	}
-	if !strings.Contains(err.Error(), "panel install") {
+	if !strings.Contains(err.Error(), "pbp install") {
 		t.Fatalf("error = %q, want it to point at `panel install`", err)
 	}
 	if out.Len() != 0 {
@@ -527,7 +527,7 @@ func TestSetHelpRunsWithoutADatabase(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "usage: panel set <key> <value>") {
+	if !strings.Contains(stdout.String(), "usage: pbp set <key> <value>") {
 		t.Fatalf("stdout = %q, want the usage line", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "panel.port") {
