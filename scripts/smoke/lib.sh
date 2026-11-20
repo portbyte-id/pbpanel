@@ -105,6 +105,15 @@ assert_contains() {
 	esac
 }
 
+# assert_not_contains DESCRIPTION NEEDLE HAYSTACK
+assert_not_contains() {
+	if [ "$SMOKE_DRY_RUN" = 1 ]; then log "  [dry-run] assert $1 does not contain '$2'"; return 0; fi
+	case $3 in
+	*"$2"*) _fail "$1" "must not contain: $2" "actual:           $3" ;;
+	*) _pass "$1" ;;
+	esac
+}
+
 # assert_http DESCRIPTION EXPECTED_STATUS ACTUAL_STATUS
 assert_http() {
 	if [ "$SMOKE_DRY_RUN" = 1 ]; then log "  [dry-run] assert $1 -> HTTP $2"; return 0; fi

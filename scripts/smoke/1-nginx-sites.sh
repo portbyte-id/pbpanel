@@ -142,13 +142,15 @@ assert_ok "nginx.conf still passes nginx -t on the VM" vm "$NGINX -t -c /www/pan
 both_serve "after the rejected nginx.conf"
 
 # --- 5. detached and regenerate -----------------------------------------------
-step 5 "remove an include line by hand: the feature shows detached; regenerate reattaches it"
+step 5 "remove a managed block by hand: the feature shows detached; regenerate reattaches it"
 assert_http "GET the site before the edit" 200 "$(api_call GET "$host" "$port" "/api/sites/$STATIC")"
 assert_contains "names is attached before the edit" '"feature":"names","include":"/www/panel/nginx/includes/'"$STATIC"'/names.conf","attached":true' "$(last_body)"
 
-# An operator edit over SSH, behind the panel's back. nginx is not reloaded, so
-# it keeps serving; the panel must notice from the file alone.
-vm "sed -i '/includes\/$STATIC\/names.conf;/d' $SITE_FILE"
+# The panel keeps each feature in a "# >>> pb:<name>" / "# <<< pb:<name>" block of
+# the site file. An operator edit over SSH removes that block, behind the panel's
+# back; nginx is not reloaded, so it keeps serving and the panel must notice from
+# the file alone.
+vm "sed -i '/# >>> pb:names\$/d; /# <<< pb:names\$/d' $SITE_FILE"
 assert_http "GET the site after the edit" 200 "$(api_call GET "$host" "$port" "/api/sites/$STATIC")"
 assert_contains "names shows detached" '"feature":"names","include":"/www/panel/nginx/includes/'"$STATIC"'/names.conf","attached":false' "$(last_body)"
 assert_contains "listen is still attached" '"feature":"listen","include":"/www/panel/nginx/includes/'"$STATIC"'/listen.conf","attached":true' "$(last_body)"
@@ -221,8 +223,10 @@ assert_http "DELETE without confirm is refused" 400 "$(api_call DELETE "$host" "
 assert_http "DELETE the static site" 200 "$(api_call DELETE "$host" "$port" "/api/sites/$STATIC?confirm=$STATIC")"
 assert_contains "the response says where the kept files are" "/www/services/sites/$STATIC" "$(last_body)"
 assert_http "DELETE the proxy site" 200 "$(api_call DELETE "$host" "$port" "/api/sites/$PROXY?confirm=$PROXY")"
-assert_http "the static site no longer answers" 000 "$(site_status "$STATIC")"
-assert_http "the proxy site no longer answers" 000 "$(site_status "$PROXY")"
+# A host no site claims now gets the landing page, so the status is 200; what
+# must be gone is the site's own content.
+assert_not_contains "the static site no longer answers" "$STATIC_MARK" "$(site_body "$STATIC")"
+assert_not_contains "the proxy site no longer answers" "$PROXY_MARK" "$(site_body "$PROXY")"
 assert_equal "the site file is gone (test -e)" gone "$(vm "test -e $SITE_FILE && echo present || echo gone" 2>/dev/null)"
 assert_equal "the web root is kept (test -d)" kept "$(vm "test -d /www/services/sites/$STATIC && echo kept || echo gone" 2>/dev/null)"
 assert_ok "the remaining config passes nginx -t on the VM" vm "$NGINX -t -c /www/panel/nginx/nginx.conf"

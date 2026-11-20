@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/native"
 	"github.com/portbyte-id/server-panel/internal/store"
 )
 
@@ -22,22 +24,74 @@ func (noApply) Apply(context.Context, confedit.Change) (confedit.Result, error) 
 	return confedit.Result{}, errors.New("this test does not apply configuration")
 }
 
-// TestRealImageLifecycle runs the M8 PHP lifecycle on a real Engine: a build with
-// extensions is checked and swapped under a running container; a build that
-// fails leaves that container alone; an activation puts the earlier build back.
-// It needs Docker, the `php:8.3-fpm` image (pulled on demand) and network access
-// for the PECL download. Run with `-tags integration`.
-func TestRealImageLifecycle(t *testing.T) {
-	const ver = "8.3"
-	ctx := context.Background()
-	root := t.TempDir()
-	p := Paths{Root: root}
-
+// requireBuildHost skips the test unless this host can compile PHP and run it
+// under systemd: root (the unit is installed where systemd reads it), systemd as
+// PID 1, the www account pools run as, and a Docker Engine for the builder. A
+// host whose panel already owns the version's unit is skipped rather than
+// disturbed: that unit is the host's, not the test's.
+func requireBuildHost(t *testing.T, ver string) *docker.Client {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("a native PHP build installs a systemd unit: it needs root")
+	}
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		t.Skip("systemd is not running on this host")
+	}
+	if _, err := user.Lookup(WWWUser); err != nil {
+		t.Skipf("the pools run as %s, which this host does not have: %v", WWWUser, err)
+	}
+	unit := filepath.Join(DefaultUnitDir, UnitName(ver))
+	if _, err := os.Stat(unit); err == nil {
+		t.Skipf("%s is already installed; the test owns that unit, so remove it first", unit)
+	}
 	eng, err := docker.New(docker.DefaultSocket)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(eng.Close)
+	if _, err := eng.Ping(context.Background()); err != nil {
+		t.Skipf("no Docker Engine, and the native builder needs one: %v", err)
+	}
+	return eng
+}
+
+// TestRealBuildLifecycle runs the M8 PHP lifecycle natively: a build with
+// extensions is checked and swapped under a running systemd unit; a build that
+// fails leaves that unit alone; an activation puts the earlier build back.
+//
+// It compiles the core twice, several minutes each, and needs Docker, network
+// access for the PHP sources and PECL, root, systemd and the www account.
+// PB_PHP_IT_VERSION picks the series (default 8.3). The test installs
+// panel-php-<ver>.service itself and removes it again, so a host whose panel
+// already runs that version skips instead.
+func TestRealBuildLifecycle(t *testing.T) {
+	ver := os.Getenv("PB_PHP_IT_VERSION")
+	if ver == "" {
+		ver = "8.3"
+	}
+	if err := CheckVersion(ver); err != nil {
+		t.Fatal(err)
+	}
+	eng := requireBuildHost(t, ver)
+	ctx := context.Background()
+
+	root, err := os.MkdirTemp("", "panel-php-it-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cleanups run last in first-out order: the unit goes before the root does.
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	p := Paths{Root: root}
+	// The pools run as www, so every directory on the way to the socket and the
+	// web root must be traversable by it; MkdirTemp makes them 0700.
+	for _, dir := range []string{"", p.Dir(ver), p.ConfDir(ver), p.PoolDir(ver), p.RunDir(), p.SiteLogDir(), p.SitesRoot(), filepath.Join(root, "panel", "data")} {
+		full := filepath.Join(root, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	st, err := store.Open(filepath.Join(root, "panel.db"))
 	if err != nil {
@@ -54,35 +108,7 @@ func TestRealImageLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Remove(context.Background(), ver, nil) })
 
-	// The files the containers read, written as the confedit path would write
-	// them: php.ini copied from the image, then the rendered FPM and form files.
-	for _, dir := range []string{p.Dir(ver), p.ConfDir(ver), p.PoolDir(ver), p.RunDir(), p.SiteLogDir(), p.SitesRoot()} {
-		if err := os.MkdirAll(filepath.FromSlash(dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := eng.ImagePull(ctx, BaseImage(ver), nil); err != nil {
-		t.Fatalf("pull %s: %v", BaseImage(ver), err)
-	}
-	ini, err := eng.RunOnce(ctx, "m8-it-ini", docker.ContainerConfig{
-		Image: BaseImage(ver), Entrypoint: []string{"cat"}, Cmd: []string{"/usr/local/etc/php/php.ini-production"},
-	})
-	if err != nil || ini.ExitCode != 0 {
-		t.Fatalf("read php.ini-production: %v exit %d", err, ini.ExitCode)
-	}
-	writeFile(t, p.IniPath(ver), ini.Stdout)
-	fpm, err := p.RenderFPMConf(ver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, p.FPMConf(ver), fpm)
-	form, err := RenderFormIni(DefaultSettings())
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, p.FormIni(ver), form)
-
-	// Install with no extensions: build A serves; nothing runs yet.
+	// Build A, with no extensions: it serves; nothing runs yet.
 	if err := m.StartPull(ctx, ver); err != nil {
 		t.Fatal(err)
 	}
@@ -94,19 +120,37 @@ func TestRealImageLifecycle(t *testing.T) {
 		t.Fatalf("after install: %+v, %v", a, err)
 	}
 
-	// The first site would start the container on build A.
-	if _, err := m.EnsureContainer(ctx, ver); err != nil {
+	// The files the unit starts on, written as the confedit path writes them:
+	// php.ini copied from the build itself, then the rendered FPM and form files.
+	ini, err := os.ReadFile(filepath.FromSlash(p.ProductionIniFile(ver, a.Current.ID)))
+	if err != nil {
+		t.Fatalf("read php.ini-production of the build: %v", err)
+	}
+	writeFile(t, p.IniPath(ver), ini)
+	fpm, err := p.RenderFPMConf(ver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.FPMConf(ver), fpm)
+	form, err := RenderFormIni(DefaultSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.FormIni(ver), form)
+
+	// The first site would start the unit on build A.
+	if _, err := m.EnsureRunning(ctx, ver); err != nil {
 		t.Fatalf("start on build A: %v", err)
 	}
-	before, found, err := m.ContainerState(ctx, ver)
-	if err != nil || !found || !before.State.Running {
-		t.Fatalf("container after start: found=%v running=%v err=%v", found, before.State.Running, err)
+	before, found, err := m.Status(ctx, ver)
+	if err != nil || !found || !before.Active {
+		t.Fatalf("unit after the start: found=%v active=%v err=%v", found, before.Active, err)
 	}
-	if mods := phpModules(t, eng, ver); strings.Contains(mods, "\nintl\n") {
+	if mods := builtModules(t, p, ver); strings.Contains(mods, "\nintl\n") {
 		t.Fatal("build A already has intl")
 	}
 
-	// A build with intl and redis is checked, then swapped under the running container.
+	// A build with intl and redis is checked, then swapped under the running unit.
 	exts, err := ParseExtensions([]string{"intl", "redis"})
 	if err != nil {
 		t.Fatal(err)
@@ -115,21 +159,26 @@ func TestRealImageLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build B = %v", err)
 	}
-	after, found, err := m.ContainerState(ctx, ver)
-	if err != nil || !found || !after.State.Running {
-		t.Fatalf("container after the swap: found=%v running=%v err=%v", found, after.State.Running, err)
+	after, found, err := m.Status(ctx, ver)
+	if err != nil || !found || !after.Active {
+		t.Fatalf("unit after the swap: found=%v active=%v err=%v", found, after.Active, err)
 	}
-	if after.ID == before.ID {
-		t.Error("the swap kept the old container; a new one must replace it")
+	// A binary cannot be swapped under a reload: the swap restarts the unit, so
+	// the master must be a different process.
+	if after.PID == before.PID {
+		t.Errorf("the swap kept the old master (pid %d); a restart must replace it", before.PID)
 	}
-	if mods := phpModules(t, eng, ver); !strings.Contains(mods, "intl") || !strings.Contains(mods, "redis") {
-		t.Errorf("the swapped container's modules lack intl or redis:\n%s", mods)
+	if mods := builtModules(t, p, ver); !strings.Contains(mods, "\nintl\n") || !strings.Contains(mods, "\nredis\n") {
+		t.Errorf("the serving build's modules lack intl or redis:\n%s", mods)
 	}
 	if cur, _ := m.Get(ctx, ver); cur.Current == nil || cur.Current.ID != b.ID {
 		t.Errorf("current after the swap = %+v, want build %s", cur.Current, b.ID)
 	}
+	if link, _ := readLink(p, ver); link != b.ID {
+		t.Errorf("the serving link names %q, want build %s", link, b.ID)
+	}
 
-	// A build that cannot be made fails; the container that serves is untouched.
+	// A build that cannot be made fails; the unit that serves is untouched.
 	bogus, err := ParseExtensions([]string{"m8nosuchpeclpackage"})
 	if err != nil {
 		t.Fatal(err)
@@ -137,38 +186,44 @@ func TestRealImageLifecycle(t *testing.T) {
 	if _, err := m.Rebuild(ctx, ver, bogus, nil); err == nil {
 		t.Fatal("a build of a package that does not exist succeeded")
 	}
-	still, found, err := m.ContainerState(ctx, ver)
-	if err != nil || !found || !still.State.Running || still.ID != after.ID {
-		t.Errorf("the serving container changed after a failed build: id %s -> %s running=%v", after.ID, still.ID, still.State.Running)
+	still, found, err := m.Status(ctx, ver)
+	if err != nil || !found || !still.Active || still.PID != after.PID {
+		t.Errorf("the serving unit changed after a failed build: pid %d -> %d active=%v", after.PID, still.PID, still.Active)
 	}
 	if cur, _ := m.Get(ctx, ver); cur.Current == nil || cur.Current.ID != b.ID {
 		t.Errorf("current moved after a failed build: %+v", cur.Current)
 	}
 
-	// Activation puts build A back, and the container runs its image again.
+	// Activating build A puts the link back and restarts the unit onto it.
 	if _, err := m.Activate(ctx, ver, a.Current.ID); err != nil {
 		t.Fatalf("activate A = %v", err)
 	}
-	back, found, err := m.ContainerState(ctx, ver)
-	if err != nil || !found || !back.State.Running {
-		t.Fatalf("container after activating A: found=%v running=%v err=%v", found, back.State.Running, err)
+	back, found, err := m.Status(ctx, ver)
+	if err != nil || !found || !back.Active {
+		t.Fatalf("unit after activating A: found=%v active=%v err=%v", found, back.Active, err)
 	}
-	if back.ImageID != a.Current.ImageID {
-		t.Errorf("container image after activating A = %s, want %s", back.ImageID, a.Current.ImageID)
+	if back.PID == still.PID {
+		t.Error("activating A did not restart the unit")
 	}
-	if mods := phpModules(t, eng, ver); strings.Contains(mods, "\nintl\n") {
+	if link, _ := readLink(p, ver); link != a.Current.ID {
+		t.Errorf("the serving link names %q, want build %s", link, a.Current.ID)
+	}
+	if mods := builtModules(t, p, ver); strings.Contains(mods, "\nintl\n") {
 		t.Error("build A is serving but still lists intl")
 	}
 }
 
-// phpModules runs `php -m` in the running container of a version.
-func phpModules(t *testing.T, eng *docker.Client, ver string) string {
+// builtModules runs `php -m` from the build the serving link names, with the
+// scan directory the unit gives it.
+func builtModules(t *testing.T, p Paths, ver string) string {
 	t.Helper()
-	res, err := eng.Exec(context.Background(), ContainerName(ver), docker.ExecOptions{Cmd: []string{"php", "-m"}})
+	out, err := (native.ExecRunner{}).RunEnv(context.Background(),
+		[]string{scanDirEnv(p, ver)}, p.CLIBinary(ver),
+		"-c", p.IniPath(ver), "-d", "display_startup_errors=1", "-d", "log_errors=0", "-m")
 	if err != nil {
-		t.Fatalf("php -m: %v", err)
+		t.Fatalf("php -m: %v: %s", err, out)
 	}
-	return "\n" + strings.ReplaceAll(res.Output(), "\r", "") + "\n"
+	return "\n" + strings.ReplaceAll(string(out), "\r", "") + "\n"
 }
 
 func writeFile(t *testing.T, path string, content []byte) {
