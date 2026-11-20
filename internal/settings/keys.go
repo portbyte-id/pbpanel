@@ -203,7 +203,7 @@ func defaultKeys() []key {
 			meta: Meta{
 				Name:        KeyPHPVersions,
 				Type:        TypeString,
-				Default:     "8.2,8.3,8.4,8.5",
+				Default:     "8.3,8.4,8.5",
 				Description: "PHP versions offered on the PHP page, separated by commas. Each needs an official php:<version>-fpm image.",
 				Group:       groupPHP,
 			},

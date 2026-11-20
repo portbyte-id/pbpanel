@@ -66,6 +66,21 @@ func exactRelease(v string) string {
 // enabled by the recipe's own conf.d file.
 var inCore = map[string]bool{"mbstring": true, "sodium": true}
 
+// opcacheInCore reports whether the series compiles OPcache into the core, so
+// the separate opcache layer must not be built: PHP 8.5 stopped shipping OPcache
+// as an extension built after the core. The core's own module check still asks
+// for it in `php -m`, which is what proves the build really carries it.
+func opcacheInCore(series string) bool {
+	major, rest, _ := strings.Cut(series, ".")
+	minor, _, _ := strings.Cut(rest, ".")
+	a, errA := strconv.Atoi(major)
+	b, errB := strconv.Atoi(minor)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return a*100+b >= 805
+}
+
 // DockerfileFor is the build recipe for one build ID on a builder image, for a
 // series (the newest patch is looked up) or one release, with its extensions.
 //
@@ -88,7 +103,7 @@ func DockerfileFor(base, id, version string, exts []Extension, p Paths) []byte {
 		"@WWW_USER@", WWWUser,
 		"@WWW_UID@", strconv.Itoa(WWWUID),
 		"@WWW_GID@", strconv.Itoa(WWWGID),
-		"@EXTENSIONS@", extensionRecipe(exts, prefix),
+		"@EXTENSIONS@", extensionRecipe(Series(version), exts, prefix),
 		"@MODULE_NAMES@", moduleNames(exts),
 	).Replace(builderDockerfile))
 }
@@ -99,10 +114,10 @@ func DockerfileFor(base, id, version string, exts []Extension, p Paths) []byte {
 //
 // Every name and flag here is a catalogue constant or a PECL name already checked
 // by ParseExtensions, never request input.
-func extensionRecipe(exts []Extension, prefix string) string {
+func extensionRecipe(series string, exts []Extension, prefix string) string {
 	var b strings.Builder
 	for _, e := range exts {
-		if inCore[e.Name] {
+		if inCore[e.Name] || (e.Name == "opcache" && opcacheInCore(series)) {
 			continue
 		}
 		if pkgs := sortedUnique(e.Packages); len(pkgs) > 0 {
