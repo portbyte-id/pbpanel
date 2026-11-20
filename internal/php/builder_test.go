@@ -50,6 +50,33 @@ func TestBuilderGoldenMixedExtensions(t *testing.T) {
 	golden(t, "builder-mixed.Dockerfile", DockerfileFor("ubuntu:26.04", testID, "8.4", exts, testPaths), nil)
 }
 
+// PHP 8.5 compiles OPcache into the core, so the recipe must not build the
+// separate opcache layer there (the step 7 sandbox build proves it: `php -m`
+// lists Zend OPcache with no conf.d file and no opcache.so on disk), while 8.3
+// and 8.4 still get the layer.
+func TestBuilderGoldenOpcacheInCore(t *testing.T) {
+	golden(t, "builder-8.5-opcache-in-core.Dockerfile",
+		DockerfileFor("ubuntu:26.04", testID, "8.5", minimalExtensions(t), testPaths), nil)
+}
+
+func TestOpcacheLayerFollowsTheSeries(t *testing.T) {
+	build := func(v string) string {
+		return string(DockerfileFor("ubuntu:26.04", testID, v, minimalExtensions(t), testPaths))
+	}
+	for _, v := range []string{"8.3", "8.4", "8.4.3"} {
+		if d := build(v); !strings.Contains(d, "ext/opcache") {
+			t.Errorf("%s: the opcache layer is missing", v)
+		}
+	}
+	d := build("8.5")
+	if strings.Contains(d, "ext/opcache") {
+		t.Error("8.5 still builds a separate opcache layer, which its core already carries")
+	}
+	if !strings.Contains(d, "'Zend OPcache'") {
+		t.Error("8.5 no longer asks its module check for Zend OPcache")
+	}
+}
+
 func TestDockerfileForFillsEveryPlaceholder(t *testing.T) {
 	for name, d := range map[string]string{
 		"series":  string(DockerfileFor("ubuntu:26.04", testID, "8.3", minimalExtensions(t), testPaths)),

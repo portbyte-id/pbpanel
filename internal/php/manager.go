@@ -49,7 +49,7 @@ const (
 
 // DefaultVersions is the default of the `php.versions` setting: the versions
 // still receiving security fixes.
-const DefaultVersions = "8.2,8.3,8.4,8.5"
+const DefaultVersions = "8.3,8.4,8.5"
 
 // ParseVersions reads the `php.versions` setting: versions separated by commas.
 func ParseVersions(csv string) ([]string, error) {

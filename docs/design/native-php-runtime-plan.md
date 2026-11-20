@@ -447,6 +447,43 @@ snapshotter — `docker image prune -f` reclaimed 19 GB after nine builds.
 
 **Gate:** all three versions install, serve a site, switch a site between versions, and roll back a build.
 
+#### Step 7 result (2026-11-20)
+
+`DefaultVersions` and the `php.versions` setting default are now `8.3,8.4,8.5`. An 8.2 entry a host
+still lists is built natively by the same recipe (D5); nothing keeps running in Docker.
+
+**OPcache in the 8.5 core: confirmed.** The official `php:8.5-fpm` image ships **no
+`opcache.so`** — its extension dir holds only `sodium.so` and its `conf.d` holds no opcache line —
+yet `php -m` lists `Zend OPcache` and `opcache_get_status()` exists. The 8.4 image still ships
+`opcache.so`. So the recipe builds the opcache layer for 8.3 and 8.4 and **skips it for 8.5**
+(`opcacheInCore`, series ≥ 8.05), pinned by a golden file and a series test. The end-of-recipe
+module check still asks for `Zend OPcache`, so a build whose core did not carry it fails loudly
+instead of shipping without a bytecode cache.
+
+**The three versions on the native recipe** (sandbox, ubuntu:26.04 builder, 4 vCPU):
+
+| Version | Release | Build | Prefix | Modules | vs official |
+|---|---|---|---|---|---|
+| 8.3 (step 6) | 8.3.37 | 11m41s full | 142 MB (74 MB lean) | 62 | +`mysqli`, `pdo_mysql` |
+| 8.4 minimal | 8.4.28 | 6m29s | 74 MB | 36 | +`mysqli`, `pdo_mysql` |
+| 8.5 full catalogue | 8.5.13 | 30m6s | 157 MB | 60 | +the 24 catalogue modules |
+
+`php -m` compared against `docker run php:8.4-fpm php -m` and `php:8.5-fpm php -m` for the same
+set: nothing missing on either, and exactly `mysqli` and `pdo_mysql` extra on 8.4. On 8.5 the
+extra modules are the whole catalogue, which the official image does not carry.
+
+**PECL on 8.5: no casualty.** All six PECL entries (`apcu`, `igbinary`, `imagick`, `memcached`,
+`mongodb`, `redis`, `xdebug`) compiled and load on 8.5. One **transient** failure is worth
+recording: the first 8.4 full-set build died at `pecl install redis` with
+`No releases available for package "pecl.php.net/redis"` — a channel lookup failure, not a
+compile error, and not version-specific. The same command on the official `php:8.4-fpm`
+container succeeded minutes later (redis 6.3.0), and so did the retried 8.4 build. No recipe
+change was made for it.
+
+**Gate:** 8.4 and 8.5 installed through the panel API, the site `up5.test` switched
+8.3 → 8.4 → 8.5 → 8.3 with HTTP 200 and the phpinfo version string at each step, both units
+`active`, and a second 8.4 build rolled back to the one that was serving.
+
 ### Step 8: tests and smoke
 
 - `scripts/smoke/2-php.sh` (261 lines): container assertions become systemd and file assertions
