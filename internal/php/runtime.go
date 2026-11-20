@@ -17,6 +17,11 @@ import (
 // ErrNoBuild is a start asked for before any build exists.
 var ErrNoBuild = errors.New("php: no build has been made yet; build one first")
 
+// ErrNoDataDir stops a unit from being written without the panel's data directory:
+// the unit's InaccessiblePaths line would be empty and the pool could read the
+// database.
+var ErrNoDataDir = errors.New("php: Paths.DataDir is not set; the unit would not hide the panel's data from the pool")
+
 // DefaultUnitDir is where the unit files are written.
 const DefaultUnitDir = "/etc/systemd/system"
 
@@ -99,6 +104,9 @@ func (r *Runtime) BuildPresent(context.Context) (bool, error) {
 // writeUnit makes the unit file and the paths FPM writes to match what this panel
 // expects. It reports whether the unit changed.
 func (r *Runtime) writeUnit(ctx context.Context) (bool, error) {
+	if r.p.DataDir == "" {
+		return false, ErrNoDataDir
+	}
 	for _, d := range []string{r.p.RunDir(), r.p.SiteLogDir(), path.Dir(r.p.FPMErrorLog(r.ver))} {
 		if err := os.MkdirAll(filepath.FromSlash(d), 0o755); err != nil {
 			return false, err
@@ -293,5 +301,5 @@ InaccessiblePaths=%[8]s
 [Install]
 WantedBy=multi-user.target
 `, ver, p.ConfDir(ver), p.Binary(ver), p.FPMConf(ver), p.IniPath(ver),
-		int(stopTimeout/time.Second), strings.Join(readWrite, " "), path.Join(p.Root, "panel", "data"))
+		int(stopTimeout/time.Second), strings.Join(readWrite, " "), p.DataDir)
 }

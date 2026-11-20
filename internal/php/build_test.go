@@ -31,7 +31,7 @@ func (r *moduleRunner) RunEnv(ctx context.Context, env []string, name string, ar
 // `php -m` lists the given modules.
 func newBuildRig(t *testing.T, modules string) (*Manager, *fakeBuild, *moduleRunner, Paths) {
 	t.Helper()
-	p := Paths{Root: filepath.ToSlash(t.TempDir())}
+	p := tempPaths(t)
 	r := newRigAt(t, p)
 	r.run.modules = modules
 	return r.m, r.b, &moduleRunner{hostRunner: r.run, modules: modules}, p

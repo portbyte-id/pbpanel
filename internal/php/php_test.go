@@ -45,7 +45,7 @@ func golden(t *testing.T, name string, got []byte, err error) {
 }
 
 var (
-	testPaths = Paths{Root: "/www"}
+	testPaths = Paths{Root: "/www", DataDir: "/www/panel/data"}
 	ctx       = context.Background()
 )
 
@@ -318,7 +318,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	return newRigAt(t, Paths{Root: filepath.ToSlash(t.TempDir())})
+	return newRigAt(t, tempPaths(t))
 }
 
 // newRigAt is newRig over a given Paths layout, so a test can name the files it

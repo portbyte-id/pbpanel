@@ -13,7 +13,7 @@ func rootedPHPPaths(t *testing.T, roots ...string) Paths {
 	t.Helper()
 	h := webroots.NewHolder()
 	h.Set(roots)
-	return Paths{Root: "/www", Roots: h}
+	return Paths{Root: "/www", Roots: h, DataDir: "/www/panel/data"}
 }
 
 // An allowed root must be writable by the pool, or an application under it
