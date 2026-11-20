@@ -5,6 +5,12 @@ Status: M0 and M1 built and smoke-tested on Ubuntu; M6, M7 and M8 built, their s
 ordered steps, deliverables, tests, and exit gates. Where this file and `plan.md` disagree,
 `plan.md` wins and this file is corrected.
 
+> **Superseded in part (2026-11-20).** This file records how M0-M8 were built, when nginx and PHP-FPM
+> ran in Docker containers. Both now run natively under systemd, and Docker only compiles them. Read
+> the container wording in §3 (M1) and §4 (M2), and the container-based service rows later on, as
+> history. Current behaviour: [design/native-nginx-runtime.md](design/native-nginx-runtime.md) and
+> [design/native-php-runtime.md](design/native-php-runtime.md).
+
 References like **D7** point to decision 7 in `plan.md` §1; **§3.5** points to a section there.
 
 ---
