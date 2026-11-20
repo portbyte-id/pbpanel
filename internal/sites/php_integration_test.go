@@ -31,20 +31,59 @@ func servedVersion(t *testing.T, host string) string {
 	return ""
 }
 
-// TestRealPHPEndToEnd is the M2 exit gate against a real Docker Engine: a PHP
-// site serves phpinfo() through nginx, a form change shows up in it, a version
-// switch changes PHP_VERSION, and an invalid php.ini is rejected with the file
-// restored and the site still serving. It pulls two official images and needs
-// port 80 free on the host.
+// requirePHPHost skips the test unless this host can install the native PHP
+// units the test owns: root, systemd, and neither version's unit already
+// installed (that unit would be the host's own, and the test stops and starts
+// it).
+func requirePHPHost(t *testing.T, versions ...string) {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("native PHP installs systemd units and nginx binds port 80: it needs root")
+	}
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		t.Skip("systemd is not running on this host")
+	}
+	for _, ver := range versions {
+		unit := php.DefaultUnitDir + "/" + php.UnitName(ver)
+		if _, err := os.Stat(unit); err == nil {
+			t.Skipf("%s is already installed; the test owns that unit, so remove it first", unit)
+		}
+	}
+}
+
+// unitStopped stops the version's unit if anything started it and removes its
+// unit file, so the next test starts with no PHP at all.
+func unitStopped(t *testing.T, ver string) {
+	t.Helper()
+	run := php.ExecRunner{}
+	ctx := context.Background()
+	_, _ = run.Run(ctx, "systemctl", "disable", "--now", php.UnitName(ver))
+	_ = os.Remove(php.DefaultUnitDir + "/" + php.UnitName(ver))
+	_, _ = run.Run(ctx, "systemctl", "daemon-reload")
+	_, _ = run.Run(ctx, "systemctl", "reset-failed", php.UnitName(ver))
+}
+
+// unitActive reports whether systemd has the version's unit running.
+func unitActive(ver string) bool {
+	out, _ := (php.ExecRunner{}).Run(context.Background(), "systemctl", "is-active", php.UnitName(ver))
+	return strings.TrimSpace(string(out)) == "active"
+}
+
+// TestRealPHPEndToEnd is the M2 exit gate against the native runtime: a PHP site
+// serves phpinfo() through nginx, a form change shows up in it, a version switch
+// changes PHP_VERSION, and an invalid php.ini is rejected with the file restored
+// and the site still serving. It installs both versions' units itself and needs
+// root, systemd, the www account, a Docker Engine for the builder and port 80
+// free; a build compiles PHP from source, minutes per version.
 func TestRealPHPEndToEnd(t *testing.T) {
 	const verA, verB = "8.3", "8.4"
+	requirePHPHost(t, verA, verB)
 
-	// PHP-FPM still runs in Docker, so the engine is needed for the PHP side too.
 	eng := requireNativeHost(t)
 	bg := context.Background()
 	clean := func() {
-		for _, name := range []string{php.ContainerName(verA), php.ContainerName(verB)} {
-			_ = eng.ContainerRemove(bg, name, true)
+		for _, ver := range []string{verA, verB} {
+			unitStopped(t, ver)
 		}
 	}
 	clean()
@@ -68,7 +107,7 @@ func TestRealPHPEndToEnd(t *testing.T) {
 		t.Fatalf("nginx reconcile: %+v", st)
 	}
 
-	// 2.1: a site cannot use a version that was not pulled; a pull makes it ready.
+	// 2.1: a site cannot use a version that was not installed; an install makes it ready.
 	_, err = mgr.Create(bg, CreateInput{Domain: "a.test", Kind: KindPHP, PHPVersion: verA, PHPInfo: true})
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
@@ -79,17 +118,17 @@ func TestRealPHPEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := phpMgr.Pull(bg, ver, nil, nil); err != nil {
-			t.Fatalf("pull %s: %v", ver, err)
+			t.Fatalf("install %s: %v", ver, err)
 		}
 		v, _ := phpMgr.Get(bg, ver)
 		if v.State != php.StateReady || v.Digest == "" {
-			t.Fatalf("after pull: %+v", v)
+			t.Fatalf("after the install: %+v", v)
 		}
 	}
 
-	// 2.7: no container until a site uses the version.
-	if _, found, _ := phpMgr.ContainerState(bg, verA); found {
-		t.Fatal("the PHP container exists before any site uses it")
+	// 2.7: no unit runs until a site uses the version.
+	if st, found, _ := phpMgr.Status(bg, verA); found && st.Active {
+		t.Fatal("the PHP unit runs before any site uses it")
 	}
 
 	// Exit gate: a PHP site on version A serves phpinfo() through nginx.
@@ -97,6 +136,9 @@ func TestRealPHPEndToEnd(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	waitFor(t, "phpinfo() on "+verA, func() bool { return servedVersion(t, "a.test") == verA })
+	if !unitActive(verA) {
+		t.Fatal("the site serves but panel-php-" + verA + ".service is not active")
+	}
 
 	// 2.2: nothing listens on TCP 9000; the pool is a socket owned by www.
 	if c, err := net.DialTimeout("tcp", "127.0.0.1:9000", time.Second); err == nil {
@@ -158,19 +200,18 @@ func TestRealPHPEndToEnd(t *testing.T) {
 		t.Errorf("the old pool file is still there: %v", err)
 	}
 	// 2.7: the old version lost its last site and keeps running.
-	if c, found, _ := phpMgr.ContainerState(bg, verA); !found || !c.State.Running {
-		t.Error("the old version's container was stopped when its last site left")
+	if !unitActive(verA) {
+		t.Error("the old version's unit was stopped when its last site left")
 	}
 
-	// 2.7: a container removed by hand comes back on the boot reconcile.
-	if err := eng.ContainerRemove(bg, php.ContainerName(verB), true); err != nil {
-		t.Fatal(err)
+	// 2.7: a unit stopped on the host comes back on the boot reconcile. It is
+	// systemctl that stops it, not the panel, so the flag that keeps a version
+	// down is not set and the reconcile restores it.
+	if out, err := (php.ExecRunner{}).Run(bg, "systemctl", "stop", php.UnitName(verB)); err != nil {
+		t.Fatalf("systemctl stop: %v: %s", err, out)
 	}
 	if servedVersion(t, "a.test") != "" {
-		t.Fatal("the site still answers after its PHP container was removed")
-	}
-	if err := phpMgr.Reconcile(bg); err != nil {
-		t.Fatal(err)
+		t.Fatal("the site still answers after its PHP unit was stopped")
 	}
 	for _, step := range mgr.ReconcilePHP(bg) {
 		if !step.OK {
@@ -179,12 +220,12 @@ func TestRealPHPEndToEnd(t *testing.T) {
 	}
 	waitFor(t, "the site to come back", func() bool { return servedVersion(t, "a.test") == verB })
 
-	// Deleting the site leaves the container up and frees nginx of it.
+	// Deleting the site leaves the unit up and frees nginx of it.
 	if _, err := mgr.Delete(bg, "a.test"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if c, found, _ := phpMgr.ContainerState(bg, verB); !found || !c.State.Running {
-		t.Error("the container was stopped when its last site was deleted")
+	if !unitActive(verB) {
+		t.Error("the unit was stopped when its last site was deleted")
 	}
 	if code, _ := get(t, "a.test"); code == 200 {
 		t.Error("a deleted site still answers")

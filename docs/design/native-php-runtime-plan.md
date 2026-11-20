@@ -494,6 +494,57 @@ change was made for it.
 
 **Gate:** smoke 1, 2, 7 and 8 pass on the sandbox. Reboot passes.
 
+#### Step 8 result (2026-11-20)
+
+`scripts/smoke/2-php.sh` asserts the native reality: `systemctl is-active panel-php-<ver>.service`
+for the running version, `test -x .../current/sbin/php-fpm` for the build (a directory, not an
+image), `getent passwd www` for the account, `ps` for the workers (as `www`) and the master (as
+root), and `systemctl stop` for the "removed by hand" step, which the daemon restart restores.
+The `docker inspect` network-mode check is gone: a native process has no network namespace. The
+script installs 8.3 and 8.4 itself (a build compiles the core: ~6 min each) and leaves both builds
+and units in place.
+
+`scripts/smoke/8-docker-mgmt.sh` keeps its build/swap/rollback checks but reads the serving build
+natively: `php -m` from `current/bin/php`, the master's build from `/proc/<MainPID>/exe`, and the
+catalogue's current id against the master's. The `panel/php:*` image-count assertion is removed:
+native builds are directories, so an image count says nothing. Both headers now say PHP is not a
+Docker workload; Docker stays the compiler.
+
+The two `-tags integration` tests were rewritten against the native builder and the systemd
+runtime. `TestRealBuildLifecycle` (`internal/php`) compiles build A, starts the unit, rebuilds with
+`intl` and `redis` and checks the master restarted onto the new build, that a bogus build leaves the
+unit alone, and that an activation puts A back; `TestRealPHPEndToEnd` (`internal/sites`) runs the M2
+gate end to end and now proves a hand-stopped unit comes back on the boot reconcile. Both skip,
+with a reason, off a host that cannot run them (no root, no systemd, or the unit already installed),
+so they compile and vet everywhere but only run on a sandbox-like host.
+
+**Sandbox evidence (10.10.11.106, Ubuntu 26.04, native PHP 8.3/8.4/8.5 installed):** all four
+smokes pass — **1: 68/68**, **2: 72/72**, **7: 150/150**, **8: 37/37**. Smoke 2 includes the reboot
+clause this step adds: after the reboot `panel.service` and `panel-php-8.4.service` are both
+`enabled` and `active` and the site answers PHP 8.4; the VM then came back a second time (smoke 1's
+reboot) with `panel`, `panel-nginx` and all three PHP units active and enabled. Smoke 8's swap of
+the PHP build under load lost 0 of 1385 requests, and the nginx update plus rollback 0 of 1337.
+
+Two smoke corrections, both the check being wrong about the product, not the product:
+
+1. Smoke 2 read `nginx/includes/<domain>/php.conf` for the pool socket. A site created today keeps
+   it in the site file's `# >>> pb:php` block; `php.conf` is only the pre-block layout. The check
+   now reads the block.
+2. Smoke 2's reboot step asked `systemctl is-active panel` before waiting for the panel to answer,
+   so it could catch the unit mid-start. It now waits for `/api/health` first.
+
+Smoke 1 carried older staleness (not from this step): step 5 removed an include *line*, but the
+layout is `# >>> pb:<name>` blocks now, so nothing detached; and step 9 expected a deleted host to
+drop the connection, but it gets the landing page (HTTP 200). Both updated; the product's
+behaviour (refuse to edit a detached feature; landing page for an unclaimed host) is unchanged.
+Smoke 1's run after those fixes is **68/68**, its reboot included.
+
+The integration tests do not run on WSL: it is a non-root shell without sudo, so both skip with
+their reason before touching anything. They need a sandbox-like host (root, systemd, the `www`
+account, Docker) and take ~12 minutes each (two core compiles). That is the same shape as the
+nginx integration tests, which still do not compile under `-tags integration` — a separate, older
+gap this step did not touch (the nginx doc, section 4, open work 1).
+
 ### Step 9: remove the Docker PHP runtime, UI, docs
 
 Delete `Spec`, the PHP use of `docker.Ensure`, the container-only `Engine` methods, and
