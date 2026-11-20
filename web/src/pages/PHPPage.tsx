@@ -27,18 +27,18 @@ import {
   useSavePHPSettings,
 } from "@/lib/queries"
 
-/** A badge and a sentence for one version, from its image state and its container. */
+/** A badge and a sentence for one version, from its build state and its unit. */
 export function describeVersion(v: PHPVersion): { badge: string; ok: boolean; text: string } {
   switch (v.state) {
     case "pulling":
-      return { badge: "pulling", ok: true, text: "The image is being downloaded." }
+      return { badge: "installing", ok: true, text: "The build is compiling." }
     case "failed":
-      return { badge: "failed", ok: false, text: "The last download failed." }
+      return { badge: "failed", ok: false, text: "The last install failed." }
     case "absent":
       return {
         badge: "not installed",
         ok: true,
-        text: v.supported ? "Pull it to use it for sites." : "No longer offered.",
+        text: v.supported ? "Install it to use it for sites." : "No longer offered.",
       }
   }
   const sites = `${v.sites.length} site${v.sites.length === 1 ? "" : "s"}`
@@ -123,10 +123,11 @@ export function PHPPage() {
               />
             ))}
           </ul>
-          <ApplyError error={pull.error} fallback="The pull could not be started." />
+          <ApplyError error={pull.error} fallback="The install could not be started." />
           <p className="text-muted-foreground mt-4 text-xs">
-            Versions run on the official php:&lt;version&gt;-fpm images, with the extensions chosen
-            for each build. The list is the "PHP versions" setting. A pull's full output is in Jobs.
+            Each version is compiled from source with the extensions chosen for the build, then run
+            under systemd. The list is the "PHP versions" setting. An install's full output is in
+            Jobs.
           </p>
         </CardContent>
       </Card>
@@ -192,10 +193,10 @@ function VersionRow({
               disabled={pulling}
               onClick={() => onPull({ version: v.version }, () => {})}
             >
-              {v.state === "failed" ? "Try again" : "Pull"}
+              {v.state === "failed" ? "Try again" : "Install"}
             </Button>
             <Button size="sm" variant="outline" disabled={pulling} onClick={() => setPickingPull(true)}>
-              Pull with extensions…
+              Install with extensions…
             </Button>
           </>
         )}
@@ -271,11 +272,11 @@ function VersionRow({
       <ExtensionDialog
         open={pickingPull}
         onOpenChange={setPickingPull}
-        title={`Pull PHP ${v.version} with extensions`}
-        description="The image is pulled and the extensions ticked here are built in. With nothing ticked this is the plain image."
+        title={`Install PHP ${v.version} with extensions`}
+        description="The version is compiled with the extensions ticked here. With nothing ticked it is a plain build."
         initial={[]}
-        submitLabel={`Pull PHP ${v.version}`}
-        pendingLabel="Pulling…"
+        submitLabel={`Install PHP ${v.version}`}
+        pendingLabel="Compiling…"
         pending={pulling}
         error={pullError}
         onSubmit={(extensions) =>
@@ -321,8 +322,8 @@ function VersionRow({
         onConfirm={() => remove.mutate(undefined, { onSuccess: () => setRemoving(false) })}
       >
         <p>
-          The container stops and its images are deleted. The php.ini file and the settings are
-          kept, so pulling PHP {v.version} again restores them.
+          The unit stops and its builds are deleted. The php.ini file and the settings are kept, so
+          installing PHP {v.version} again restores them.
         </p>
         <p>A version that a site uses cannot be removed. Move those sites to another version first.</p>
       </ConfirmDialog>

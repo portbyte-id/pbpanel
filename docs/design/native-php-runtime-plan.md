@@ -1,7 +1,11 @@
 # Native PHP-FPM runtime: plan
 
-Status: **plan only, nothing built.** Written 2026-11-19 after reading the native nginx runtime
-(`docs/design/native-nginx-runtime.md`, `internal/nginx/*`) and the current Docker PHP runtime
+Status: **complete (2026-11-20).** Every step is built, the container runtime is deleted, and the
+handover is [`native-php-runtime.md`](native-php-runtime.md). EL (Rocky/RHEL) stays in **M9**, as it
+does for nginx.
+
+Written 2026-11-19 after reading the native nginx runtime
+(`docs/design/native-nginx-runtime.md`, `internal/nginx/*`) and the then-current Docker PHP runtime
 (`internal/php/*`, `internal/sites/php.go`, `cmd/panel/nginx.go`).
 
 Scope: PHP **8.3, 8.4 and 8.5**, starting with **8.3 on Ubuntu**. EL (Rocky/RHEL) stays in **M9**
@@ -552,6 +556,38 @@ Delete `Spec`, the PHP use of `docker.Ensure`, the container-only `Engine` metho
 becomes "build". Write `docs/design/native-php-runtime.md` as the handover, like nginx's.
 
 **Gate:** `go vet`, lint (`golangci-lint --max-same-issues=0`), web tests, and a UI check in a browser.
+
+#### Step 9 result (2026-11-20)
+
+The container runtime is gone from the code. Deleted: `php.Spec`, `php.ContainerName`,
+`php.BaseImage`, `php.LegacyImage`, `php.Paths.BuildDir`, `php.Dockerfile(ver, exts)`, the PHP
+`Engine` interface (PHP's Docker dependency is now `native.BuildEngine`), `images.Swap`/`SwapPlan`
+and its test (nothing but that test called it), the `ImageTag` engine member and the legacy-image
+adoption path in `images.Family` (`Reconcile` lost its `legacy` parameter). The
+`panel-php-<ver>` name survives only as a constant in `cmd/panel/nginx.go`, where the step 5 retire
+hook needs it for a host upgrading from an older release.
+
+`internal/docker` keeps `Spec`/`Ensure`/`Decide`: they are now generic container helpers with no PHP
+or nginx caller, and the brief keeps the package (the Docker page and the builder still use it).
+
+The PHP page says **Install** (was Pull), **build** (was image), "installing" and "The build is
+compiling" for the `pulling` state, and the API error text follows. The `pulling` state value, the
+`/pull` route and `pullPHP` keep their names: they are not user-visible and renaming them would
+touch the handler, the client and their tests for no gain.
+
+`docs/design/native-php-runtime.md` is the handover. Its numbers, traps and file map come from steps
+0-8; the verification table is unchanged from step 8 (smokes 1/2/7/8 = 68/72/150/37, reboot
+included).
+
+Gate: gofmt clean, `go build`/`go vet`/`go test ./cmd/... ./internal/...` green, `npm test` 369 of
+369, `npm run build` (tsc + vite) green, `sh scripts/lint-conventions.sh` ok. `golangci-lint` is not
+installed in this WSL. The UI was checked **in a browser** against the sandbox (`10.10.11.106`,
+panel rebuilt with this branch and installed with `panel upgrade`, browsed through a localhost
+TLS-terminating proxy because the in-app browser refuses the self-signed cert): the PHP page shows
+the new wording, and adding 8.2 to the versions setting produced an **Install** row whose dialog
+started a `php.pull` job and whose row then read "installing — The build is compiling." One
+correction found on the way: the version's `image` field now holds the series (`8.3`) before a build,
+not `php:8.3-fpm`, and both the manager and the route tests were updated to it.
 
 ## 5. Risks
 

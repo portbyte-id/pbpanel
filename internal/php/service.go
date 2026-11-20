@@ -3,13 +3,11 @@ package php
 import (
 	"context"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
-	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/native"
 )
 
@@ -33,51 +31,9 @@ func UnitName(ver string) string { return "panel-php-" + ver + ".service" }
 // unit is one version's unit, as the shared helpers name it.
 func unit(ver string) native.Unit { return native.Unit{Product: product, Name: UnitName(ver)} }
 
-// Engine is the part of the Docker client PHP uses. Docker is only the builder
-// now: the runtime is systemd. The interface stays until step 9 removes it.
-type Engine interface {
-	docker.Engine
-	ContainerKill(ctx context.Context, id, signal string) error
-	Exec(ctx context.Context, id string, opts docker.ExecOptions) (docker.ExecResult, error)
-	RunOnce(ctx context.Context, name string, cfg docker.ContainerConfig) (docker.ExecResult, error)
-	ImagePull(ctx context.Context, ref string, progress docker.Progress) (docker.Image, error)
-	ImageBuild(ctx context.Context, opts docker.BuildOptions, progress docker.Progress) (docker.Image, error)
-	ContainerArchive(ctx context.Context, id, path string) (io.ReadCloser, error)
-	ImageTag(ctx context.Context, src, dst string) error
-	ImageRemove(ctx context.Context, ref string) error
-}
-
 // scanDirEnv makes PHP read the panel's conf.d after the build's own: a leading
 // colon keeps the compiled-in directory, where the build enables its extensions.
 func scanDirEnv(p Paths, ver string) string { return "PHP_INI_SCAN_DIR=:" + p.ConfDir(ver) }
-
-// Spec is the container of one version running image. FPM is started on the
-// panel's own php-fpm.conf, so the image's php-fpm.d (and with it the `www`
-// pool that listens on TCP 9000) is never read, and nothing is mounted over it.
-// The master runs as root, as the image intends, and each pool drops to `www`.
-func Spec(p Paths, ver, image string) docker.Spec {
-	spec := docker.Spec{
-		Name:       ContainerName(ver),
-		Image:      image,
-		Role:       "php-" + ver,
-		Entrypoint: []string{"php-fpm"},
-		Args:       []string{"-F", "-y", p.FPMConf(ver), "-c", p.IniPath(ver)},
-		Env:        []string{scanDirEnv(p, ver)},
-		StopSignal: "SIGQUIT",
-		Mounts: []docker.Mount{
-			{Path: p.Dir(ver), ReadOnly: true},
-			{Path: p.RunDir()},
-			{Path: p.SiteLogDir()},
-			{Path: p.SitesRoot()},
-		},
-	}
-	// Folders the operator allowed as web roots. Read-write, as the sites tree
-	// is: an application under PHP writes its uploads and caches into its root.
-	for _, root := range p.Roots.List() {
-		spec.Mounts = append(spec.Mounts, docker.Mount{Path: root})
-	}
-	return spec
-}
 
 // Service is one PHP version as a confedit.Service: it validates with the
 // version's own php-fpm and php binaries on the host, reloads with USR2 and

@@ -37,7 +37,7 @@ type PHPRuntime interface {
 func phpInputError(field string, err error) error {
 	switch {
 	case errors.Is(err, php.ErrNotReady):
-		return invalid(field, "that PHP version is not installed; pull it on the PHP page first")
+		return invalid(field, "that PHP version is not installed; install it on the PHP page first")
 	case errors.Is(err, php.ErrUnknownVersion):
 		return invalid(field, "there is no such PHP version")
 	}
@@ -313,9 +313,10 @@ type PHPStep struct {
 
 // ReconcilePHP extends the boot reconcile to PHP (step 2.7): for every version
 // that has sites, the panel-owned files (php-fpm.conf, the form's ini, each
-// site's pool) are rewritten where they differ, validated, and the container is
-// brought up. A version with no site is left as it is: it starts with its first
-// site and is never stopped here. php.ini is the operator's and is not touched.
+// site's pool) are rewritten where they differ, validated, and the version's
+// unit is brought up. A version with no site is left as it is: it starts with
+// its first site and is never stopped here. php.ini is the operator's and is not
+// touched.
 func (m *Manager) ReconcilePHP(ctx context.Context) []PHPStep {
 	if m.php == nil {
 		return nil

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
@@ -20,51 +19,25 @@ import (
 	"github.com/portbyte-id/server-panel/internal/sites"
 )
 
-// phpEngine is a Docker Engine where every pull and build succeeds and no
-// container exists. The routes are tested over the real php.Manager on it.
-type phpEngine struct{ pullErr error }
+// phpEngine is the Docker client the native builder would use. The harness
+// replaces the build hook, so nothing here is reached: a test that gets here
+// says so rather than silently passing.
+type phpEngine struct{}
 
-func (phpEngine) ImageInspect(context.Context, string) (docker.Image, error) {
-	return docker.Image{ID: "sha256:x"}, nil
-}
-func (phpEngine) ContainerInspect(context.Context, string) (docker.Container, error) {
-	return docker.Container{}, docker.ErrNotFound
+func (phpEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
+	return docker.Image{}, errors.New("the tests provide their own build hook")
 }
 func (phpEngine) ContainerCreate(context.Context, string, docker.ContainerConfig) (string, error) {
-	return "id", nil
+	return "", errors.New("the tests provide their own build hook")
 }
-func (phpEngine) ContainerStart(context.Context, string) error               { return nil }
-func (phpEngine) ContainerStop(context.Context, string, time.Duration) error { return nil }
-func (phpEngine) ContainerRemove(context.Context, string, bool) error        { return nil }
-func (phpEngine) ContainerKill(context.Context, string, string) error        { return nil }
-func (phpEngine) Exec(context.Context, string, docker.ExecOptions) (docker.ExecResult, error) {
-	return docker.ExecResult{}, nil
-}
-func (phpEngine) RunOnce(_ context.Context, _ string, cfg docker.ContainerConfig) (docker.ExecResult, error) {
-	if len(cfg.Entrypoint) > 0 && cfg.Entrypoint[0] == "cat" {
-		return docker.ExecResult{Stdout: []byte("; php.ini-production\n")}, nil
-	}
-	// `php -m` of a build: the candidate check requires the built extensions to
-	// be listed, so the fake lists intl, the one the build tests ask for.
-	if len(cfg.Entrypoint) == 1 && cfg.Entrypoint[0] == "php" {
-		return docker.ExecResult{Stdout: []byte("[PHP Modules]\nCore\nintl\n")}, nil
-	}
-	return docker.ExecResult{}, nil
-}
-func (e phpEngine) ImagePull(_ context.Context, _ string, p docker.Progress) (docker.Image, error) {
-	p("pulling")
-	if e.pullErr != nil {
-		return docker.Image{}, e.pullErr
-	}
-	return docker.Image{ID: "sha256:base", RepoDigests: []string{"php@sha256:abc"}}, nil
-}
-func (phpEngine) ImageBuild(context.Context, docker.BuildOptions, docker.Progress) (docker.Image, error) {
-	return docker.Image{ID: "sha256:derived"}, nil
-}
-func (phpEngine) ImageTag(context.Context, string, string) error { return nil }
-func (phpEngine) ImageRemove(context.Context, string) error      { return nil }
 func (phpEngine) ContainerArchive(context.Context, string, string) (io.ReadCloser, error) {
-	return nil, errors.New("the runtime path must not archive a container")
+	return nil, errors.New("the tests provide their own build hook")
+}
+func (phpEngine) ContainerRemove(context.Context, string, bool) error {
+	return errors.New("the tests provide their own build hook")
+}
+func (phpEngine) ImageRemove(context.Context, string) error {
+	return errors.New("the tests provide their own build hook")
 }
 
 // phpHost is the native side of the PHP manager in these tests: a build hook that
@@ -229,7 +202,7 @@ func TestPHPRoutesAnswer503WithoutPHP(t *testing.T) {
 func TestPHPListAndPull(t *testing.T) {
 	h := newPHPHarness(t, &phpHost{})
 	vs := phpVersions(h)
-	if len(vs) != 2 || vs["8.3"]["state"] != "absent" || vs["8.3"]["image"] != "php:8.3-fpm" || vs["8.3"]["supported"] != true {
+	if len(vs) != 2 || vs["8.3"]["state"] != "absent" || vs["8.3"]["image"] != "8.3" || vs["8.3"]["supported"] != true {
 		t.Fatalf("versions = %v", vs)
 	}
 

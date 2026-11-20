@@ -58,9 +58,6 @@ func (s Store) ImageInspect(_ context.Context, ref string) (docker.Image, error)
 	return docker.Image{ID: id}, nil
 }
 
-// ImageTag does nothing: a build has one name.
-func (Store) ImageTag(context.Context, string, string) error { return nil }
-
 // ImageRemove deletes a build's directory. The build the link names is never
 // removed; the catalogue only prunes builds that are neither current nor previous,
 // and this is the second lock on that.

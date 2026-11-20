@@ -213,7 +213,7 @@ func TestActivateReturnsToAnEarlierBuild(t *testing.T) {
 
 func TestReconcileMarksAnInterruptedPullFailed(t *testing.T) {
 	m, _, _, _ := newBuildRig(t, "[PHP Modules]\nCore\n")
-	if err := m.setState(ctx, Version{Version: "8.3", Image: BaseImage("8.3"), State: StatePulling}); err != nil {
+	if err := m.setState(ctx, Version{Version: "8.3", Image: "8.3", State: StatePulling}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Reconcile(ctx); err != nil {

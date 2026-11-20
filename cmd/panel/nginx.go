@@ -113,15 +113,20 @@ func retireNginxContainer(ctx context.Context, eng containerRemover, logger *slo
 	return eng.ContainerRemove(ctx, legacyNginxContainer, true)
 }
 
+// legacyPHPContainer is the container one PHP version ran in before it ran
+// under systemd. Only the upgrade path knows this name now: nothing creates
+// such a container any more.
+func legacyPHPContainer(ver string) string { return "panel-php-" + ver }
+
 // retirePHPContainer stops and removes the panel-php-<ver> container a host
 // upgraded from the container PHP runtime still has, right before the version's
 // first native start: config files and pool sockets are the same paths, so the
 // new FPM master simply recreates them. Only a container the panel made is
 // touched; a foreign one means the socket or the sites tree is somebody else's
 // to keep running. A host without Docker, or without the container, has nothing
-// to retire. Old panel/php:* images are left on disk for the pruner.
+// to retire. Old panel/php:* images are left on disk for the operator to remove.
 func retirePHPContainer(ctx context.Context, ver string, eng containerRemover, logger *slog.Logger) error {
-	name := php.ContainerName(ver)
+	name := legacyPHPContainer(ver)
 	c, err := eng.ContainerInspect(ctx, name)
 	if errors.Is(err, docker.ErrNotFound) {
 		return nil

@@ -16,11 +16,10 @@ import (
 // whole output goes to the job; this is what the catalogue shows without it.
 const tailLines = 30
 
-// Engine is the part of the Docker client a family uses to name, tag and remove
+// Engine is the part of the Docker client a family uses to name and remove
 // images. The build itself is a Hook.
 type Engine interface {
 	ImageInspect(ctx context.Context, ref string) (docker.Image, error)
-	ImageTag(ctx context.Context, src, dst string) error
 	ImageRemove(ctx context.Context, ref string) error
 }
 
@@ -338,11 +337,12 @@ func (f *Family) Remove(ctx context.Context, stop func(ctx context.Context) erro
 }
 
 // Reconcile corrects the catalogue at daemon start. A build left running is
-// failed. When the family has no current build but the image it was built
-// from before builds had IDs (legacy) is present, that image is adopted as
-// the current build. A current build whose image has gone is dropped from the
-// pointers. It reports whether a current build serves.
-func (f *Family) Reconcile(ctx context.Context, legacy string) (bool, error) {
+// failed. A current build whose image has gone is dropped from the pointers. It
+// reports whether a current build serves.
+//
+// There is no legacy image to adopt any more: a build is a directory on the host
+// (or an image with an ID), so an image from before builds had IDs is not one.
+func (f *Family) Reconcile(ctx context.Context) (bool, error) {
 	if err := f.acquire(); err != nil {
 		return false, err
 	}
@@ -362,15 +362,6 @@ func (f *Family) Reconcile(ctx context.Context, legacy string) (bool, error) {
 	p, err := f.o.Catalog.Pointers(ctx, f.o.Kind, f.o.Version)
 	if err != nil {
 		return false, err
-	}
-	if p.Current == "" && legacy != "" {
-		adopted, err := f.adopt(ctx, legacy)
-		if err != nil {
-			return false, err
-		}
-		if adopted {
-			return true, nil
-		}
 	}
 	if p.Current == "" {
 		return false, nil
@@ -392,38 +383,6 @@ func (f *Family) Reconcile(ctx context.Context, legacy string) (bool, error) {
 		return false, f.o.Catalog.setPointers(bg, f.o.Kind, f.o.Version, Pointers{Previous: p.Previous})
 	}
 	return true, nil
-}
-
-// adopt gives a legacy image a build ID and makes it current. The legacy
-// reference stays where it is; the build's tag is a second name for the same
-// image.
-func (f *Family) adopt(ctx context.Context, legacy string) (bool, error) {
-	img, err := f.o.Engine.ImageInspect(ctx, legacy)
-	if errors.Is(err, docker.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	now := f.o.Now()
-	id, err := NewID(now)
-	if err != nil {
-		return false, err
-	}
-	b := Build{
-		ID: id, Kind: f.o.Kind, Version: f.o.Version, Tag: f.Tag(id), ImageID: img.ID,
-		State: StateReady, CreatedAt: now, Output: "adopted from " + legacy,
-	}
-	if err := f.o.Engine.ImageTag(ctx, legacy, b.Tag); err != nil {
-		return false, fmt.Errorf("images: adopt %s: %w", legacy, err)
-	}
-	if err := f.o.Catalog.insert(ctx, b); err != nil {
-		return false, err
-	}
-	if err := f.o.Catalog.finish(ctx, b.ID, StateReady, img.ID, b.Output, now); err != nil {
-		return false, err
-	}
-	return true, f.o.Catalog.setPointers(ctx, f.o.Kind, f.o.Version, Pointers{Current: id})
 }
 
 // prune removes the image of every ready build the family no longer serves or

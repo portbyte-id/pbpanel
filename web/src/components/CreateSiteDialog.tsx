@@ -160,7 +160,7 @@ export function CreateSiteForm({
           <Label htmlFor={`${id}-php_version`}>PHP version</Label>
           {noPHP ? (
             <p id={`${id}-php_version`} role="status" className="text-sm">
-              No PHP version is installed yet. Pull one on the PHP page, then come back.
+              No PHP version is installed yet. Install one on the PHP page, then come back.
             </p>
           ) : (
             <Select
