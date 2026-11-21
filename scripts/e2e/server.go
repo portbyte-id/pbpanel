@@ -246,9 +246,13 @@ func (f *fakePHP) Get(_ context.Context, ver string) (php.Version, error) {
 	return v[0], nil
 }
 
-func (f *fakePHP) StartPull(context.Context, string) error                    { return nil }
-func (f *fakePHP) Pull(_ context.Context, _ string, _ []php.Extension, _ docker.Progress) error { return nil }
-func (f *fakePHP) CurrentExtensions(context.Context, string) ([]php.Extension, error)         { return nil, nil }
+func (f *fakePHP) StartPull(context.Context, string) error { return nil }
+func (f *fakePHP) Pull(_ context.Context, _ string, _ []php.Extension, _ docker.Progress) error {
+	return nil
+}
+func (f *fakePHP) CurrentExtensions(context.Context, string) ([]php.Extension, error) {
+	return nil, nil
+}
 func (f *fakePHP) StartRebuild(context.Context, string, []string) ([]php.Extension, error) {
 	return nil, nil
 }
@@ -256,12 +260,16 @@ func (f *fakePHP) Rebuild(_ context.Context, _ string, _ []php.Extension, _ dock
 	return images.Build{}, nil
 }
 func (f *fakePHP) Builds(context.Context, string) ([]images.Build, error) { return nil, nil }
-func (f *fakePHP) StartActivate(context.Context, string) error           { return nil }
+func (f *fakePHP) StartActivate(context.Context, string) error            { return nil }
 func (f *fakePHP) Activate(context.Context, string, string) (images.Build, error) {
 	return images.Build{}, nil
 }
-func (f *fakePHP) Remove(context.Context, string, func(context.Context) (bool, error)) error { return nil }
-func (f *fakePHP) Settings(context.Context, string) (php.Settings, error)                   { return php.DefaultSettings(), nil }
+func (f *fakePHP) Remove(context.Context, string, func(context.Context) (bool, error)) error {
+	return nil
+}
+func (f *fakePHP) Settings(context.Context, string) (php.Settings, error) {
+	return php.DefaultSettings(), nil
+}
 func (f *fakePHP) SetSettings(context.Context, string, php.Settings) (confedit.Result, error) {
 	return confedit.Result{}, nil
 }

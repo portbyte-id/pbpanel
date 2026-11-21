@@ -407,7 +407,7 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 	return execute("site", struct {
 		Domain, Blocks, PHPBlock                      string
 		Proxy                                         string
-		AccessLog, ErrorLog, Root, Index               string
+		AccessLog, ErrorLog, Root, Index              string
 		ServesRoot, StaticLocation, PHPSite, HasProxy bool
 	}{
 		Domain: s.Domain, Blocks: blocks, PHPBlock: emptyBlock(BlockPHP),
