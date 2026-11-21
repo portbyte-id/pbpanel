@@ -515,6 +515,40 @@ func TestSubscriberMaySubscribeDuringNotification(t *testing.T) {
 	}
 }
 
+// The rotation keys that take a duration accept zero, because zero is how the
+// operator says "use the other trigger alone"; a negative value has no meaning
+// and a non-duration is the wrong type.
+func TestLogRotationAgeSettings(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+
+	for name, want := range map[string]time.Duration{
+		KeyLogsRotateMaxAge:    168 * time.Hour,
+		KeyLogsRotateRetainAge: 720 * time.Hour,
+	} {
+		got, err := r.Duration(ctx, name)
+		if err != nil || got != want {
+			t.Errorf("%s = %v, %v; want %v", name, got, err, want)
+		}
+		if err := r.Set(ctx, name, "0s"); err != nil {
+			t.Errorf("%s refused 0s: %v", name, err)
+		}
+		if got, err := r.Duration(ctx, name); err != nil || got != 0 {
+			t.Errorf("%s after 0s = %v, %v", name, got, err)
+		}
+		if err := r.Set(ctx, name, "48h"); err != nil {
+			t.Errorf("%s refused 48h: %v", name, err)
+		}
+		for _, bad := range []string{"-1h", "soon", ""} {
+			if err := r.Set(ctx, name, bad); err == nil {
+				t.Errorf("%s accepted %q", name, bad)
+			}
+		}
+	}
+}
+
+// The groups are listed in registry order; this pins that the two duration keys
+// are in the Logs group beside the two they extend.
 func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
@@ -541,7 +575,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 			"tls.renew.days_before", "tls.panel.auto_ip"},
 		"Firewall": {"waf.turnstile.site_key", "waf.turnstile.secret"},
 		"Cron":     {"cron.allow_shell"},
-		"Logs":     {"logs.rotate.max_bytes", "logs.rotate.keep"},
+		"Logs":     {"logs.rotate.max_bytes", "logs.rotate.keep", "logs.rotate.max_age", "logs.rotate.retain_age"},
 		"Runtimes": {"runtimes.prebuilt", "runtimes.url"},
 	}
 	seen := 0

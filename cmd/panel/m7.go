@@ -23,19 +23,27 @@ import (
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
+	"github.com/portbyte-id/server-panel/internal/sshauth"
 	"github.com/portbyte-id/server-panel/internal/store"
 	"github.com/portbyte-id/server-panel/internal/sysinfo"
 )
 
 const (
 	// rotateEvery is how often the panel-owned logs are checked against the
-	// size threshold.
+	// rotation policy. One pass walks the tree twice (once for the live logs,
+	// once to prune the rotated ones) and reads only stat data, so an hourly
+	// check costs two directory walks an hour whatever the host's size. It is
+	// finer than it needs to be for a 7-day age threshold — a log can be up to
+	// an hour staler than logs.rotate.max_age — and coarse enough that the scan
+	// is never a load of its own.
 	rotateEvery = time.Hour
 
 	// Fallbacks used only when a rotation setting cannot be read; they match the
 	// registry defaults.
-	fallbackRotateBytes = 52428800
-	fallbackRotateKeep  = 7
+	fallbackRotateBytes     = 52428800
+	fallbackRotateKeep      = 7
+	fallbackRotateMaxAge    = 168 * time.Hour // 7d
+	fallbackRotateRetainAge = 720 * time.Hour // 30d
 
 	// sampleErrEvery limits how often a failing host sample is logged, so a host
 	// whose /proc cannot be read costs a line per interval of this length rather
@@ -49,6 +57,7 @@ type m7Stack struct {
 	Sysinfo httpapi.SysinfoService
 	Logs    httpapi.LogsService
 	Cron    httpapi.CronService
+	SSHAuth httpapi.SSHAuthMonitor
 
 	sampler *sysinfo.Sampler
 	cron    *cron.Service
@@ -133,6 +142,16 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 
 	m.Logs = newLogRegistry(eng, reg, layout, appsSvc, siteList, m.cron, cronLogs, logger)
 
+	// The SSH monitor reads the same journal the log viewer streams, so it shares
+	// that runner. A host whose journald cannot be probed still starts: the route
+	// answers 503 with the reason instead.
+	sshOpts := sshauth.Options{Journal: sshauth.Journalctl{Run: nginx.ExecRunner{}}}
+	if mon, err := sshauth.New(sshOpts); err != nil {
+		logger.Error("the SSH monitor is not available", "error", err)
+	} else {
+		m.SSHAuth = mon
+	}
+
 	// nginx reopens its logs on USR1, through its unit; PHP-FPM's containers take
 	// the same signal through Docker.
 	hooks := []logs.ReopenHook{reopenNginxLogs(nginx.ExecRunner{})}
@@ -141,10 +160,12 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 	}
 	ctx := context.Background()
 	rot, err := logs.NewRotator(logs.RotateConfig{
-		Root:     layout.LogsDir(),
-		MaxBytes: int64(intSetting(ctx, reg, settings.KeyLogsRotateMaxBytes, fallbackRotateBytes)),
-		Keep:     intSetting(ctx, reg, settings.KeyLogsRotateKeep, fallbackRotateKeep),
-		Compress: true,
+		Root:      layout.LogsDir(),
+		MaxBytes:  int64(intSetting(ctx, reg, settings.KeyLogsRotateMaxBytes, fallbackRotateBytes)),
+		MaxAge:    durationSetting(ctx, reg, settings.KeyLogsRotateMaxAge, fallbackRotateMaxAge),
+		Keep:      intSetting(ctx, reg, settings.KeyLogsRotateKeep, fallbackRotateKeep),
+		RetainAge: durationSetting(ctx, reg, settings.KeyLogsRotateRetainAge, fallbackRotateRetainAge),
+		Compress:  true,
 	}, hooks...)
 	if err != nil {
 		logger.Error("log rotation is not available", "error", err)
