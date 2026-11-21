@@ -24,6 +24,7 @@ import {
   type PoolSettings,
   type SettingsResponse,
   type SettingWrite,
+  type SSHAttemptsQuery,
   type UpdateSiteInput,
 } from "@/lib/api"
 import type { CronJobInput } from "@/lib/cron"
@@ -85,6 +86,8 @@ export const queryKeys = {
   cronRuns: (id: number) => ["cron", id, "runs"] as const,
   jobs: (active: boolean) => ["jobs", active ? "active" : "all"] as const,
   cronRun: (id: number, runId: number) => ["cron", id, "runs", runId] as const,
+  sshAttempts: (range: string, outcome: string, limit: number) =>
+    ["ssh", "attempts", range, outcome, limit] as const,
 }
 
 /**
@@ -1077,5 +1080,34 @@ export function useCronRun(id: number, runId: number | null) {
     queryFn: () => api.cronRun(id, runId ?? 0),
     enabled: runId !== null,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 3_000 : false),
+  })
+}
+
+/* --- SSH login attempts -------------------------------------------------- */
+
+/**
+ * The same value after it has stopped changing for `ms`, so typing into a filter
+ * does not ask the server once per key.
+ */
+export function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return v
+}
+
+/**
+ * The sshd login-attempt feed for one window. A host with no readable sshd
+ * journal answers 503 `unavailable`; that is a permanent condition for the host,
+ * so it is not retried — the page explains it instead.
+ */
+export function useSSHAttempts(query: SSHAttemptsQuery, refetchInterval: number | false = false) {
+  return useQuery({
+    queryKey: queryKeys.sshAttempts(query.range ?? "", query.outcome ?? "", query.limit ?? 0),
+    queryFn: () => api.sshAttempts(query),
+    refetchInterval,
+    retry: false,
   })
 }
