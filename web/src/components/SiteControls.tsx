@@ -53,15 +53,11 @@ export function SiteControls({
 }) {
   const id = useId()
   const names = featureOf(detail, "names")
-  const proxy = featureOf(detail, "proxy")
   const namesOff = names !== undefined && !names.attached
-  const proxyOff = proxy !== undefined && !proxy.attached
 
   const [aliases, setAliases] = useState(detail.aliases.join(" "))
-  const [target, setTarget] = useState(detail.proxy_target ?? "")
 
   const aliasesChanged = parseAliases(aliases).join(" ") !== detail.aliases.join(" ")
-  const targetChanged = target.trim() !== (detail.proxy_target ?? "")
 
   return (
     <div className="flex flex-col gap-6">
@@ -96,40 +92,6 @@ export function SiteControls({
           </p>
         )}
       </form>
-
-      {detail.kind === "proxy" && (
-        <form
-          className="flex flex-col gap-1.5"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onSave({ proxy_target: target.trim() })
-          }}
-        >
-          <Label htmlFor={`${id}-target`}>Pass requests to</Label>
-          <div className="flex gap-2">
-            <Input
-              id={`${id}-target`}
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder="http://127.0.0.1:3000"
-              disabled={proxyOff}
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby={`${id}-target-help`}
-            />
-            <Button type="submit" variant="outline" disabled={proxyOff || pending || !targetChanged}>
-              Save target
-            </Button>
-          </div>
-          {proxyOff && proxy ? (
-            <Detached feature={proxy} id={`${id}-target-help`} />
-          ) : (
-            <p id={`${id}-target-help`} className="text-muted-foreground text-xs">
-              http or https, a host and a port, with no path.
-            </p>
-          )}
-        </form>
-      )}
 
       <ApplyError error={error} fallback="The change could not be saved." />
 

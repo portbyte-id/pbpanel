@@ -154,7 +154,7 @@ describe("CreateSiteForm, PHP", () => {
   it("submits the newest installed version by default, without phpinfo", async () => {
     const user = userEvent.setup()
     const onSubmit = renderForm(["8.3", "8.4"])
-    await user.click(screen.getByRole("radio", { name: /A PHP application/ }))
+    await user.click(screen.getByRole("checkbox", { name: /Run PHP on this site/ }))
     await user.type(screen.getByLabelText("Domain"), "app.test")
     await user.click(screen.getByRole("button", { name: "Create site" }))
 
@@ -169,7 +169,7 @@ describe("CreateSiteForm, PHP", () => {
   it("sends the chosen version and the phpinfo page when ticked", async () => {
     const user = userEvent.setup()
     const onSubmit = renderForm(["8.3", "8.4"])
-    await user.click(screen.getByRole("radio", { name: /A PHP application/ }))
+    await user.click(screen.getByRole("checkbox", { name: /Run PHP on this site/ }))
     await user.type(screen.getByLabelText("Domain"), "app.test")
     await user.selectOptions(screen.getByLabelText("PHP version"), "8.3")
     await user.click(screen.getByRole("checkbox", { name: /Start with a phpinfo\(\) page/ }))
@@ -187,7 +187,7 @@ describe("CreateSiteForm, PHP", () => {
   it("cannot create a PHP site before a version is installed", async () => {
     const user = userEvent.setup()
     renderForm([])
-    await user.click(screen.getByRole("radio", { name: /A PHP application/ }))
+    await user.click(screen.getByRole("checkbox", { name: /Run PHP on this site/ }))
     await user.type(screen.getByLabelText("Domain"), "app.test")
 
     expect(screen.getByRole("status")).toHaveTextContent("No PHP version is installed yet")

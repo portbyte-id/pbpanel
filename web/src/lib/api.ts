@@ -132,7 +132,7 @@ export interface Site {
   kind: SiteKind
   root?: string
   /** The site's proxy routes. A site may have PHP, a root, and routes at once. */
-  proxy_routes: ProxyRoute[]
+  proxy_routes?: ProxyRoute[]
   /**
    * The target of the "/" route, kept for the callers that predate routes. Empty
    * when the site has no "/" route. `proxy_routes` is the truth.

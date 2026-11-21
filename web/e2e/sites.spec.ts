@@ -83,7 +83,7 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   await expect(page.getByText("Saved. nginx accepted the file and reloaded.")).toBeVisible()
   await expect(page.getByRole("cell", { name: `edit site file ${DOMAIN}` }).first()).toBeVisible()
 
-  await page.getByRole("tab", { name: "Overview" }).click()
+  await page.getByRole("tab", { name: "Domain manager" }).click()
   await expect(page.locator('[data-feature="names"]').getByText("detached")).toBeVisible()
   await expect(page.getByLabel("Other domains")).toBeDisabled()
   await expect(page.getByText(/Switched off: the site file has no `include/)).toBeVisible()
@@ -110,6 +110,70 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   await expect(confirm).toBeDisabled()
   await page.getByLabel(`Type ${DOMAIN} to confirm`).fill(DOMAIN)
   await confirm.click()
+  await expect(page).toHaveURL(/\/sites$/)
+  await expect(page.getByText("No sites yet.")).toBeVisible()
+})
+
+/**
+ * ONE dialog, both sections: a site that runs PHP and proxies /api.
+ *
+ * This is the merge the operator asked for. The PHP locations and the /api
+ * proxy location end up in one site, and `location /` belongs to PHP exactly
+ * once: the server refuses a "/" route next to PHP, so the dialog only offers
+ * subpaths there. The check on the file goes through the Config tab, which
+ * shows what nginx actually has.
+ */
+test("create a site with PHP and a /api route in the one dialog", async ({ page }) => {
+  await login(page)
+
+  const domain = "e2e-php-proxy.test"
+  await page.getByRole("link", { name: "Sites" }).click()
+  await expect(page).toHaveURL(/\/sites$/)
+  await page.getByRole("button", { name: "Add site" }).click()
+  await expect(page.getByRole("heading", { name: "Add a site" })).toBeVisible()
+
+  await page.getByLabel("Domain", { exact: true }).fill(domain)
+
+  // The PHP section: on, with the version the harness reports as ready.
+  await page.getByRole("checkbox", { name: /Run PHP on this site/ }).check()
+  await expect(page.getByLabel("PHP version")).toBeVisible()
+
+  // The reverse-proxy section: one subpath row.
+  await page.getByRole("button", { name: "Add route" }).click()
+  await page.getByLabel("Path").fill("/api")
+  await page.getByLabel("Pass requests to").fill("http://127.0.0.1:8080")
+
+  await page.getByRole("button", { name: "Create site" }).click()
+  await expect(page).toHaveURL(new RegExp(`/sites/${domain}$`))
+
+  // Both parts are on the site: PHP in the overview, /api in the routes.
+  await expect(page.getByText(/PHP 8\./)).toBeVisible()
+  await expect(page.getByText("/api → http://127.0.0.1:8080")).toBeVisible()
+
+  // The generated site file has the PHP block and the proxy include line.
+  await page.getByRole("tab", { name: "Config" }).click()
+  await expect(page.locator(".cm-content")).toContainText("# >>> pb:php")
+  await expect(page.locator(".cm-content")).toContainText(`includes/${domain}/proxy.conf;`)
+  const siteFile = await editorText(page)
+  expect(siteFile).toContain("fastcgi_pass unix:/www/panel/run/php-")
+  expect(siteFile).toContain("index index.php index.html index.htm;")
+
+  // The route is editable after creation: rename it to /api/v2 and save.
+  await page.getByRole("tab", { name: "Reverse proxy" }).click()
+  await page.getByLabel("Path").fill("/api/v2")
+  await page.getByRole("button", { name: "Save routes" }).click()
+  await expect(page.getByText("Saved. nginx reloaded.")).toBeVisible()
+
+  await page.getByRole("tab", { name: "Config" }).click()
+  await page.getByRole("tab", { name: "Proxy" }).click()
+  await expect(page.locator(".cm-content")).toContainText("location /api/v2 {")
+  await expect(page.locator(".cm-content")).not.toContainText("location /api {")
+
+  // Deleting it leaves the list empty again.
+  await page.getByRole("tab", { name: "Reset or delete" }).click()
+  await page.getByRole("button", { name: "Delete site" }).first().click()
+  await page.getByLabel(`Type ${domain} to confirm`).fill(domain)
+  await page.getByRole("button", { name: "Delete site" }).last().click()
   await expect(page).toHaveURL(/\/sites$/)
   await expect(page.getByText("No sites yet.")).toBeVisible()
 })
