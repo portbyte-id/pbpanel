@@ -98,7 +98,7 @@ The binary embeds `web/dist`, so build the web UI before a release build.
 | `internal/` | Feature packages: `sites`, `nginx`, `php`, `firewall`, `tls`, `apps`, `fm`, `jobs`, `httpapi`, and others |
 | `web/` | React, TypeScript, Vite and Tailwind UI |
 | `scripts/smoke/` | Smoke tests, one per milestone, run on a real VM |
-| `docs/` | Plan, development plan, and design notes |
+| `docs/` | Plan, development plan, design notes, and the [API](docs/API.md), [environment](docs/ENV.md), [runbook](docs/RUNBOOK.md) and [contributing](docs/CONTRIBUTING.md) references |
 
 ### Tests
 

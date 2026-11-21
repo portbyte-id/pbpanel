@@ -1,0 +1,247 @@
+# HTTP API reference
+
+<!-- AUTO-GENERATED from the mux.Handle registrations in internal/httpapi/*.go. Regenerate with /ecc:update-docs rather than editing by hand. -->
+
+The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. There is no
+`openapi.yaml`; the route table below is generated from the code that registers the routes.
+
+## Conventions
+
+- **Auth.** Every route except `POST /api/login` and `GET /api/health` needs a session cookie.
+  An unauthenticated request answers `401`.
+- **CSRF.** Unsafe methods (`POST`, `PUT`, `DELETE`, `PATCH`) need the session's token in the
+  `X-CSRF-Token` header. A missing or wrong token answers `403`.
+- **Audit.** Every state-changing route writes an audit entry through the audit middleware.
+- **Errors.** The envelope is `{"error": "<class>", "detail": "<sentence>"}` with optional `field`
+  (the rejected input) and `output` (verbatim validator text). A route whose dependency is not
+  wired answers `503 {"error":"unavailable"}`.
+- **Live streams.** Jobs and some logs use Server-Sent Events, resumable with `Last-Event-ID`.
+
+## Routes (156 under `/api`)
+
+### Session and account
+
+| Method | Path |
+|--------|------|
+| `POST` | `/api/login` |
+| `POST` | `/api/logout` |
+| `GET` | `/api/me` |
+| `POST` | `/api/password` |
+| `POST` | `/api/username` |
+| `GET` | `/api/health` (no session needed) |
+
+### Settings, audit, jobs
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/settings` |
+| `PUT` | `/api/settings` |
+| `GET` | `/api/audit` |
+| `GET` | `/api/jobs` |
+| `GET` | `/api/jobs/{id}/events` (SSE) |
+
+### Sites
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/sites` |
+| `POST` | `/api/sites` |
+| `GET` | `/api/sites/{domain}` |
+| `PUT` | `/api/sites/{domain}` |
+| `DELETE` | `/api/sites/{domain}` |
+| `GET` | `/api/sites/{domain}/file` |
+| `PUT` | `/api/sites/{domain}/file` |
+| `GET` | `/api/sites/{domain}/includes` |
+| `GET` | `/api/sites/{domain}/includes/{name}` |
+| `PUT` | `/api/sites/{domain}/includes/{name}` |
+| `POST` | `/api/sites/{domain}/regenerate` |
+| `GET` | `/api/sites/{domain}/waf` |
+| `PUT` | `/api/sites/{domain}/waf` |
+| `GET` | `/api/waf/status` |
+
+### Nginx and config history
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/nginx/settings` |
+| `PUT` | `/api/nginx/settings` |
+| `GET` | `/api/nginx/conf` |
+| `PUT` | `/api/nginx/conf` |
+| `GET` | `/api/services/nginx` |
+| `POST` | `/api/nginx/container/{action}` |
+| `POST` | `/api/nginx/image/version` |
+| `GET` | `/api/nginx/image` |
+| `POST` | `/api/nginx/image/update` |
+| `POST` | `/api/nginx/image/builds/{id}/activate` |
+| `GET` | `/api/config-history/{file}` |
+| `GET` | `/api/config-history/{file}/{version}` |
+| `POST` | `/api/config-history/{file}/{version}/restore` |
+
+### PHP
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/php` |
+| `GET` | `/api/php/extensions` |
+| `POST` | `/api/php/{ver}/pull` |
+| `DELETE` | `/api/php/{ver}` |
+| `POST` | `/api/php/{ver}/build` |
+| `GET` | `/api/php/{ver}/builds` |
+| `POST` | `/api/php/{ver}/builds/{id}/activate` |
+| `GET` | `/api/php/{ver}/settings` |
+| `PUT` | `/api/php/{ver}/settings` |
+| `GET` | `/api/php/{ver}/ini` |
+| `PUT` | `/api/php/{ver}/ini` |
+| `GET` | `/api/sites/{domain}/pool` |
+| `PUT` | `/api/sites/{domain}/pool` |
+| `PUT` | `/api/sites/{domain}/php-version` |
+
+### TLS
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/sites/{domain}/tls` |
+| `POST` | `/api/sites/{domain}/tls/upload` |
+| `POST` | `/api/sites/{domain}/tls/issue` |
+| `POST` | `/api/sites/{domain}/tls/renew` |
+| `PUT` | `/api/sites/{domain}/tls/redirect` |
+| `DELETE` | `/api/sites/{domain}/tls` |
+| `GET` | `/api/tls/certs` |
+| `GET` | `/api/tls/providers` |
+| `PUT` | `/api/tls/providers/{name}` |
+| `DELETE` | `/api/tls/providers/{name}` |
+| `GET` | `/api/panel/cert` |
+| `POST` | `/api/panel/cert/upload` |
+| `POST` | `/api/panel/cert/issue` |
+| `GET` | `/api/panel/cert/ip` |
+| `POST` | `/api/panel/cert/ip` |
+
+### File manager
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/fm/list` |
+| `GET` | `/api/fm/stat` |
+| `GET` | `/api/fm/disks` |
+| `POST` | `/api/fm/mkdir` |
+| `POST` | `/api/fm/create` |
+| `POST` | `/api/fm/rename` |
+| `POST` | `/api/fm/move` |
+| `POST` | `/api/fm/copy` |
+| `POST` | `/api/fm/chmod` |
+| `POST` | `/api/fm/chown` |
+| `POST` | `/api/fm/delete` |
+| `GET` | `/api/fm/trash` |
+| `POST` | `/api/fm/trash/{id}/restore` |
+| `DELETE` | `/api/fm/trash/{id}` |
+| `GET` | `/api/fm/file` |
+| `PUT` | `/api/fm/file` |
+| `POST` | `/api/fm/uploads` |
+| `GET` | `/api/fm/uploads/{id}` |
+| `PUT` | `/api/fm/uploads/{id}` |
+| `POST` | `/api/fm/uploads/{id}/complete` |
+| `DELETE` | `/api/fm/uploads/{id}` |
+| `GET` | `/api/fm/download` |
+| `POST` | `/api/fm/archive` |
+| `POST` | `/api/fm/extract` |
+
+### Firewall and WAF
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/firewall` |
+| `GET` | `/api/firewall/rules` |
+| `POST` | `/api/firewall/rules` |
+| `PUT` | `/api/firewall/rules/{id}` |
+| `DELETE` | `/api/firewall/rules/{id}` |
+| `GET` | `/api/firewall/blocklist` |
+| `POST` | `/api/firewall/blocklist` |
+| `DELETE` | `/api/firewall/blocklist/{id}` |
+| `GET` | `/api/firewall/allowlist` |
+| `POST` | `/api/firewall/allowlist` |
+| `DELETE` | `/api/firewall/allowlist/{id}` |
+| `POST` | `/api/firewall/enable` |
+| `POST` | `/api/firewall/apply` |
+| `POST` | `/api/firewall/confirm` |
+| `POST` | `/api/firewall/revert` |
+| `POST` | `/api/firewall/disable` |
+| `GET` | `/api/waf/traffic` |
+| `GET` | `/api/waf/requests` |
+| `GET` | `/api/waf/events` |
+| `GET` | `/api/waf/events/summary` |
+
+### Apps and runtimes
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/apps` |
+| `POST` | `/api/apps` |
+| `GET` | `/api/apps/{name}` |
+| `PUT` | `/api/apps/{name}` |
+| `DELETE` | `/api/apps/{name}` |
+| `POST` | `/api/apps/{name}/start` |
+| `POST` | `/api/apps/{name}/stop` |
+| `POST` | `/api/apps/{name}/restart` |
+| `GET` | `/api/apps/{name}/logs` |
+| `GET` | `/api/apps/{name}/logs/stream` |
+| `GET` | `/api/runtimes` |
+| `POST` | `/api/runtimes/node` |
+| `DELETE` | `/api/runtimes/node/{version}` |
+
+### Cron
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/cron` |
+| `POST` | `/api/cron` |
+| `GET` | `/api/cron/{id}` |
+| `PUT` | `/api/cron/{id}` |
+| `DELETE` | `/api/cron/{id}` |
+| `POST` | `/api/cron/{id}/enable` |
+| `POST` | `/api/cron/{id}/disable` |
+| `POST` | `/api/cron/{id}/run` |
+| `GET` | `/api/cron/{id}/runs` |
+| `GET` | `/api/cron/{id}/runs/{runId}` |
+
+Note: run detail is `/api/cron/{id}/runs/{runId}`, not `/api/cron/runs/{runId}` — Go's mux cannot
+register both. See [design/m7-api.md](design/m7-api.md).
+
+### Dashboard, services, logs
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/sysinfo` |
+| `GET` | `/api/sysinfo/stream` (SSE) |
+| `GET` | `/api/services` |
+| `POST` | `/api/services/{name}/{action}` |
+| `GET` | `/api/logs` |
+| `GET` | `/api/logs/{id}/tail` |
+| `GET` | `/api/logs/{id}/search` |
+
+### Docker
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/docker` |
+| `GET` | `/api/docker/containers` |
+| `GET` | `/api/docker/stats` |
+| `GET` | `/api/docker/containers/{id}/stats` |
+| `GET` | `/api/docker/containers/{id}/top` |
+| `GET` | `/api/docker/containers/{id}/logs` |
+| `POST` | `/api/docker/containers/{id}/start` |
+| `POST` | `/api/docker/containers/{id}/stop` |
+| `POST` | `/api/docker/containers/{id}/restart` |
+| `POST` | `/api/docker/containers/{id}/kill` |
+| `DELETE` | `/api/docker/containers/{id}` |
+| `GET` | `/api/docker/images` |
+| `DELETE` | `/api/docker/images/{id}` |
+| `GET` | `/api/docker/volumes` |
+| `DELETE` | `/api/docker/volumes/{name}` |
+
+## Detail per module
+
+Nested payloads (request and response bodies) are documented per module:
+
+- [design/m7-api.md](design/m7-api.md) — sysinfo, services, logs, cron
+- Site, nginx, PHP and TLS routes: `internal/httpapi/handlers_*.go`, one file per module.
+<!-- END AUTO-GENERATED -->
