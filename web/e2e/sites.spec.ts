@@ -15,7 +15,8 @@ const DOMAIN = "e2e-site.test"
 async function login(page: Page) {
   await page.goto("/login")
   await page.getByLabel("Username").fill("admin")
-  await page.getByLabel("Password").fill(PASSWORD)
+  // Not bare "Password": the show/hide button's aria-label contains it too.
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD)
   await page.getByRole("button", { name: "Sign in" }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 }
@@ -34,13 +35,21 @@ async function editorText(page: Page): Promise<string> {
   return lines.join("\n")
 }
 
+/**
+ * One section of the site dialog's rail. It is a nav of buttons, not an ARIA
+ * tablist: the dialog swaps a panel, it does not run a tab widget.
+ */
+function section(page: Page, name: string) {
+  return page.getByRole("navigation", { name: "Site sections" }).getByRole("button", { name })
+}
+
 test("create a site, break its config, detach a control, regenerate", async ({ page }) => {
   await login(page)
 
   // 1. Create a static site from the list page.
   await page.getByRole("link", { name: "Sites" }).click()
   await expect(page).toHaveURL(/\/sites$/)
-  await page.getByRole("button", { name: "Add site" }).click()
+  await page.getByRole("button", { name: "Add site" }).first().click()
   await page.getByLabel("Domain", { exact: true }).fill(DOMAIN)
   await page.getByLabel("Other domains").fill(`www.${DOMAIN}`)
   await page.getByRole("button", { name: "Create site" }).click()
@@ -53,10 +62,10 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
 
   // 3. Break the config. The save is refused, nginx's message is shown as it
   //    came, and the draft stays so it can be fixed.
-  await page.getByRole("tab", { name: "Config" }).click()
+  await section(page, "Config").click()
   await expect(page.locator(".cm-content")).toContainText("server {")
   const original = await editorText(page)
-  expect(original).toContain(`includes/${DOMAIN}/names.conf;`)
+  expect(original).toContain("# >>> pb:names")
 
   await setEditor(page, "server {\n    bogus_directive on;\n}\n")
   await page.getByRole("button", { name: "Save and reload" }).click()
@@ -68,36 +77,45 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
 
   // 4. The file on the server is what it was: a reload shows the original.
   await page.reload()
-  await page.getByRole("tab", { name: "Config" }).click()
-  await expect(page.locator(".cm-content")).toContainText(`includes/${DOMAIN}/names.conf;`)
+  await section(page, "Config").click()
+  await expect(page.locator(".cm-content")).toContainText("# >>> pb:names")
   await expect(page.locator(".cm-content")).not.toContainText("bogus_directive")
 
-  // 5. A valid edit that removes the names include saves, and detaches the
-  //    Domains control: it is disabled and says which line is missing.
+  // 5. A valid edit that deletes the names block's marker lines saves, and
+  //    detaches the Domains control: it is disabled and says what is missing.
   const withoutNames = original
     .split("\n")
-    .filter((line) => !line.includes(`includes/${DOMAIN}/names.conf;`))
+    .filter((line) => line.trim() !== "# >>> pb:names" && line.trim() !== "# <<< pb:names")
     .join("\n")
   await setEditor(page, `${withoutNames}\n`)
   await page.getByRole("button", { name: "Save and reload" }).click()
   await expect(page.getByText("Saved. nginx accepted the file and reloaded.")).toBeVisible()
   await expect(page.getByRole("cell", { name: `edit site file ${DOMAIN}` }).first()).toBeVisible()
 
-  await page.getByRole("tab", { name: "Domain manager" }).click()
+  // The dialog re-reads the site: one reload, then the rail.
+  await page.reload()
+  await section(page, "Domain manager").click()
   await expect(page.locator('[data-feature="names"]').getByText("detached")).toBeVisible()
   await expect(page.getByLabel("Other domains")).toBeDisabled()
-  await expect(page.getByText(/Switched off: the site file has no `include/)).toBeVisible()
+  await expect(page.getByText(/Switched off: the site file has no/)).toBeVisible()
 
   // 6. Regenerate, after a confirmation, connects it again.
+  await section(page, "Reset or delete").click()
   await page.getByRole("button", { name: "Regenerate site file" }).click()
   await page.getByRole("button", { name: "Regenerate", exact: true }).click()
   await expect(page.getByText("Site file regenerated.")).toBeVisible()
+  await page.reload()
+  await section(page, "Domain manager").click()
   await expect(page.locator('[data-feature="names"]').getByText("connected")).toBeVisible()
   await expect(page.getByLabel("Other domains")).toBeEnabled()
 
-  // 7. The nginx page shows the service and saves a setting.
+  // 7. The nginx page shows the service and saves a setting. The site dialog is
+  //    modal, so it is closed before the rail is used.
+  await page.keyboard.press("Escape")
+  await expect(page).toHaveURL(/\/sites$/)
   await page.getByRole("link", { name: "Nginx" }).click()
   await expect(page.getByText(/nginx is running/)).toBeVisible()
+  await page.getByRole("tab", { name: "Settings" }).click()
   await page.getByLabel("Largest upload").fill("250m")
   await page.getByRole("button", { name: "Save and reload" }).click()
   await expect(page.getByText("Saved. nginx reloaded.")).toBeVisible()
@@ -105,7 +123,8 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   // 8. Delete needs the domain typed, and returns to the list without the site.
   await page.getByRole("link", { name: "Sites" }).click()
   await page.getByRole("link", { name: DOMAIN, exact: true }).click()
-  await page.getByRole("button", { name: "Delete site" }).click()
+  await section(page, "Reset or delete").click()
+  await page.getByRole("button", { name: "Delete site" }).first().click()
   const confirm = page.getByRole("button", { name: "Delete site" }).last()
   await expect(confirm).toBeDisabled()
   await page.getByLabel(`Type ${DOMAIN} to confirm`).fill(DOMAIN)
@@ -129,7 +148,7 @@ test("create a site with PHP and a /api route in the one dialog", async ({ page 
   const domain = "e2e-php-proxy.test"
   await page.getByRole("link", { name: "Sites" }).click()
   await expect(page).toHaveURL(/\/sites$/)
-  await page.getByRole("button", { name: "Add site" }).click()
+  await page.getByRole("button", { name: "Add site" }).first().click()
   await expect(page.getByRole("heading", { name: "Add a site" })).toBeVisible()
 
   await page.getByLabel("Domain", { exact: true }).fill(domain)
@@ -140,8 +159,8 @@ test("create a site with PHP and a /api route in the one dialog", async ({ page 
 
   // The reverse-proxy section: one subpath row.
   await page.getByRole("button", { name: "Add route" }).click()
-  await page.getByLabel("Path").fill("/api")
-  await page.getByLabel("Pass requests to").fill("http://127.0.0.1:8080")
+  await page.getByRole("textbox", { name: "Path", exact: true }).fill("/api")
+  await page.getByRole("textbox", { name: "Pass requests to" }).fill("http://127.0.0.1:8080")
 
   await page.getByRole("button", { name: "Create site" }).click()
   await expect(page).toHaveURL(new RegExp(`/sites/${domain}$`))
@@ -150,27 +169,31 @@ test("create a site with PHP and a /api route in the one dialog", async ({ page 
   await expect(page.getByText(/PHP 8\./)).toBeVisible()
   await expect(page.getByText("/api → http://127.0.0.1:8080")).toBeVisible()
 
-  // The generated site file has the PHP block and the proxy include line.
-  await page.getByRole("tab", { name: "Config" }).click()
-  await expect(page.locator(".cm-content")).toContainText("# >>> pb:php")
-  await expect(page.locator(".cm-content")).toContainText(`includes/${domain}/proxy.conf;`)
-  const siteFile = await editorText(page)
-  expect(siteFile).toContain("fastcgi_pass unix:/www/panel/run/php-")
-  expect(siteFile).toContain("index index.php index.html index.htm;")
+  // The generated site file has the PHP block and the proxy include line. The
+  // editor virtualizes a long file (only the visible lines are in the DOM), so
+  // the file is read from the server through this page's own session instead:
+  // that is what nginx has, not a slice of what the editor rendered.
+  await section(page, "Config").click()
+  await expect(page.locator(".cm-content")).toContainText("index index.php")
+  const siteFile = await (await page.request.get(`/api/sites/${domain}/file`)).json()
+  expect(siteFile.content).toContain("# >>> pb:php")
+  expect(siteFile.content).toContain(`include /www/panel/nginx/includes/${domain}/proxy.conf;`)
+  expect(siteFile.content).toContain("fastcgi_pass unix:/www/panel/run/php-")
+  expect(siteFile.content).toContain("index index.php index.html index.htm;")
 
   // The route is editable after creation: rename it to /api/v2 and save.
-  await page.getByRole("tab", { name: "Reverse proxy" }).click()
-  await page.getByLabel("Path").fill("/api/v2")
+  await section(page, "Reverse proxy").click()
+  await page.getByRole("textbox", { name: "Path", exact: true }).fill("/api/v2")
   await page.getByRole("button", { name: "Save routes" }).click()
   await expect(page.getByText("Saved. nginx reloaded.")).toBeVisible()
 
-  await page.getByRole("tab", { name: "Config" }).click()
-  await page.getByRole("tab", { name: "Proxy" }).click()
-  await expect(page.locator(".cm-content")).toContainText("location /api/v2 {")
-  await expect(page.locator(".cm-content")).not.toContainText("location /api {")
+  const proxyConf = await (await page.request.get(`/api/sites/${domain}/includes/proxy.conf`)).json()
+  expect(proxyConf.content).toContain("location /api/v2 {")
+  expect(proxyConf.content).toContain("proxy_pass http://127.0.0.1:8080/;")
+  expect(proxyConf.content).not.toContain("location /api {")
 
   // Deleting it leaves the list empty again.
-  await page.getByRole("tab", { name: "Reset or delete" }).click()
+  await section(page, "Reset or delete").click()
   await page.getByRole("button", { name: "Delete site" }).first().click()
   await page.getByLabel(`Type ${domain} to confirm`).fill(domain)
   await page.getByRole("button", { name: "Delete site" }).last().click()
