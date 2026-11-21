@@ -53,6 +53,13 @@ type FamilyOptions struct {
 	Log *slog.Logger
 	// Now defaults to time.Now.
 	Now func() time.Time
+	// ChooseID lets a family build under an ID it did not generate: a prebuilt
+	// package was compiled with its own ID in its prefix, and a host can only use
+	// it under that ID. exists reports whether the catalogue already holds an ID.
+	// It returns false to take a generated one. An ID that is not shaped like one
+	// or that the catalogue already holds is ignored, so a build never replaces a
+	// row. Nil always generates.
+	ChooseID func(ctx context.Context, exists func(id string) bool) (string, bool)
 }
 
 // Family manages the builds of one image family: one kind and one version. Its
@@ -171,7 +178,7 @@ func (f *Family) Build(ctx context.Context, extensions []string, progress docker
 	defer f.release()
 
 	now := f.o.Now()
-	id, err := NewID(now)
+	id, err := f.nextID(ctx, now)
 	if err != nil {
 		return Build{}, err
 	}
@@ -220,6 +227,23 @@ func (f *Family) Build(ctx context.Context, extensions []string, progress docker
 	}
 	b.State = StateReady
 	return f.promote(ctx, b, true)
+}
+
+// nextID is the ID the next build is made under: the one ChooseID offers when it
+// is usable, otherwise a generated one.
+func (f *Family) nextID(ctx context.Context, now time.Time) (string, error) {
+	if f.o.ChooseID != nil {
+		// Anything but "not found" counts as taken: an ID is only reused when the
+		// catalogue is known not to hold it.
+		taken := func(id string) bool {
+			_, err := f.o.Catalog.Get(ctx, id)
+			return !errors.Is(err, ErrNotFound)
+		}
+		if id, ok := f.o.ChooseID(ctx, taken); ok && CheckID(id) == nil && !taken(id) {
+			return id, nil
+		}
+	}
+	return NewID(now)
 }
 
 // Activate makes an existing ready build the one served. It is how a previous

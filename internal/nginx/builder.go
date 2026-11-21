@@ -165,17 +165,21 @@ type DockerBuilder struct {
 // Build compiles build id of version and leaves it at P.BuildDir(id). The builder
 // image and container are removed whether or not it worked.
 func (b DockerBuilder) Build(ctx context.Context, id, version string, progress docker.Progress) error {
-	return native.DockerBuilder{
-		Eng:       b.Eng,
-		OSRelease: b.OSRelease,
-		Spec: native.Spec{
-			Product:         product,
-			TagPrefix:       "panel/nginx-build",
-			ContainerPrefix: "panel-nginx-build-",
-			BuildDir:        b.P.BuildDir,
-			VersionsDir:     b.P.VersionsDir,
-			Dockerfile:      func(base, id, version string) []byte { return DockerfileFor(base, id, version, b.P) },
-			Required:        buildMarkers,
-		},
-	}.Build(ctx, id, version, progress)
+	return native.DockerBuilder{Eng: b.Eng, OSRelease: b.OSRelease, Spec: BuildSpec(b.P)}.Build(ctx, id, version, progress)
+}
+
+// BuildSpec is how nginx is built under p: the recipe, the prefix it is compiled
+// into, and where a finished build is kept. The package CI job takes it and points
+// VersionsDir somewhere else, so what it publishes is made by the recipe the host
+// would run.
+func BuildSpec(p Paths) native.Spec {
+	return native.Spec{
+		Product:         product,
+		TagPrefix:       "panel/nginx-build",
+		ContainerPrefix: "panel-nginx-build-",
+		BuildDir:        p.BuildDir,
+		VersionsDir:     p.VersionsDir,
+		Dockerfile:      func(base, id, version string) []byte { return DockerfileFor(base, id, version, p) },
+		Required:        buildMarkers,
+	}
 }
