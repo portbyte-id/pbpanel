@@ -652,6 +652,64 @@ export interface AllowlistEntry {
   comment?: string
 }
 
+/* --- SSH login attempts -------------------------------------------------- */
+
+export type SSHAttemptOutcome = "failed" | "success"
+export type SSHAuthMethod = "password" | "publickey" | "none"
+
+/** One authentication attempt, as sshauth.Attempt carries it. */
+export interface SSHAttempt {
+  at: string
+  ip: string
+  user: string
+  port: number
+  outcome: SSHAttemptOutcome
+  method: SSHAuthMethod
+}
+
+export interface SSHTopIP {
+  ip: string
+  failed: number
+  succeeded: number
+  total: number
+}
+
+export interface SSHTopUser {
+  user: string
+  failed: number
+  succeeded: number
+  total: number
+}
+
+/** The aggregate over the whole window, not only the returned page. */
+export interface SSHSummary {
+  failed: number
+  succeeded: number
+  distinct_ips: number
+  distinct_users: number
+  top_ips: SSHTopIP[]
+  top_users: SSHTopUser[]
+}
+
+/** The answer to one query: a newest-first feed and its summary. */
+export interface SSHAttemptsReport {
+  from: string
+  to: string
+  outcome: "" | SSHAttemptOutcome
+  limit: number
+  total: number
+  attempts: SSHAttempt[]
+  summary: SSHSummary
+}
+
+export interface SSHAttemptsQuery {
+  /** A Go duration between 5m and 720h; the server defaults to 24h. */
+  range?: string
+  outcome?: "" | SSHAttemptOutcome
+  /** 1..1000; the server defaults to 200. */
+  limit?: number
+}
+
 /** A failed request. `code` is the envelope's `error`, `detail` its sentence. */
 export class ApiError extends Error {
   readonly status: number
@@ -898,6 +956,15 @@ export class ApiClient {
 
   async wafEventSummary(site: string, range: TrafficRange): Promise<WafEventSummary> {
     return this.request<WafEventSummary>(`/api/waf/events/summary${queryString({ site, range })}`)
+  }
+
+  /**
+   * GET /api/ssh/attempts. On a host whose sshd journal cannot be read this
+   * answers 503 `unavailable`, which is a state to explain, not a request to
+   * retry: the caller branches on `ApiError.code`.
+   */
+  async sshAttempts(query: SSHAttemptsQuery = {}): Promise<SSHAttemptsReport> {
+    return this.request<SSHAttemptsReport>(`/api/ssh/attempts${queryString({ ...query })}`)
   }
 
   /** GET /api/sites/{domain}/tls. Null while the site has no certificate. */
