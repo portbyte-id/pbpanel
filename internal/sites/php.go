@@ -81,7 +81,7 @@ func (m *Manager) renderPHPInclude(s Site) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.p.RenderPHP(m.php.Paths().Socket(ver, s.PHPPool))
+	return m.p.RenderPHP(m.php.Paths().Socket(ver, s.PHPPool), s.Rewrite.FrontControllerTail())
 }
 
 // insertPool records a new site's pool. Two domains can map to one pool name;

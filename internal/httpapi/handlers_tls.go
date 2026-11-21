@@ -559,8 +559,99 @@ func (s *server) tlsSiteIssue(t *TLSDeps, site sites.Site, w http.ResponseWriter
 	if !ok {
 		return
 	}
+	// A certificate already in the store that covers this site is put in place as
+	// it is, instead of ordering another from the CA. A wildcard row matches a
+	// name one label deep, so one *.example.com serves every subdomain without a
+	// fresh order. This touches no network, so the answer is immediate.
+	if view, reused, err := t.reuseForSite(r.Context(), site, plan.names); err != nil {
+		s.writeInternal(w, r, err)
+		return
+	} else if reused {
+		writeJSON(w, http.StatusOK, struct {
+			Reused bool      `json:"reused"`
+			Cert   *CertView `json:"cert"`
+		}{true, view})
+		return
+	}
 	note(r, "method", plan.method)
 	s.startIssue(t, w, r, site.Domain, plan, false)
+}
+
+// reuseForSite looks for a valid certificate in the store whose names cover
+// every name the site needs, and, when it finds one, copies its files to the
+// site's certificate directory, records a row for the site and makes it live.
+// The names it must cover are the issued names (plan.names); the wildcard in a
+// stored certificate is matched one label deep by coversName.
+func (t *TLSDeps) reuseForSite(ctx context.Context, site sites.Site, want []string) (*CertView, bool, error) {
+	certs, err := t.Store.ListCerts(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	now := t.now()
+	var (
+		pick     tlspkg.Cert
+		pickCert []byte
+		pickKey  []byte
+		found    bool
+	)
+	for _, c := range certs {
+		if c.Domain == site.Domain {
+			continue
+		}
+		if now.Before(c.NotBefore) || !now.Before(c.NotAfter) {
+			continue
+		}
+		if !coversAll(c.Names, want) {
+			continue
+		}
+		certFile, keyFile := tlspkg.SitePaths(t.Root, c.Domain)
+		certPEM, err := os.ReadFile(filepath.FromSlash(certFile))
+		if err != nil {
+			continue
+		}
+		keyPEM, err := os.ReadFile(filepath.FromSlash(keyFile))
+		if err != nil {
+			continue
+		}
+		pick, pickCert, pickKey, found = c, certPEM, keyPEM, true
+		break
+	}
+	if !found {
+		return nil, false, nil
+	}
+
+	// Put the files where this site's tls block reads them, then a row of its own.
+	if err := tlspkg.WriteSiteFiles(t.Root, site.Domain, pickCert, pickKey); err != nil {
+		return nil, false, err
+	}
+	row := pick
+	row.Domain = site.Domain
+	row.RedirectHTTP = false
+	row.LastRenewalAt, row.LastRenewalResult, row.LastRenewalError = time.Time{}, "", ""
+	if err := t.Store.PutCert(ctx, row); err != nil {
+		return nil, false, err
+	}
+	// Make it live: the site's tls block is rewritten and nginx reloads, or the
+	// files are rolled back and the error is reported here rather than claimed as
+	// live.
+	if t.Sites != nil {
+		if _, err := t.Sites.RefreshTLS(ctx, site.Domain); err != nil {
+			return nil, false, err
+		}
+	}
+	v := t.view(row)
+	return &v, true, nil
+}
+
+// coversAll reports whether names (a stored certificate's) cover every wanted
+// name, a wildcard matching one label deep.
+func coversAll(names, want []string) bool {
+	for _, w := range want {
+		if !coversName(names, w) {
+			return false
+		}
+	}
+	return true
 }
 
 // startIssue runs an issuance as a job: order, then Apply. panel marks the

@@ -30,8 +30,9 @@ func (p Paths) LogDir(name string) string { return path.Join(p.Root, "panel", "l
 func (p Paths) LogFile(name string) string { return path.Join(p.LogDir(name), "out.log") }
 
 // AppsRoot is the directory whose subdirectories are the apps' default working
-// directories.
-func (p Paths) AppsRoot() string { return path.Join(p.Root, "services", "apps") }
+// directories. It is the sites tree, so an app's working directory sits with the
+// web roots a site serves rather than in a separate apps tree.
+func (p Paths) AppsRoot() string { return path.Join(p.Root, "services", "sites") }
 
 // DefaultWorkDir is the working directory an app gets when none is given.
 func (p Paths) DefaultWorkDir(name string) string { return path.Join(p.AppsRoot(), name) }

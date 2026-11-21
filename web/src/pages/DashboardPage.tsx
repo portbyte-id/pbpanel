@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { deriveAlerts, type AlertLink, type DashboardAlert } from "@/lib/alerts"
 import { ApiError } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import {
   useAudit,
   useControlService,
@@ -42,7 +43,7 @@ import {
 import { cn } from "@/lib/utils"
 
 function errorText(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.detail || fallback : fallback
+  return describeError(error, fallback)
 }
 
 /** Warning from 75%, a problem from 90%: the point where an operator should look. */

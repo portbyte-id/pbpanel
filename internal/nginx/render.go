@@ -193,11 +193,16 @@ const tlsEmptyTemplate = `# Managed by PB panel (TLS). This site has no certific
 // also redirect the challenge path; the second `if` clears the flag for exactly
 // that prefix. The flag is built with set rather than a nested condition
 // because nginx has no "and". The scheme test makes it a no-op on :443.
+// The QUIC listeners carry no `reuseport`: nginx allows that option on only one
+// `listen` for a given address:port in the whole configuration, so a second site
+// with a certificate fails `nginx -t` with "duplicate listen options". Each
+// site's listeners live in its own file, so the option cannot belong here. With
+// it gone each worker shares one socket per port instead of one per worker.
 const tlsIncludeTemplate = `# Managed by PB panel (TLS). Rewritten when the certificate changes.
 listen 443 ssl;
-listen 443 quic reuseport;
+listen 443 quic;
 listen [::]:443 ssl;
-listen [::]:443 quic reuseport;
+listen [::]:443 quic;
 http2 on;
 http3 on;
 
@@ -239,10 +244,12 @@ location / {
 // phpIncludeTemplate sends a request for a file that does not exist to
 // index.php, which is what front-controller applications expect, and passes
 // only scripts that exist to FPM, so a crafted path cannot make PHP run a
-// file that is not a script.
+// file that is not a script. FrontController is the `try_files` fallback the
+// site's rewrite preset chose (all three presets pass to index.php; they differ
+// in the query string).
 const phpIncludeTemplate = `# Managed by PB panel (PHP version and pool).
 location / {
-    try_files $uri $uri/ /index.php?$query_string;
+    try_files $uri $uri/ {{.FrontController}};
 }
 
 location ~ \.php$ {
@@ -419,15 +426,26 @@ func RenderProxy(target string) ([]byte, error) {
 	return execute("proxy", struct{ Target string }{t})
 }
 
-// RenderPHP renders php.conf for a pool socket.
-func (p Paths) RenderPHP(socket string) ([]byte, error) {
+// RenderPHP renders php.conf for a pool socket. front is the `try_files`
+// fallback the site's rewrite preset chose; an empty front uses the panel's
+// generic default (index.php with the original query string). front is one of a
+// fixed set of literals, so it is checked against that set rather than through
+// safeToken, which refuses the `$` an nginx variable needs.
+func (p Paths) RenderPHP(socket, front string) ([]byte, error) {
 	if err := safeToken("php socket", socket); err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(socket, p.RunDir()+"/") || path.Clean(socket) != socket {
 		return nil, fmt.Errorf("nginx: php socket %q is outside %s, where PHP-FPM keeps its sockets", socket, p.RunDir())
 	}
-	return execute("php", struct{ Socket, FastCGIParams string }{socket, p.FastCGIParams()})
+	switch front {
+	case "":
+		front = "/index.php?$query_string"
+	case "/index.php?$query_string", "/index.php?$args":
+	default:
+		return nil, fmt.Errorf("nginx: front controller %q is not a known preset", front)
+	}
+	return execute("php", struct{ Socket, FastCGIParams, FrontController string }{socket, p.FastCGIParams(), front})
 }
 
 // CheckProxyTarget validates a proxy target and returns its canonical form:

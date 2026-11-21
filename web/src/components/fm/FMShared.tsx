@@ -1,7 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 
 import { Button } from "@/components/ui/button"
-import { ApiError, type FMEntry, type FMListing } from "@/lib/api"
+import { type FMEntry, type FMListing } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import { uploadQueue, type UploadTask } from "@/lib/uploadQueue"
 import { cn } from "@/lib/utils"
 
@@ -258,5 +259,5 @@ export function UploadQueuePanel({
 
 /** A sentence for the error a file-manager request produced. */
 export function fmErrorText(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.detail : fallback
+  return describeError(err, fallback)
 }

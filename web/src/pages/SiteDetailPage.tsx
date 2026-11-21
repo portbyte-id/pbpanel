@@ -1,6 +1,6 @@
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { useNavigate } from "@tanstack/react-router"
-import { useState } from "react"
+import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
@@ -20,12 +20,20 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ApiError, type SiteDetail } from "@/lib/api"
+import { Select } from "@/components/ui/select"
+import { ApiError, type SiteDetail, type SiteRewrite } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { useDeleteSite, useRegenerateSite, useSite, useUpdateSite } from "@/lib/queries"
+import {
+  type ConfigSource,
+  useDeleteSite,
+  useRegenerateSite,
+  useSite,
+  useSiteIncludes,
+  useUpdateSite,
+} from "@/lib/queries"
 import { kindLabel } from "@/pages/SitesPage"
 
-type Section = "domains" | "config" | "ssl" | "waf" | "php" | "logs" | "delete"
+type Section = "domains" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
 
 /**
  * One site, as a dialog over the sites list: a rail of sections on the left, the
@@ -53,6 +61,7 @@ export function SiteDetailDialog({
     { id: "ssl", label: "SSL" },
     { id: "waf", label: "Firewall" },
     ...(data?.kind === "php" ? [{ id: "php" as const, label: "PHP version" }] : []),
+    ...(data?.kind === "php" ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
     { id: "logs", label: "Response log" },
     { id: "delete", label: "Reset or delete" },
   ]
@@ -104,10 +113,11 @@ export function SiteDetailDialog({
 
             <div className="min-h-0 overflow-y-auto p-4">
               {section === "domains" && <Overview detail={data} />}
-              {section === "config" && <ConfigFilePanel source={{ kind: "site", domain: data.domain }} />}
+              {section === "config" && <SiteConfig detail={data} />}
               {section === "ssl" && <SiteTLS detail={data} />}
               {section === "waf" && <SiteWAF domain={data.domain} prefill={wafPrefill} />}
               {section === "php" && data.kind === "php" && <SitePHP detail={data} />}
+              {section === "rewrite" && data.kind === "php" && <SiteRewriteSection detail={data} />}
               {section === "logs" && <Logs domain={data.domain} php={data.kind === "php"} />}
               {section === "delete" && <DangerZone detail={data} onGone={onClose} />}
             </div>
@@ -281,5 +291,138 @@ function Logs({ domain, php }: { domain: string; php: boolean }) {
         {php && <li>/www/panel/logs/sites/{domain}.php.log</li>}
       </ul>
     </div>
+  )
+}
+
+/**
+ * The site's nginx configuration, every file of it. The first tab is the site's
+ * own file; the rest are the panel-owned include files, each edited here and each
+ * validated with `nginx -t` on save. This is how a reverse-proxy site's proxy_pass
+ * block, or a site's listen and TLS directives, can be changed directly.
+ */
+function SiteConfig({ detail }: { detail: SiteDetail }) {
+  const includes = useSiteIncludes(detail.domain)
+  const [selected, setSelected] = useState("site")
+  const list = includes.data?.includes ?? []
+
+  const source: ConfigSource =
+    selected === "site"
+      ? { kind: "site", domain: detail.domain }
+      : { kind: "site-include", domain: detail.domain, name: selected }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div role="tablist" aria-label="Configuration files" className="flex flex-wrap gap-1">
+        <ConfigTab active={selected === "site"} onClick={() => setSelected("site")}>
+          Site file
+        </ConfigTab>
+        {list.map((inc) => (
+          <ConfigTab
+            key={inc.name}
+            active={selected === inc.name}
+            onClick={() => setSelected(inc.name)}
+          >
+            {inc.label}
+            {inc.missing && <span className="text-muted-foreground"> (missing)</span>}
+          </ConfigTab>
+        ))}
+      </div>
+      <ConfigFilePanel key={selected} source={source} />
+    </div>
+  )
+}
+
+function ConfigTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "focus-visible:ring-ring rounded-md px-2.5 py-1.5 text-xs outline-none focus-visible:ring-2",
+        active
+          ? "bg-accent text-foreground font-medium"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+const REWRITE_PRESETS: { value: SiteRewrite; label: string; tail: string }[] = [
+  { value: "", label: "None (generic front controller)", tail: "/index.php?$query_string" },
+  { value: "laravel", label: "Laravel", tail: "/index.php?$query_string" },
+  { value: "wordpress", label: "WordPress", tail: "/index.php?$args" },
+]
+
+/**
+ * The URL-rewrite preset of a PHP site. Changing it rewrites the panel-owned
+ * `php.conf` include, which is validated with `nginx -t` before it goes live.
+ */
+function SiteRewriteSection({ detail }: { detail: SiteDetail }) {
+  const id = useId()
+  const update = useUpdateSite(detail.domain)
+  const current: SiteRewrite = detail.rewrite ?? ""
+  const [preset, setPreset] = useState<SiteRewrite>(current)
+  const changed = preset !== current
+  const tail = REWRITE_PRESETS.find((p) => p.value === preset)?.tail ?? ""
+
+  return (
+    <section aria-labelledby={`${id}-heading`} className="flex flex-col gap-4">
+      <div>
+        <h3 id={`${id}-heading`} className="text-sm font-semibold">
+          URL rewrite
+        </h3>
+        <p className="text-muted-foreground text-xs">
+          A request for a file that does not exist is passed to the app's front controller. Pick the
+          preset that matches the app; saving rewrites the PHP include and checks it with nginx.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-preset`}>Preset</Label>
+        <Select
+          id={`${id}-preset`}
+          value={preset}
+          onChange={(e) => setPreset(e.target.value as SiteRewrite)}
+          disabled={update.isPending}
+        >
+          {REWRITE_PRESETS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </Select>
+        <p className="text-muted-foreground font-mono text-xs">
+          try_files $uri $uri/ {tail};
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          disabled={!changed || update.isPending}
+          onClick={() => update.mutate({ rewrite: preset })}
+        >
+          {update.isPending ? "Saving…" : "Save and reload"}
+        </Button>
+        <Button variant="outline" disabled={!changed} onClick={() => setPreset(current)}>
+          Discard
+        </Button>
+        <span className="text-muted-foreground text-xs" aria-live="polite">
+          {update.isSuccess && !changed ? "Saved. nginx reloaded." : ""}
+        </span>
+      </div>
+      <ApplyError error={update.error} fallback="The rewrite preset could not be saved." />
+    </section>
   )
 }

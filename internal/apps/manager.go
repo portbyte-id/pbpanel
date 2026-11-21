@@ -43,6 +43,9 @@ type Options struct {
 	// MakeDir creates an app's log directory; nil means os.MkdirAll with mode 0755.
 	// The browser test harness replaces it so no test creates directories.
 	MakeDir func(path string) error
+	// RemoveLogs deletes an app's log directory; nil means os.RemoveAll. Tests
+	// with no real log tree leave it nil-safe by overriding it.
+	RemoveLogs func(dir string) error
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -57,6 +60,7 @@ type Manager struct {
 	node  NodeResolver
 	prep  func(App) error
 	mkdir func(string) error
+	rmLog func(string) error
 	now   func() time.Time
 }
 
@@ -72,6 +76,10 @@ func New(o Options) (*Manager, error) {
 	m.mkdir = o.MakeDir
 	if m.mkdir == nil {
 		m.mkdir = func(p string) error { return os.MkdirAll(p, 0o755) }
+	}
+	m.rmLog = o.RemoveLogs
+	if m.rmLog == nil {
+		m.rmLog = os.RemoveAll
 	}
 	m.rel = &reloader{sv: o.Supervisor, autostart: m.autostart}
 	return m, nil
@@ -371,7 +379,9 @@ func (m *Manager) write(ctx context.Context, a App) error {
 }
 
 // Delete stops an app and removes its definition and program file. Its working
-// directory and its logs are left alone: they hold the operator's files.
+// directory is left alone: it holds the operator's files. Its log directory is
+// removed along with the program file, because nothing else reads it once the
+// app is gone.
 func (m *Manager) Delete(ctx context.Context, name string) error {
 	a, err := m.load(ctx, name)
 	if err != nil {
@@ -380,8 +390,12 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	if _, err := m.ed.Apply(ctx, m.change(a, nil, true, "delete app "+name)); err != nil {
 		return err
 	}
-	_, err = m.db.ExecContext(ctx, `DELETE FROM apps WHERE name = ?`, name)
-	return err
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM apps WHERE name = ?`, name); err != nil {
+		return err
+	}
+	// A log directory that is already gone is not an error: this is best effort.
+	_ = m.rmLog(m.p.LogDir(name))
+	return nil
 }
 
 // Start starts an app.

@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError, type CertView, type DNSProvider } from "@/lib/api"
+import { type CertView, type DNSProvider } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import {
   useDeleteTLSProvider,
   useSaveTLSProvider,
@@ -41,7 +42,7 @@ export function TLSPage() {
 }
 
 function errorText(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.detail : fallback
+  return describeError(error, fallback)
 }
 
 /* --- Certificates ------------------------------------------------------- */

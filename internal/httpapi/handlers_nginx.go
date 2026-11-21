@@ -78,6 +78,9 @@ func (s *server) nginxRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/sites/{domain}", h(s.handleDeleteSite))
 	mux.Handle("GET /api/sites/{domain}/file", h(s.handleGetSiteFile))
 	mux.Handle("PUT /api/sites/{domain}/file", h(s.handlePutSiteFile))
+	mux.Handle("GET /api/sites/{domain}/includes", h(s.handleGetSiteIncludes))
+	mux.Handle("GET /api/sites/{domain}/includes/{name}", h(s.handleGetSiteInclude))
+	mux.Handle("PUT /api/sites/{domain}/includes/{name}", h(s.handlePutSiteInclude))
 	mux.Handle("POST /api/sites/{domain}/regenerate", h(s.handleRegenerateSite))
 	mux.Handle("GET /api/sites/{domain}/waf", h(s.handleGetSiteWAF))
 	mux.Handle("PUT /api/sites/{domain}/waf", h(s.handlePutSiteWAF))
@@ -229,6 +232,7 @@ type createSiteRequest struct {
 	ProxyTarget string   `json:"proxy_target"`
 	PHPVersion  string   `json:"php_version"`
 	PHPInfo     bool     `json:"phpinfo"`
+	Rewrite     string   `json:"rewrite"`
 }
 
 type siteResponse struct {
@@ -246,6 +250,7 @@ func (s *server) handleCreateSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 		Domain: req.Domain, Aliases: req.Aliases, Kind: sites.Kind(req.Kind),
 		Root: req.Root, ProxyTarget: req.ProxyTarget,
 		PHPVersion: req.PHPVersion, PHPInfo: req.PHPInfo,
+		Rewrite: sites.Rewrite(req.Rewrite),
 	})
 	if err != nil {
 		s.writeNginxError(w, r, err)
@@ -268,6 +273,7 @@ func (s *server) handleGetSite(n *NginxDeps, w http.ResponseWriter, r *http.Requ
 type updateSiteRequest struct {
 	Aliases     *[]string `json:"aliases"`
 	ProxyTarget *string   `json:"proxy_target"`
+	Rewrite     *string   `json:"rewrite"`
 }
 
 func (s *server) handleUpdateSite(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
@@ -276,7 +282,12 @@ func (s *server) handleUpdateSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, errBadRequest, decodeErrorDetail(err))
 		return
 	}
-	res, err := n.Sites.Update(r.Context(), r.PathValue("domain"), sites.UpdateInput{Aliases: req.Aliases, ProxyTarget: req.ProxyTarget})
+	in := sites.UpdateInput{Aliases: req.Aliases, ProxyTarget: req.ProxyTarget}
+	if req.Rewrite != nil {
+		rw := sites.Rewrite(*req.Rewrite)
+		in.Rewrite = &rw
+	}
+	res, err := n.Sites.Update(r.Context(), r.PathValue("domain"), in)
 	if err != nil {
 		s.writeNginxError(w, r, err)
 		return
@@ -323,6 +334,52 @@ func (s *server) handleGetSiteFile(n *NginxDeps, w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, siteFileResponse{f, strings.TrimPrefix(f.Path, n.Paths.Dir()+"/")})
+}
+
+// handleGetSiteIncludes lists a site's include files with their content, so the
+// Config tab can offer each one — including a reverse-proxy site's proxy.conf —
+// for editing.
+func (s *server) handleGetSiteIncludes(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
+	files, err := n.Sites.IncludeFiles(r.Context(), r.PathValue("domain"))
+	if err != nil {
+		s.writeNginxError(w, r, err)
+		return
+	}
+	if files == nil {
+		files = []sites.IncludeFile{}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Includes []sites.IncludeFile `json:"includes"`
+	}{files})
+}
+
+// handleGetSiteInclude returns one include file for editing.
+func (s *server) handleGetSiteInclude(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
+	f, err := n.Sites.ReadInclude(r.Context(), r.PathValue("domain"), r.PathValue("name"))
+	if err != nil {
+		s.writeNginxError(w, r, err)
+		return
+	}
+	f.Name = r.PathValue("name")
+	writeJSON(w, http.StatusOK, struct {
+		sites.IncludeFile
+		HistoryFile string `json:"history_file"`
+	}{f, "includes/" + r.PathValue("domain") + "/" + r.PathValue("name")})
+}
+
+// handlePutSiteInclude replaces one include file; nginx -t gates it.
+func (s *server) handlePutSiteInclude(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
+	var req contentRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, errBadRequest, decodeErrorDetail(err))
+		return
+	}
+	res, err := n.Sites.WriteInclude(r.Context(), r.PathValue("domain"), r.PathValue("name"), []byte(req.Content))
+	if err != nil {
+		s.writeNginxError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, applyResponse{warningsOf(res)})
 }
 
 type contentRequest struct {

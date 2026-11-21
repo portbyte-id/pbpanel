@@ -22,8 +22,8 @@ import (
 // Options configure a Service.
 type Options struct {
 	Store *store.Store
-	// PanelDir is the panel tree (for example /www/panel). Trash, uploads and
-	// the config-editor redirect are all relative to it.
+	// PanelDir is the panel tree (for example /www/panel). The trash and uploads
+	// directories are relative to it.
 	PanelDir string
 	// Limits is read on every operation. Nil means DefaultLimits.
 	Limits func(context.Context) Limits
@@ -39,10 +39,8 @@ type Service struct {
 	panel     string
 	trashDir  string
 	uploadDir string
-	// configTrees are directories owned by confedit; the editor refuses them.
-	configTrees []string
-	limits      func(context.Context) Limits
-	now         func() time.Time
+	limits    func(context.Context) Limits
+	now       func() time.Time
 
 	locks sync.Map // upload id -> *sync.Mutex
 }
@@ -58,10 +56,9 @@ func New(o Options) (*Service, error) {
 	}
 	s := &Service{
 		FS: NewFS(NewPolicy(panel)), st: o.Store, panel: panel,
-		trashDir:    path.Join(panel, "trash"),
-		uploadDir:   path.Join(panel, "uploads"),
-		configTrees: []string{path.Join(panel, "nginx"), path.Join(panel, "php")},
-		limits:      o.Limits, now: o.Now,
+		trashDir:  path.Join(panel, "trash"),
+		uploadDir: path.Join(panel, "uploads"),
+		limits:    o.Limits, now: o.Now,
 	}
 	// The trash and uploads trees are reachable only through the Trash and
 	// Upload APIs: a rename in there would orphan an index row. The guard runs

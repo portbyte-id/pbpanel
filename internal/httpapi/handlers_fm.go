@@ -69,7 +69,6 @@ const (
 	errNoSpace      = "no_space"
 	errUnsafe       = "unsafe_archive"
 	errEditConflict = "edit_conflict"
-	errUseConfig    = "use_config_editor"
 	errOffset       = "offset_mismatch"
 )
 
@@ -124,7 +123,6 @@ func (s *server) fmRoutes(mux *http.ServeMux) {
 func (s *server) writeFMError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		conflict *fm.ConflictError
-		redirect *fm.RedirectError
 		offset   *fm.OffsetError
 	)
 	body := func(status int, class string, extra map[string]any) {
@@ -137,8 +135,6 @@ func (s *server) writeFMError(w http.ResponseWriter, r *http.Request, err error)
 	switch {
 	case errors.As(err, &conflict):
 		body(http.StatusConflict, errEditConflict, map[string]any{"current": conflict.Current})
-	case errors.As(err, &redirect):
-		body(http.StatusConflict, errUseConfig, map[string]any{"path": redirect.Path, "tree": redirect.Tree})
 	case errors.As(err, &offset):
 		body(http.StatusConflict, errOffset, map[string]any{"received": offset.Received})
 	case errors.Is(err, fm.ErrInvalidPath), errors.Is(err, fm.ErrNotDir), errors.Is(err, fm.ErrIsDir),

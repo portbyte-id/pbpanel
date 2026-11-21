@@ -14,6 +14,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/runtimes"
+	"github.com/portbyte-id/server-panel/internal/sites"
 )
 
 // AppsService is the part of apps.Manager the routes use. *apps.Manager
@@ -212,11 +213,53 @@ func (s *server) appsUpdate(a AppsService, w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) appsDelete(a AppsService, w http.ResponseWriter, r *http.Request) {
-	if err := a.Delete(r.Context(), r.PathValue("name")); err != nil {
+	name := r.PathValue("name")
+	// Read the app before deleting it: its port is how the proxy sites that front
+	// it are found, and after Delete there is nothing left to ask.
+	var proxyURL string
+	if st, err := a.Get(r.Context(), name); err == nil {
+		proxyURL = st.ProxyURL
+	}
+	if err := a.Delete(r.Context(), name); err != nil {
 		s.appsFail(w, r, err)
 		return
 	}
+	s.removeAppSites(r, name, proxyURL)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removeAppSites deletes the reverse-proxy sites that pass requests to a deleted
+// app's port: they point at a port nothing serves now. The sites' certificates go
+// with them, as they do when a site is deleted from the Sites page. Failures are
+// logged and the app delete still succeeds, because the app is already gone and a
+// leftover site can be removed by hand.
+func (s *server) removeAppSites(r *http.Request, appName, proxyURL string) {
+	n := s.deps.Nginx
+	if proxyURL == "" || n == nil || n.Sites == nil {
+		return
+	}
+	list, err := n.Sites.List(r.Context())
+	if err != nil {
+		s.logger.WarnContext(r.Context(), "listing sites to remove those of a deleted app",
+			"app", appName, "error", err, "request_id", requestIDFrom(r.Context()))
+		return
+	}
+	for _, site := range list {
+		if site.Kind != sites.KindProxy || site.ProxyTarget != proxyURL {
+			continue
+		}
+		if _, err := n.Sites.Delete(r.Context(), site.Domain); err != nil {
+			s.logger.WarnContext(r.Context(), "removing a site of a deleted app",
+				"app", appName, "domain", site.Domain, "error", err, "request_id", requestIDFrom(r.Context()))
+			continue
+		}
+		if s.deps.TLS != nil {
+			if msg := s.deps.TLS.removeSiteCert(r.Context(), site.Domain); msg != "" {
+				s.logger.WarnContext(r.Context(), msg, "app", appName, "domain", site.Domain,
+					"request_id", requestIDFrom(r.Context()))
+			}
+		}
+	}
 }
 
 // appsControl builds the handler of start, stop and restart. The response is the

@@ -123,8 +123,13 @@ export interface Site {
   php_version: string | null
   /** The FPM pool name of a PHP site. */
   php_pool?: string
+  /** A PHP site's URL-rewrite preset: "" (generic default), "laravel", "wordpress". */
+  rewrite?: SiteRewrite
   created_at: string
 }
+
+/** A URL-rewrite front-controller preset for a PHP site. */
+export type SiteRewrite = "" | "laravel" | "wordpress"
 
 /** Whether a site file still includes the file one panel control writes. */
 export interface SiteFeature {
@@ -150,6 +155,8 @@ export interface CreateSiteInput {
   php_version?: string
   /** PHP sites only: put a phpinfo() page in a new folder. */
   phpinfo?: boolean
+  /** PHP sites only. */
+  rewrite?: SiteRewrite
 }
 
 export type PHPState = "absent" | "pulling" | "ready" | "failed"
@@ -487,7 +494,6 @@ export type FMErrorCode =
   | "no_space"
   | "unsafe_archive"
   | "edit_conflict"
-  | "use_config_editor"
   | "offset_mismatch"
 
 export interface FMDownloadFolderOptions {
@@ -497,6 +503,8 @@ export interface FMDownloadFolderOptions {
 export interface UpdateSiteInput {
   aliases?: string[]
   proxy_target?: string
+  /** A PHP site's URL-rewrite preset. */
+  rewrite?: SiteRewrite
 }
 
 /** A change that went live. Warnings did not stop it. */
@@ -523,8 +531,16 @@ export interface ConfigFile {
   missing_links?: string[]
 }
 
-export interface ConfigVersion {
+/** One of a site's panel-owned include files, as the Config tab lists it. */
+export interface SiteInclude {
+  name: string
+  label: string
   path: string
+  content: string
+  missing?: boolean
+}
+
+export interface ConfigVersion {  path: string
   version: number
   created_at: string
   sha256: string
@@ -830,6 +846,28 @@ export class ApiClient {
     })
   }
 
+  /** The panel-owned include files of a site, each with its content. */
+  async siteIncludes(domain: string): Promise<{ includes: SiteInclude[] }> {
+    return this.request<{ includes: SiteInclude[] }>(
+      `/api/sites/${encodeURIComponent(domain)}/includes`,
+    )
+  }
+
+  /** One include file, for editing. */
+  async siteInclude(domain: string, name: string): Promise<ConfigFile> {
+    return this.request<ConfigFile>(
+      `/api/sites/${encodeURIComponent(domain)}/includes/${encodeURIComponent(name)}`,
+    )
+  }
+
+  /** PUT one include file. A 422 `config_rejected` carries nginx's output. */
+  async saveSiteInclude(domain: string, name: string, content: string): Promise<ApplyResponse> {
+    return this.request<ApplyResponse>(
+      `/api/sites/${encodeURIComponent(domain)}/includes/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    )
+  }
+
   async siteWaf(domain: string): Promise<WafSiteResponse> {
     return this.request<WafSiteResponse>(`/api/sites/${encodeURIComponent(domain)}/waf`)
   }
@@ -878,13 +916,17 @@ export class ApiClient {
     })
   }
 
-  /** Starts an issuance job and returns its id; the certificate appears when it succeeds. */
-  async issueSiteCert(domain: string, input: IssueCertInput): Promise<string> {
-    const res = await this.request<{ job_id: string }>(`${tlsPath(domain)}/issue`, {
+  /**
+   * Requests a certificate. Returns a job id when one was ordered, or null when
+   * a certificate already in the store covered the names and was reused: there
+   * is no job to watch in that case, the certificate is already live.
+   */
+  async issueSiteCert(domain: string, input: IssueCertInput): Promise<string | null> {
+    const res = await this.request<{ job_id?: string; reused?: boolean }>(`${tlsPath(domain)}/issue`, {
       method: "POST",
       body: JSON.stringify(input),
     })
-    return res.job_id
+    return res.job_id ?? null
   }
 
   async renewSiteCert(domain: string): Promise<string> {

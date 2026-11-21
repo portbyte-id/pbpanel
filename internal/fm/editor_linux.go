@@ -24,19 +24,10 @@ func hashOf(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// configRedirect names the confedit-owned tree a path is in, or "".
-func (s *Service) configRedirect(real string) string {
-	for _, t := range s.configTrees {
-		if Within(t, real) {
-			return t
-		}
-	}
-	return ""
-}
-
 // OpenFile reads a text file for editing. Binary files and files over
-// fm.editor.max_bytes are refused, and so are files in the config trees, which
-// must go through the config editor (plan 3.6).
+// fm.editor.max_bytes are refused. Any text file may be edited, including the
+// panel's own nginx and PHP config trees under /www/panel: editing those here
+// bypasses the `nginx -t` check the config editor runs on save.
 func (s *Service) OpenFile(ctx context.Context, raw string) (File, error) {
 	clean, err := s.pol.Clean(raw)
 	if err != nil {
@@ -49,9 +40,6 @@ func (s *Service) OpenFile(ctx context.Context, raw string) (File, error) {
 	defer p.close()
 	if p.base == "" {
 		return File{}, ErrIsDir
-	}
-	if t := s.configRedirect(p.full()); t != "" {
-		return File{}, &RedirectError{Path: p.full(), Tree: t}
 	}
 	return s.readFile(ctx, p)
 }
@@ -124,9 +112,6 @@ func (s *Service) SaveFile(ctx context.Context, raw, content string, base *Base)
 		return File{}, ErrIsDir
 	}
 	real := p.full()
-	if t := s.configRedirect(real); t != "" {
-		return File{}, &RedirectError{Path: real, Tree: t}
-	}
 	if err := s.pol.CheckWrite(real); err != nil {
 		return File{}, err
 	}

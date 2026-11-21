@@ -156,7 +156,7 @@ func (l Layout) dirs() []struct {
 		{filepath.Join(l.PanelDir(), "uploads"), dirMode{secret, "in-progress chunked uploads"}},
 		{filepath.Join(l.PanelDir(), "trash"), dirMode{secret, "deleted files awaiting a purge"}},
 		{filepath.Join(l.Root, "services"), dirMode{tree, "site and app content"}},
-		{filepath.Join(l.Root, "services", "sites"), dirMode{tree, "one directory per site; the folder is the web root"}},
-		{filepath.Join(l.Root, "services", "apps"), dirMode{tree, "one directory per app"}},
+		{filepath.Join(l.Root, "services", "sites"), dirMode{tree, "one directory per site; the folder is the web root, and apps default to theirs here"}},
+		{filepath.Join(l.Root, "services", "apps"), dirMode{tree, "kept for hosts made before apps defaulted to services/sites"}},
 	}
 }

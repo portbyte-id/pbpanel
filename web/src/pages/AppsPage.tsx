@@ -215,8 +215,11 @@ export function AppsPage() {
           })
         }
       >
-        <p>It is stopped and its program file is removed.</p>
-        <p>Its working directory and logs are left in place.</p>
+        <p>It is stopped and its program file and log directory are removed.</p>
+        <p>
+          Any reverse-proxy site that passes requests to its port is removed too, since it would
+          point at a port nothing serves. Its working directory is left in place.
+        </p>
       </ConfirmDialog>
     </div>
   )

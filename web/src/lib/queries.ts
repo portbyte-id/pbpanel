@@ -46,6 +46,8 @@ export const queryKeys = {
   sites: ["sites"] as const,
   site: (domain: string) => ["sites", domain] as const,
   siteFile: (domain: string) => ["sites", domain, "file"] as const,
+  siteIncludes: (domain: string) => ["sites", domain, "includes"] as const,
+  siteInclude: (domain: string, name: string) => ["sites", domain, "includes", name] as const,
   nginxSettings: ["nginx", "settings"] as const,
   nginxConf: ["nginx", "conf"] as const,
   nginxService: ["nginx", "service"] as const,
@@ -184,6 +186,7 @@ export function useLogin() {
  */
 export type ConfigSource =
   | { kind: "site"; domain: string }
+  | { kind: "site-include"; domain: string; name: string }
   | { kind: "nginx" }
   | { kind: "php-ini"; version: string }
 
@@ -191,6 +194,8 @@ function configFileKey(source: ConfigSource) {
   switch (source.kind) {
     case "site":
       return queryKeys.siteFile(source.domain)
+    case "site-include":
+      return queryKeys.siteInclude(source.domain, source.name)
     case "php-ini":
       return queryKeys.phpIni(source.version)
     default:
@@ -202,7 +207,6 @@ function configFileKey(source: ConfigSource) {
 export function configService(source: ConfigSource): string {
   return source.kind === "php-ini" ? `PHP ${source.version}` : "nginx"
 }
-
 export function useSites() {
   return useQuery({ queryKey: queryKeys.sites, queryFn: () => api.sites() })
 }
@@ -261,6 +265,8 @@ export function useConfigFile(source: ConfigSource) {
       switch (source.kind) {
         case "site":
           return api.siteFile(source.domain)
+        case "site-include":
+          return api.siteInclude(source.domain, source.name)
         case "php-ini":
           return api.phpIni(source.version)
         default:
@@ -283,6 +289,8 @@ export function useSaveConfigFile(source: ConfigSource) {
       switch (source.kind) {
         case "site":
           return api.saveSiteFile(source.domain, content)
+        case "site-include":
+          return api.saveSiteInclude(source.domain, source.name, content)
         case "php-ini":
           return api.savePHPIni(source.version, content)
         default:
@@ -317,7 +325,19 @@ function invalidateConfig(client: QueryClient, source: ConfigSource) {
   if (source.kind === "site") {
     jobs.push(client.invalidateQueries({ queryKey: queryKeys.site(source.domain), exact: true }))
   }
+  if (source.kind === "site-include") {
+    jobs.push(client.invalidateQueries({ queryKey: queryKeys.siteIncludes(source.domain) }))
+    jobs.push(client.invalidateQueries({ queryKey: queryKeys.site(source.domain), exact: true }))
+  }
   return Promise.all(jobs)
+}
+
+/** The include files of a site, with their content, for the Config tab. */
+export function useSiteIncludes(domain: string) {
+  return useQuery({
+    queryKey: queryKeys.siteIncludes(domain),
+    queryFn: () => api.siteIncludes(domain),
+  })
 }
 
 export function useNginxSettings() {

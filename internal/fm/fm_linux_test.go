@@ -511,16 +511,20 @@ func TestEditor(t *testing.T) {
 		t.Errorf("create via save: %v", err)
 	}
 
-	// The config trees belong to confedit.
+	// The panel's own config trees are editable too: item 10 asks the file
+	// manager to edit every text file under /www/panel, and the nginx tree is
+	// one of them.
 	cfg := filepath.Join(e.panel, "nginx", "nginx.conf")
 	_ = os.MkdirAll(filepath.Dir(cfg), 0o755)
 	_ = os.WriteFile(cfg, []byte("events {}"), 0o644)
-	var re *RedirectError
-	if _, err := e.svc.OpenFile(bg, cfg); !errors.As(err, &re) {
+	if _, err := e.svc.OpenFile(bg, cfg); err != nil {
 		t.Errorf("open under nginx = %v", err)
 	}
-	if _, err := e.svc.SaveFile(bg, cfg, "x", nil); !errors.As(err, &re) {
+	if _, err := e.svc.SaveFile(bg, cfg, "events {}\n# edited\n", nil); err != nil {
 		t.Errorf("save under nginx = %v", err)
+	}
+	if got := e.read(cfg); got != "events {}\n# edited\n" {
+		t.Errorf("save under nginx wrote %q", got)
 	}
 }
 

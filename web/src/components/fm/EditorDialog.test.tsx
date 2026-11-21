@@ -204,28 +204,6 @@ describe("EditorDialog", () => {
     expect(screen.queryByLabelText("The file as it is on disk now")).not.toBeInTheDocument()
   })
 
-  it("explains a config-editor redirect instead of offering an overwrite", async () => {
-    vi.mocked(api.fmSaveFile).mockRejectedValue(
-      new ApiError(
-        409,
-        "use_config_editor",
-        "/var/www/a.conf is under nginx.conf, which the config editor manages",
-      ),
-    )
-    const user = userEvent.setup()
-    render(<EditorDialog path={opened.path} onClose={() => {}} onSaved={() => {}} />)
-
-    await typeIn(user, opened.path, "x")
-    await user.click(screen.getByRole("button", { name: "Save" }))
-
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("managed by the panel's config editor"),
-    )
-    expect(screen.queryByRole("button", { name: /Overwrite/ })).not.toBeInTheDocument()
-    // The draft is kept so the fix is one edit away.
-    expect(screen.getByLabelText(`Contents of ${opened.path}`)).toHaveValue("server { }\nx")
-  })
-
   it("shows a load failure instead of an editor", async () => {
     vi.mocked(api.fmOpenFile).mockRejectedValue(new ApiError(415, "binary_file", "binary file"))
     render(<EditorDialog path={opened.path} onClose={() => {}} onSaved={() => {}} />)
