@@ -271,16 +271,6 @@ func (f *hostRunner) RunEnv(_ context.Context, env []string, name string, args .
 	return nil, nil
 }
 
-// called reports whether a host command starting with prefix ran.
-func (f *hostRunner) called(prefix string) bool {
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // memApplier records changes and writes them into a map, or fails them.
 type memApplier struct {
 	files   map[string][]byte
