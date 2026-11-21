@@ -629,6 +629,8 @@ export interface NginxImage {
   present: boolean
   /** True while an image build is running. */
   busy: boolean
+  /** True when a rebuild may download a CI-built package before it compiles one here. */
+  prebuilt: boolean
   current: ImageBuild | null
   previous: ImageBuild | null
   builds: ImageBuild[]

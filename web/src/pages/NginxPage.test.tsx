@@ -44,6 +44,7 @@ const image = (over: Partial<NginxImage> = {}): NginxImage => ({
   stopped: false,
   present: true,
   busy: false,
+  prebuilt: false,
   current: build({ id: "current-build", current: true, nginx_version: "1.29.0" }),
   previous: null,
   builds: [],
@@ -125,6 +126,22 @@ describe("nginx build card", () => {
     renderCard()
 
     expect(await screen.findByText("nginx 1.30.3")).toBeInTheDocument()
+  })
+
+  it("says where the next build comes from, following the Runtimes setting", async () => {
+    vi.mocked(api.nginxImage).mockResolvedValue(image({ prebuilt: true }))
+    renderCard()
+
+    expect(await screen.findByText(/CI-built package when one fits this host/)).toBeInTheDocument()
+    expect(screen.getByText(/downloads the package CI built for this host/)).toBeInTheDocument()
+  })
+
+  it("says the build compiles here while the Runtimes setting is off", async () => {
+    vi.mocked(api.nginxImage).mockResolvedValue(image({ prebuilt: false }))
+    renderCard()
+
+    expect(await screen.findByText(/Compiled on this host/)).toBeInTheDocument()
+    expect(screen.getByText(/compiles nginx from the newest sources/)).toBeInTheDocument()
   })
 
   it("disables Update image while a build is running", async () => {

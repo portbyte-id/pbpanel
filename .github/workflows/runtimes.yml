@@ -25,7 +25,7 @@ on:
     inputs:
       series:
         description: "nginx series (1.30) or release (1.30.2) to build"
-        default: "1.30"
+        default: "1.31"
   schedule:
     # Mondays: picks up a new nginx or OpenSSL patch release.
     - cron: "23 3 * * 1"
@@ -79,7 +79,7 @@ jobs:
       # A distro whose recipe does not build must not stop the others publishing.
       fail-fast: false
       matrix:
-        host: ["ubuntu 22.04", "ubuntu 24.04", "ubuntu 26.04", "debian 12", "debian 13"]
+        host: ["ubuntu 24.04", "ubuntu 26.04", "debian 12", "debian 13"]
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4

@@ -270,19 +270,22 @@ func (s *server) handleGetNginxImage(n *NginxDeps, w http.ResponseWriter, r *htt
 		Version string `json:"version"`
 		// Release is the release the serving build compiled, patch level included;
 		// empty when no build serves.
-		Release  string       `json:"release"`
-		Versions []string     `json:"versions"`
-		Stopped  bool         `json:"stopped"`
-		Present  bool         `json:"present"`
-		Busy     bool         `json:"busy"`
+		Release  string   `json:"release"`
+		Versions []string `json:"versions"`
+		Stopped  bool     `json:"stopped"`
+		Present  bool     `json:"present"`
+		Busy     bool     `json:"busy"`
+		// Prebuilt is whether a rebuild may download a CI-built package first.
+		Prebuilt bool         `json:"prebuilt"`
 		Current  *nginxBuild  `json:"current"`
 		Previous *nginxBuild  `json:"previous"`
 		Builds   []nginxBuild `json:"builds"`
 	}{
 		Base: nginx.BuildSource, Repo: nginx.Repo + ":" + imgs.Version(), Present: present,
 		Version: imgs.Version(), Release: current.release(), Versions: suggested(imgs.Version()),
-		Stopped: n.Container != nil && n.Container.Stopped(ctx),
-		Busy:    imgs.Idle() != nil, Current: current, Previous: previous, Builds: rows,
+		Stopped:  n.Container != nil && n.Container.Stopped(ctx),
+		Prebuilt: n.Prebuilt != nil && n.Prebuilt(ctx),
+		Busy:     imgs.Idle() != nil, Current: current, Previous: previous, Builds: rows,
 	})
 }
 

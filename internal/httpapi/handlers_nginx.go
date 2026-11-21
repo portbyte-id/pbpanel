@@ -54,6 +54,9 @@ type NginxDeps struct {
 	// Container starts, stops and restarts nginx. Nil answers the routes 503. The
 	// name is from when nginx ran in a container; the routes keep it.
 	Container NginxContainer
+	// Prebuilt says whether the next build may take a CI-built package. Nil reads
+	// as off; the page then says the build compiles here.
+	Prebuilt func(ctx context.Context) bool
 }
 
 // nginxRoutes registers the routes of development plan step 1.10. They are
