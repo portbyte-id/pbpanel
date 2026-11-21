@@ -14,7 +14,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { ApiError, type CreateSiteInput, type PanelApp, type SiteKind } from "@/lib/api"
+import { ApiError, type CreateSiteInput, type PanelApp, type SiteKind, type SiteRewrite } from "@/lib/api"
 import { useApps, useCreateSite, usePHP } from "@/lib/queries"
 
 /** Aliases are typed as one line or several; commas, spaces and newlines all separate. */
@@ -63,6 +63,7 @@ export function CreateSiteForm({
   // The newest installed version is the default.
   const [phpVersion, setPHPVersion] = useState(phpVersions[phpVersions.length - 1] ?? "")
   const [phpinfo, setPHPInfo] = useState(false)
+  const [rewrite, setRewrite] = useState<SiteRewrite>("")
   const noPHP = kind === "php" && phpVersions.length === 0
 
   const field = error instanceof ApiError && error.code === "invalid_input" ? error.field : null
@@ -85,6 +86,7 @@ export function CreateSiteForm({
     if (kind === "php") {
       input.php_version = phpVersion
       if (phpinfo) input.phpinfo = true
+      if (rewrite !== "") input.rewrite = rewrite
     }
     onSubmit(input)
   }
@@ -193,6 +195,23 @@ export function CreateSiteForm({
               </span>
             </span>
           </label>
+          <div className="mt-2 flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-rewrite`}>URL rewrite</Label>
+            <Select
+              id={`${id}-rewrite`}
+              value={rewrite}
+              onChange={(e) => setRewrite(e.target.value as SiteRewrite)}
+            >
+              <option value="">None (generic front controller)</option>
+              <option value="laravel">Laravel</option>
+              <option value="wordpress">WordPress</option>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              Sends a request for a file that does not exist to index.php with the app's query
+              string. You can change it later on the site's URL Rewrite tab.
+            </p>
+            {fieldError("rewrite")}
+          </div>
         </div>
       )}
 

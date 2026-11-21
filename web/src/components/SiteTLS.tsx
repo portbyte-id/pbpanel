@@ -270,6 +270,7 @@ function AcmeCertificate({
   const [jobId, setJobId] = useState<string | null>(null)
   const refresh = useRefreshTLS()
   const issue = useIssueSiteCert(domain)
+  const [reused, setReused] = useState(false)
   const verb = cert ? "Replace" : "Create"
 
   return (
@@ -279,16 +280,35 @@ function AcmeCertificate({
           {verb} a certificate with ACME
         </h3>
         <p className="text-muted-foreground text-xs">
-          Pick the provider and the names. The panel renews a certificate it issued before it
-          expires.
+          Pick the provider and the names. If a certificate already stored covers these names — an
+          uploaded wildcard, or one for another site — it is used as it is instead of a new order;
+          otherwise the panel renews the certificate it issues before it expires.
         </p>
+        {reused && (
+          <p role="status" className="text-sm">
+            A certificate already in the panel covers these names, so it was put in place. No new
+            order was placed.
+          </p>
+        )}
         <IssueCertForm
           domain={domain}
           defaultNames={[domain, ...detail.aliases]}
           providers={providers}
           pending={issue.isPending}
           error={issue.error}
-          onSubmit={(input) => issue.mutate(input, { onSuccess: setJobId })}
+          onSubmit={(input) => {
+            setReused(false)
+            issue.mutate(input, {
+              onSuccess: (id) => {
+                if (id === null) {
+                  setReused(true)
+                  refresh()
+                } else {
+                  setJobId(id)
+                }
+              },
+            })
+          }}
         />
       </section>
 

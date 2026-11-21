@@ -282,7 +282,7 @@ export function AppForm({
             onChange={(e) => setCommand(e.target.value)}
             autoComplete="off"
             spellCheck={false}
-            placeholder={type === "node" ? "server.js" : "/www/services/apps/my-app/bin/my-app"}
+            placeholder={type === "node" ? "server.js" : "/www/services/sites/my-app/bin/my-app"}
             required
             aria-invalid={invalid("command")}
             aria-describedby={describedBy("command")}
@@ -332,7 +332,7 @@ export function AppForm({
             onChange={(e) => setWorkdir(e.target.value)}
             autoComplete="off"
             spellCheck={false}
-            placeholder={`/www/services/apps/${name.trim() || "<name>"}`}
+            placeholder={`/www/services/sites/${name.trim() || "<name>"}`}
             aria-invalid={invalid("workdir")}
             aria-describedby={describedBy("workdir")}
           />

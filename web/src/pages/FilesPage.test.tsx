@@ -1,9 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FilesPage } from "@/pages/FilesPage"
 import { api, type FMEntry, type FMListing } from "@/lib/api"
+import { uploadQueue } from "@/lib/uploadQueue"
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
@@ -186,5 +187,19 @@ describe("FilesPage", () => {
     expect(vi.mocked(api.fmDelete).mock.calls[0][0]).toEqual([
       { path: "/a.txt", confirm: undefined },
     ])
+  })
+
+  it("queues dropped files into the folder being viewed", async () => {
+    renderPage([entry({ name: "a.txt", path: "/var/www/a.txt" })])
+    await screen.findByLabelText("Select all")
+    const enqueue = vi.spyOn(uploadQueue, "enqueue").mockImplementation(() => {})
+
+    const zone = screen.getByLabelText(/Drop files here/)
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" })
+    fireEvent.drop(zone, { dataTransfer: { files: [file], types: ["Files"] } })
+
+    expect(enqueue).toHaveBeenCalledOnce()
+    expect(enqueue).toHaveBeenCalledWith("/var/www", [file])
+    enqueue.mockRestore()
   })
 })

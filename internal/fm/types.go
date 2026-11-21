@@ -35,17 +35,6 @@ func (e *ConflictError) Error() string {
 	return "the file changed on disk since it was opened"
 }
 
-// RedirectError reports a path that must be edited through the config editor,
-// because that tree is owned by confedit (plan 3.6).
-type RedirectError struct {
-	Path string
-	Tree string
-}
-
-func (e *RedirectError) Error() string {
-	return fmt.Sprintf("%s is under %s, which the config editor manages", e.Path, e.Tree)
-}
-
 // OffsetError is a chunk sent at the wrong offset; Received is where the
 // server is, which is where the client resumes.
 type OffsetError struct {

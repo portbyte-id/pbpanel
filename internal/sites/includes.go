@@ -146,6 +146,8 @@ func (d Detail) require(f Feature) error {
 type UpdateInput struct {
 	Aliases     *[]string
 	ProxyTarget *string
+	// Rewrite changes a PHP site's URL-rewrite preset; it re-renders php.conf.
+	Rewrite *Rewrite
 }
 
 // UpdateResult is what Update did.
@@ -159,7 +161,7 @@ type UpdateResult struct {
 // detached is refused with a DetachedError instead of being written into a file
 // nothing reads.
 func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (UpdateResult, error) {
-	if in.Aliases == nil && in.ProxyTarget == nil {
+	if in.Aliases == nil && in.ProxyTarget == nil && in.Rewrite == nil {
 		return UpdateResult{}, invalid("body", "nothing to change")
 	}
 
@@ -213,6 +215,23 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 		}
 		patch.set(FeatureProxy, b)
 	}
+	if in.Rewrite != nil {
+		if prev.Kind != KindPHP {
+			return UpdateResult{}, invalid("rewrite", "only a PHP site has a URL-rewrite preset")
+		}
+		if !ValidRewrite(*in.Rewrite) {
+			return UpdateResult{}, invalid("rewrite", "choose one of the URL-rewrite presets")
+		}
+		if err := detail.require(FeaturePHP); err != nil {
+			return UpdateResult{}, err
+		}
+		next.Rewrite = *in.Rewrite
+		b, err := m.renderPHPInclude(next)
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		patch.set(FeaturePHP, b)
+	}
 
 	if err := m.store(ctx, next); err != nil {
 		return UpdateResult{}, err
@@ -235,7 +254,7 @@ func (m *Manager) store(ctx context.Context, s Site) error {
 		} else if taken {
 			return fmt.Errorf("%w: %s", ErrConflict, name)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sites SET proxy_target = ? WHERE domain = ?`, s.ProxyTarget, s.Domain); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sites SET proxy_target = ?, rewrite = ? WHERE domain = ?`, s.ProxyTarget, string(s.Rewrite), s.Domain); err != nil {
 			return fmt.Errorf("sites: update %s: %w", s.Domain, err)
 		}
 		return setAliases(ctx, tx, s.Domain, s.Aliases)

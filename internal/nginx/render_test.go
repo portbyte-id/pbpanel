@@ -78,20 +78,41 @@ func TestGoldenFiles(t *testing.T) {
 	phpSite := Site{Domain: "c.test", Kind: KindPHP, Root: "/www/services/sites/c.test"}
 	b, err = testPaths.RenderSiteFile(phpSite)
 	golden(t, "site-php.conf", mustRender(t, b, err))
-	b, err = testPaths.RenderPHP("/www/panel/run/php-8.3-c_test.sock")
+	b, err = testPaths.RenderPHP("/www/panel/run/php-8.3-c_test.sock", "")
 	golden(t, "php.conf", mustRender(t, b, err))
 }
 
 func TestRenderPHPRefusesASocketOutsideTheRunDir(t *testing.T) {
 	for _, socket := range []string{"", "/tmp/x.sock", "/www/panel/run/../x.sock", "/www/panel/run/a.sock; return 200", "127.0.0.1:9000"} {
-		if _, err := testPaths.RenderPHP(socket); err == nil {
+		if _, err := testPaths.RenderPHP(socket, ""); err == nil {
 			t.Errorf("php.conf was rendered for socket %q", socket)
 		}
 	}
 }
 
-func TestSettingsRenderEveryField(t *testing.T) {
-	s := HTTPSettings{
+// The rewrite presets change only the try_files fallback's query string.
+func TestRenderPHPUsesTheRewritePreset(t *testing.T) {
+	const sock = "/www/panel/run/php-8.3.sock"
+	for _, c := range []struct{ front, want string }{
+		{"", "/index.php?$query_string"},
+		{"/index.php?$query_string", "/index.php?$query_string"},
+		{"/index.php?$args", "/index.php?$args"},
+	} {
+		b, err := testPaths.RenderPHP(sock, c.front)
+		if err != nil {
+			t.Fatalf("front %q: %v", c.front, err)
+		}
+		if !strings.Contains(string(b), "try_files $uri $uri/ "+c.want+";") {
+			t.Errorf("front %q did not render %q:\n%s", c.front, c.want, b)
+		}
+	}
+	// Anything that is not a known preset is refused.
+	if _, err := testPaths.RenderPHP(sock, "/etc/passwd"); err == nil {
+		t.Error("an unknown front-controller value was accepted")
+	}
+}
+
+func TestSettingsRenderEveryField(t *testing.T) {	s := HTTPSettings{
 		WorkerProcesses: "4", ClientMaxBodySize: "0", Gzip: false,
 		KeepaliveTimeout: 10, ClientBodyTimeout: 11, ClientHeaderTimeout: 12, SendTimeout: 13, ServerTokens: true,
 	}
@@ -232,7 +253,7 @@ func TestRenderedConfigNamesNoContainerPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	php, err := testPaths.RenderPHP("/www/panel/run/php-8.3.sock")
+	php, err := testPaths.RenderPHP("/www/panel/run/php-8.3.sock", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +272,26 @@ func TestRenderedConfigNamesNoContainerPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(php), "include "+testPaths.FastCGIParams()+";") {
 		t.Errorf("php.conf does not include the build's fastcgi_params:\n%s", php)
+	}
+}
+
+// A `reuseport` listen option may appear on only one listen per address:port in
+// the whole configuration. Each site's TLS block is its own file, so emitting it
+// here made the second certificate-bearing site fail nginx -t with "duplicate
+// listen options". The rendered block must therefore never carry it.
+func TestTLSNeverUsesReuseport(t *testing.T) {
+	for _, redirect := range []bool{false, true} {
+		b, err := testPaths.RenderTLS("a.test", &TLS{
+			CertFile:     "/www/panel/ssl/sites/a.test/fullchain.pem",
+			KeyFile:      "/www/panel/ssl/sites/a.test/privkey.pem",
+			RedirectHTTP: redirect,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "reuseport") {
+			t.Errorf("tls.conf (redirect=%v) uses reuseport; a second TLS site would fail nginx -t:\n%s", redirect, b)
+		}
 	}
 }
 

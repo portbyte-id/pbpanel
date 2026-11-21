@@ -1008,6 +1008,32 @@ func dialSerialPort(t *testing.T, l *Listener) int64 {
 	return dialSerial(t, l.Port())
 }
 
+// A certificate already stored that covers the site's names is used as it is,
+// without ordering another. A wildcard covers a subdomain one label deep.
+func TestIssueReusesACoveringCertificate(t *testing.T) {
+	h := newTLSHarness(t)
+	h.mustCreate(map[string]any{"domain": "a.test", "kind": "static"})
+	h.mustCreate(map[string]any{"domain": "b.test", "kind": "static"})
+
+	// Seed a wildcard certificate on a.test's row: it covers b.test without an order.
+	h.upload("a.test", 900, "*.test", "a.test")
+
+	code, out := h.call(http.MethodPost, "/api/sites/b.test/tls/issue", map[string]any{"method": "http01"})
+	if code != http.StatusOK {
+		t.Fatalf("issue with a covering certificate = %d %v, want 200 reused", code, out)
+	}
+	if reused, _ := out["reused"].(bool); !reused {
+		t.Fatalf("expected a reuse, got %v", out)
+	}
+	if len(h.issuer.calls) != 0 {
+		t.Fatalf("a covering certificate was in the store but an order was placed: %v", h.issuer.calls)
+	}
+	// The reused certificate is live: the site's TLS block names its own files.
+	if !strings.Contains(h.tlsBlock("b.test"), "listen 443 ssl") {
+		t.Fatalf("the reused certificate was not made live:\n%s", h.tlsBlock("b.test"))
+	}
+}
+
 func TestCoversName(t *testing.T) {
 	for _, c := range []struct {
 		names  []string

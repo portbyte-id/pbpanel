@@ -54,8 +54,44 @@ type Site struct {
 	ProxyTarget string   `json:"proxy_target,omitempty"`
 	PHPVersion  *string  `json:"php_version"`
 	// PHPPool is the FPM pool name of a PHP site.
-	PHPPool   string    `json:"php_pool,omitempty"`
+	PHPPool string `json:"php_pool,omitempty"`
+	// Rewrite is the URL-rewrite preset of a PHP site: "" (the generic default),
+	// RewriteLaravel or RewriteWordPress.
+	Rewrite   Rewrite   `json:"rewrite"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Rewrite names a front-controller preset that decides the php.conf `location /`
+// line. The zero value is the panel's generic default.
+type Rewrite string
+
+// The rewrite presets offered in the site dialog.
+const (
+	RewriteNone      Rewrite = ""
+	RewriteLaravel   Rewrite = "laravel"
+	RewriteWordPress Rewrite = "wordpress"
+)
+
+// FrontControllerTail is the `try_files` argument a preset passes a missing file
+// to. It is what differs between Laravel and WordPress.
+func (r Rewrite) FrontControllerTail() string {
+	switch r {
+	case RewriteLaravel:
+		return "/index.php?$query_string"
+	case RewriteWordPress:
+		return "/index.php?$args"
+	default:
+		return "/index.php?$query_string"
+	}
+}
+
+// ValidRewrite reports whether r is a preset this build knows.
+func ValidRewrite(r Rewrite) bool {
+	switch r {
+	case RewriteNone, RewriteLaravel, RewriteWordPress:
+		return true
+	}
+	return false
 }
 
 func (s Site) nginx() nginx.Site {
@@ -181,6 +217,8 @@ type CreateInput struct {
 	// PHPInfo puts an index.php that prints phpinfo() in a new web root. It is
 	// off by default: that page tells a visitor everything about the server.
 	PHPInfo bool
+	// Rewrite is the URL-rewrite preset of a PHP site.
+	Rewrite Rewrite
 }
 
 // CreateResult is what Create did.
@@ -309,11 +347,18 @@ func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 		}
 		v := in.PHPVersion
 		site.PHPVersion, site.PHPPool = &v, php.PoolName(domain)
+		if !ValidRewrite(in.Rewrite) {
+			return Site{}, invalid("rewrite", "choose one of the URL-rewrite presets")
+		}
+		site.Rewrite = in.Rewrite
 	default:
 		return Site{}, invalid("kind", "must be static, proxy or php")
 	}
 	if in.Kind != KindPHP && (in.PHPVersion != "" || in.PHPInfo) {
 		return Site{}, invalid("php_version", "is only for a PHP site")
+	}
+	if in.Kind != KindPHP && in.Rewrite != RewriteNone {
+		return Site{}, invalid("rewrite", "is only for a PHP site")
 	}
 	return site, nil
 }
@@ -571,7 +616,7 @@ func (m *Manager) get(ctx context.Context, q queryer, domain string) (Site, erro
 	return s, err
 }
 
-const siteColumns = `SELECT s.domain, s.kind, s.root, s.proxy_target, s.php_version, s.created_at, COALESCE(p.name, '')
+const siteColumns = `SELECT s.domain, s.kind, s.root, s.proxy_target, s.php_version, s.created_at, COALESCE(p.name, ''), s.rewrite
 	FROM sites s LEFT JOIN php_pools p ON p.domain = s.domain`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -580,12 +625,14 @@ func scanSite(r scanner) (Site, error) {
 	var s Site
 	var phpVer sql.NullString
 	var created string
-	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &s.ProxyTarget, &phpVer, &created, &s.PHPPool); err != nil {
+	var rewrite string
+	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &s.ProxyTarget, &phpVer, &created, &s.PHPPool, &rewrite); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Site{}, err
 		}
 		return Site{}, fmt.Errorf("sites: read row: %w", err)
 	}
+	s.Rewrite = Rewrite(rewrite)
 	if phpVer.Valid {
 		s.PHPVersion = &phpVer.String
 	}
@@ -642,8 +689,8 @@ func (m *Manager) insert(ctx context.Context, s Site) error {
 			return fmt.Errorf("%w: %s", ErrConflict, name)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO sites (domain, kind, root, proxy_target, php_version, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			s.Domain, string(s.Kind), s.Root, s.ProxyTarget, s.PHPVersion, s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			`INSERT INTO sites (domain, kind, root, proxy_target, php_version, rewrite, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			s.Domain, string(s.Kind), s.Root, s.ProxyTarget, s.PHPVersion, string(s.Rewrite), s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("sites: insert %s: %w", s.Domain, err)
 		}
 		if s.Kind == KindPHP {

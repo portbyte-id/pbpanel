@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type JobRef, type PHPSettings, type PHPVersion } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import {
   type PullPHPInput,
   queryKeys,
@@ -61,7 +62,7 @@ function refreshBuilds(client: ReturnType<typeof useQueryClient>) {
 }
 
 function messageOf(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.detail : fallback
+  return describeError(error, fallback)
 }
 
 /** The PHP versions: which are installed, and each one's settings and php.ini. */

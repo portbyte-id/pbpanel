@@ -322,10 +322,6 @@ export function EditorDialog({
     } catch (err) {
       if (err instanceof ApiError && err.code === "edit_conflict" && err.conflictCurrent) {
         patch(tab.path, { conflict: err.conflictCurrent, saveError: null })
-      } else if (err instanceof ApiError && err.code === "use_config_editor") {
-        patch(tab.path, {
-          saveError: `${err.detail} This file is managed by the panel's config editor; open it from its own page.`,
-        })
       } else {
         patch(tab.path, { saveError: fmErrorText(err, "The file could not be saved.") })
       }

@@ -91,8 +91,7 @@ func appsHarness(t *testing.T, a AppsService, r RuntimesService) (*harness, sess
 	return h, h.login()
 }
 
-func TestAppsRoutesUnavailableWithoutServices(t *testing.T) {
-	h, s := appsHarness(t, nil, nil)
+func TestAppsRoutesUnavailableWithoutServices(t *testing.T) {	h, s := appsHarness(t, nil, nil)
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/api/apps"},
 		{http.MethodGet, "/api/apps/web"},
@@ -329,5 +328,49 @@ func TestRuntimesUninstallChecksUsersFirst(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the job never ran")
+	}
+}
+
+// proxyApps is a fakeApps whose app has a port, so its ProxyURL names where the
+// proxy sites point.
+type proxyApps struct {
+	*fakeApps
+	port int
+}
+
+func (p *proxyApps) Get(_ context.Context, name string) (apps.Status, error) {
+	st := p.status(name)
+	st.Port = &p.port
+	st.ProxyURL = st.App.ProxyURL()
+	return st, nil
+}
+
+// Deleting an app also removes the reverse-proxy sites that pass requests to its
+// port: they would point at a port nothing serves.
+func TestDeleteAppRemovesItsProxySites(t *testing.T) {
+	h := newNginxHarness(t)
+	apps := &proxyApps{fakeApps: &fakeApps{}, port: 3000}
+	h.deps.Apps = apps
+	var err error
+	if h.handler, err = New(h.deps); err != nil {
+		t.Fatal(err)
+	}
+	h.s = h.login()
+
+	h.mustCreate(map[string]any{"domain": "api.test", "kind": "proxy", "proxy_target": "http://127.0.0.1:3000"})
+	h.mustCreate(map[string]any{"domain": "other.test", "kind": "proxy", "proxy_target": "http://127.0.0.1:4000"})
+
+	code, out := h.call(http.MethodDelete, "/api/apps/api", nil)
+	if code != http.StatusNoContent {
+		t.Fatalf("delete app = %d %v", code, out)
+	}
+
+	_, out = h.call(http.MethodGet, "/api/sites", nil)
+	sites := out["sites"].([]any)
+	if len(sites) != 1 {
+		t.Fatalf("want one site left, got %v", sites)
+	}
+	if got := sites[0].(map[string]any)["domain"]; got != "other.test" {
+		t.Fatalf("wrong site removed: %v remains", got)
 	}
 }

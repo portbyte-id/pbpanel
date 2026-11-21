@@ -67,6 +67,39 @@ export function FilesPage() {
 
   const selection = useFMSelection(listing ?? undefined)
 
+  // Drag-and-drop upload: files dropped on the listing enqueue into the folder
+  // being viewed, exactly as the Upload button does. `dragDepth` counts enter and
+  // leave events from child rows so the highlight does not flicker when the
+  // pointer crosses one.
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
+  const dragProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return
+      e.preventDefault()
+      dragDepth.current += 1
+      setDragging(true)
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return
+      // Without preventDefault the browser opens the file instead of dropping it.
+      e.preventDefault()
+      e.dataTransfer.dropEffect = "copy"
+    },
+    onDragLeave: () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1)
+      if (dragDepth.current === 0) setDragging(false)
+    },
+    onDrop: (e: React.DragEvent) => {
+      const files = [...e.dataTransfer.files]
+      dragDepth.current = 0
+      setDragging(false)
+      if (files.length === 0 || listing === null) return
+      e.preventDefault()
+      uploadQueue.enqueue(listing.path, files)
+    },
+  }
+
   const reload = useCallback(() => {
     setPending(true)
     api
@@ -326,11 +359,21 @@ export function FilesPage() {
           ) : listing !== null ? (
             // The one scroll container on the page: header row sticks, rows scroll.
             <div
+              {...dragProps}
               className={cn(
-                "bg-card min-h-0 flex-1 overflow-auto rounded-lg border transition-opacity",
+                "bg-card relative min-h-0 flex-1 overflow-auto rounded-lg border transition-colors",
                 pending && "opacity-60",
+                dragging && "border-primary ring-primary/30 ring-2",
               )}
+              aria-label={`Files in ${listing.path}. Drop files here to upload.`}
             >
+              {dragging && (
+                <div className="bg-primary/5 pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                  <p className="bg-card border-primary text-foreground rounded-md border px-4 py-2 text-sm font-medium shadow-sm">
+                    Drop files to upload to {listing.path}
+                  </p>
+                </div>
+              )}
               <table className="w-full text-sm">
                 <thead className="bg-muted text-muted-foreground sticky top-0 z-10 text-left text-xs shadow-[0_1px_0_var(--border)]">
                   <tr>

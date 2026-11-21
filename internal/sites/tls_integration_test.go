@@ -24,6 +24,11 @@ import (
 // passes `nginx -t`, serves HTTPS, answers every plain-HTTP path except the ACME
 // challenge with a 301, and serves a token written the way an ACME client's
 // webroot provider writes it. It needs ports 80 and 443 free on the host.
+//
+// It also puts a second certificate-bearing site on the same host, which is what
+// exposed the `duplicate listen options` failure: nginx allows `reuseport` on
+// only one `listen` per address:port across the whole configuration, so the
+// second TLS site's apply was rejected until the template stopped emitting it.
 func TestRealNginxTLS(t *testing.T) {
 	eng := requireNativeHost(t)
 	bg := context.Background()
@@ -97,6 +102,27 @@ func TestRealNginxTLS(t *testing.T) {
 	if code, body, _ := fetch(insecure, "https://127.0.0.1/", "a.test"); code != 200 || !strings.Contains(body, "a.test") {
 		t.Errorf("HTTPS = %d %q, want the site", code, body)
 	}
+
+	// A second site with its own certificate shares 443 with the first. Before the
+	// template dropped `reuseport` this RefreshTLS failed nginx -t with
+	// "duplicate listen options for 0.0.0.0:443".
+	if _, err := mgr.Create(bg, CreateInput{Domain: "b.test", Kind: KindStatic}); err != nil {
+		t.Fatalf("create b.test: %v", err)
+	}
+	certDirB := paths.SiteCertDir("b.test")
+	if err := os.MkdirAll(certDirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSelfSigned(t, certDirB, "b.test")
+	state.certs["b.test"] = TLSInfo{CertFile: filepath.Join(certDirB, "fullchain.pem"), KeyFile: filepath.Join(certDirB, "privkey.pem")}
+	if _, err := mgr.RefreshTLS(bg, "b.test"); err != nil {
+		t.Fatalf("second TLS site: nginx rejected the configuration: %v", err)
+	}
+	insecureB := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "b.test"}}}
+	waitFor(t, "the second TLS site to serve", func() bool {
+		code, body, _ := fetch(insecureB, "https://127.0.0.1/", "b.test")
+		return code == 200 && strings.Contains(body, "b.test")
+	})
 
 	// Removing the certificate returns the site to HTTP only.
 	delete(state.certs, "a.test")

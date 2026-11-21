@@ -32,8 +32,8 @@ func normalize(t *testing.T, in Input) App {
 }
 
 func TestNormalizeAppliesDefaults(t *testing.T) {
-	a := normalize(t, Input{Name: "web", Type: TypeGo, Command: "/www/services/apps/web/bin/web"})
-	if a.WorkDir != "/www/services/apps/web" || a.User != "www" || a.Restart != RestartAlways || !a.Autostart {
+	a := normalize(t, Input{Name: "web", Type: TypeGo, Command: "/www/services/sites/web/bin/web"})
+	if a.WorkDir != "/www/services/sites/web" || a.User != "www" || a.Restart != RestartAlways || !a.Autostart {
 		t.Fatalf("defaults not applied: %+v", a)
 	}
 	if a.Args == nil || a.Env == nil {
@@ -76,15 +76,15 @@ func TestNormalizeRejects(t *testing.T) {
 
 func TestRenderGoldenGo(t *testing.T) {
 	a := normalize(t, Input{
-		Name: "web", Type: TypeGo, Command: "/www/services/apps/web/bin/web",
+		Name: "web", Type: TypeGo, Command: "/www/services/sites/web/bin/web",
 		Args: []string{"--listen", ":3000", "--title", "my app"},
 		Env:  map[string]string{"MODE": "prod", "A_LIST": "x,y z"}, Port: intp(3000),
 	})
 	got := string(Render(a, testPaths("/www"), ""))
 	want := `; Managed by Server Panel. Edit the app in the panel: this file is rewritten from it.
 [program:web]
-command=/www/services/apps/web/bin/web --listen :3000 --title 'my app'
-directory=/www/services/apps/web
+command=/www/services/sites/web/bin/web --listen :3000 --title 'my app'
+directory=/www/services/sites/web
 user=www
 environment=A_LIST="x,y z",MODE="prod",PORT="3000"
 autostart=true
@@ -557,6 +557,10 @@ func TestDeleteStopsAndForgetsTheApp(t *testing.T) {
 	if _, _, err := r.m.Create(ctx, goApp("web")); err != nil {
 		t.Fatal(err)
 	}
+	logDir := filepath.FromSlash(r.p.LogDir("web"))
+	if _, err := os.Stat(logDir); err != nil {
+		t.Fatalf("create should have made the log directory: %v", err)
+	}
 	if err := r.m.Delete(ctx, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -565,6 +569,9 @@ func TestDeleteStopsAndForgetsTheApp(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.conf, "web.conf")); !os.IsNotExist(err) {
 		t.Fatal("program file remains")
+	}
+	if _, err := os.Stat(logDir); !os.IsNotExist(err) {
+		t.Fatalf("log directory remains: %v", err)
 	}
 	if err := r.m.Delete(ctx, "web"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: %v", err)

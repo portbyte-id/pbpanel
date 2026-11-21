@@ -175,6 +175,43 @@ func TestCreatePHPSiteWithPHPInfo(t *testing.T) {
 	}
 }
 
+// The URL-rewrite preset changes the php block's front-controller line, and the
+// choice is kept across a reload.
+func TestUpdateRewriteChangesTheFrontController(t *testing.T) {
+	r := newPHPRig(t)
+	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3"}); err != nil {
+		t.Fatal(err)
+	}
+	siteFile := "/www/panel/nginx/sites/a.test.conf"
+	phpBlock := func() string {
+		b, _ := r.fs.ReadFile(siteFile)
+		return blockOf(t, string(b), "php")
+	}
+	if !strings.Contains(phpBlock(), "/index.php?$query_string") {
+		t.Fatalf("the default front controller is wrong:\n%s", phpBlock())
+	}
+
+	wp := RewriteWordPress
+	if _, err := r.m.Update(ctx, "a.test", UpdateInput{Rewrite: &wp}); err != nil {
+		t.Fatalf("update to wordpress: %v", err)
+	}
+	if !strings.Contains(phpBlock(), "try_files $uri $uri/ /index.php?$args;") {
+		t.Errorf("wordpress did not set ?$args:\n%s", phpBlock())
+	}
+	got, err := r.m.Get(ctx, "a.test")
+	if err != nil || got.Rewrite != RewriteWordPress {
+		t.Errorf("stored rewrite = %q, %v", got.Rewrite, err)
+	}
+
+	laravel := RewriteLaravel
+	if _, err := r.m.Update(ctx, "a.test", UpdateInput{Rewrite: &laravel}); err != nil {
+		t.Fatalf("update to laravel: %v", err)
+	}
+	if !strings.Contains(phpBlock(), "/index.php?$query_string") {
+		t.Errorf("laravel did not set ?$query_string:\n%s", phpBlock())
+	}
+}
+
 func TestCreatePHPSiteRejections(t *testing.T) {
 	r := newPHPRig(t)
 	for name, in := range map[string]CreateInput{

@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import {
   ACTION_LABELS,
   formatPercent,
@@ -43,7 +43,7 @@ import {
 import { formatBytes } from "@/lib/sysinfo"
 
 function errorText(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.detail || fallback : fallback
+  return describeError(error, fallback)
 }
 
 const TH = "px-3 py-1.5 font-medium"

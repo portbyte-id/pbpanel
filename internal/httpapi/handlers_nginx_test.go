@@ -555,3 +555,44 @@ func TestNginxWritesAreAudited(t *testing.T) {
 		t.Errorf("rejected edit entry = %+v", e)
 	}
 }
+
+// A reverse-proxy site's proxy.conf is editable through the include routes, so
+// every part of a site's nginx configuration can be changed from the UI.
+func TestSiteIncludesAreEditable(t *testing.T) {
+	h := newNginxHarness(t)
+	h.mustCreate(map[string]any{"domain": "a.test", "kind": "proxy", "proxy_target": "http://127.0.0.1:3000"})
+
+	code, out := h.call(http.MethodGet, "/api/sites/a.test/includes", nil)
+	if code != 200 {
+		t.Fatalf("list includes: %d %v", code, out)
+	}
+	names := map[string]bool{}
+	for _, inc := range out["includes"].([]any) {
+		names[inc.(map[string]any)["name"].(string)] = true
+	}
+	if !names["proxy.conf"] {
+		t.Errorf("a proxy site's includes must list proxy.conf: %v", names)
+	}
+	if names["php.conf"] {
+		t.Errorf("a proxy site must not list php.conf: %v", names)
+	}
+
+	code, out = h.call(http.MethodGet, "/api/sites/a.test/includes/proxy.conf", nil)
+	if code != 200 || !strings.Contains(out["content"].(string), "proxy_pass") {
+		t.Fatalf("read proxy.conf: %d %v", code, out)
+	}
+	edited := strings.Replace(out["content"].(string), "http://127.0.0.1:3000", "http://127.0.0.1:8080", 1)
+	if code, out := h.call(http.MethodPut, "/api/sites/a.test/includes/proxy.conf", map[string]any{"content": edited}); code != 200 {
+		t.Fatalf("save proxy.conf: %d %v", code, out)
+	}
+	_, out = h.call(http.MethodGet, "/api/sites/a.test/includes/proxy.conf", nil)
+	if !strings.Contains(out["content"].(string), "127.0.0.1:8080") {
+		t.Errorf("proxy.conf was not saved: %v", out)
+	}
+
+	// A name that is not one of this build's include files is refused, whatever
+	// path the client sends.
+	if rec := h.do(http.MethodGet, "/api/sites/a.test/includes/secret.key", h.s.cookie, h.s.csrf, nil); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("unknown include name = %d, want 422", rec.Code)
+	}
+}

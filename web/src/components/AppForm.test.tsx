@@ -127,7 +127,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), " web ")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/apps/web/bin/web")
+    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Arguments"), "--listen{Enter}:3000")
     await user.type(screen.getByLabelText("Environment"), "MODE=prod{Enter}# comment{Enter}A=b")
     await user.type(screen.getByLabelText("Port"), "3000")
@@ -136,7 +136,7 @@ describe("AppForm", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       name: "web",
       type: "go",
-      command: "/www/services/apps/web/bin/web",
+      command: "/www/services/sites/web/bin/web",
       args: ["--listen", ":3000"],
       env: { MODE: "prod", A: "b" },
       user: "www",
@@ -151,7 +151,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), "web")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/apps/web/bin/web")
+    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Port"), "3000")
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.type(screen.getByLabelText("Other domains"), "www.web.test, b.test")
@@ -168,7 +168,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), "web")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/apps/web/bin/web")
+    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.click(screen.getByRole("button", { name: "Create app" }))
 
@@ -349,7 +349,7 @@ describe("AppForm", () => {
       await waitFor(() =>
         expect(screen.getByLabelText("Environment")).toHaveValue("MODE=prod\nTOKEN=abc"),
       )
-      expect(screen.getByText(/Read from \/www\/services\/apps\/web\/\.env/)).toBeInTheDocument()
+      expect(screen.getByText(/Read from \/www\/services\/sites\/web\/\.env/)).toBeInTheDocument()
     })
 
     it("keeps the keys already typed when the file does not set them", async () => {

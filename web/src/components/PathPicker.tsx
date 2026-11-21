@@ -11,10 +11,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { api, type FMEntry } from "@/lib/api"
+import { describeError } from "@/lib/errors"
 import { cn } from "@/lib/utils"
 
 /** The folder apps are created under: where their browser opens by default. */
-export const APPS_ROOT = "/www/services/apps"
+export const APPS_ROOT = "/www/services/sites"
 
 /** The folder a path sits in; "/" for a path at the root. */
 export function parentOf(path: string): string {
@@ -104,7 +105,7 @@ function PathBrowser({
         setEntries([])
         setError(
           errorTextRef.current?.(path) ??
-            (err instanceof Error ? err.message : "The folder could not be listed."),
+            describeError(err, "The folder could not be listed."),
         )
       })
     return () => {
