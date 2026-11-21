@@ -162,6 +162,8 @@ type nginxStack struct {
 	Runtime *nginx.Runtime
 	// Guard answers the challenge page; nil without data/secret.key.
 	Guard *guard.Handler
+	// Prebuilt reports whether the next nginx build may take a CI-built package.
+	Prebuilt func(ctx context.Context) bool
 
 	phpMu    sync.Mutex
 	phpSteps []sites.PHPStep
@@ -187,13 +189,14 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	// A build takes a package CI already compiled when the operator turned that on
 	// and one fits this host; otherwise Docker compiles it here. Both settings are
 	// read per build, so the Settings page applies to the next one.
+	prebuiltOn := func(ctx context.Context) bool {
+		on, err := reg.Bool(ctx, settings.KeyRuntimesPrebuilt)
+		return err == nil && on
+	}
 	builder := &nginx.Prebuilt{
 		Fallback: nginx.DockerBuilder{Eng: eng, P: paths},
 		P:        paths,
-		Enabled: func(ctx context.Context) bool {
-			on, err := reg.Bool(ctx, settings.KeyRuntimesPrebuilt)
-			return err == nil && on
-		},
+		Enabled:  prebuiltOn,
 		URL: func(ctx context.Context) string {
 			u, err := reg.Str(ctx, settings.KeyRuntimesURL)
 			if err != nil {
@@ -313,7 +316,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 
 	return &nginxStack{
 		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs, Runtime: runtime,
-		Guard: guardHandler,
+		Guard: guardHandler, Prebuilt: prebuiltOn,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
@@ -378,5 +381,6 @@ func (n *nginxStack) deps() *httpapi.NginxDeps {
 		Sites: n.Sites, Global: n.Global, History: n.Editor,
 		Service: n.Service, Reconciler: n.Reconciler, Paths: n.Paths,
 		PHP: n.PHP, PHPReconcile: n.phpReconcile, Images: n.Images, Container: n.Runtime,
+		Prebuilt: n.Prebuilt,
 	}
 }

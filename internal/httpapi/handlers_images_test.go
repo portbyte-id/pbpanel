@@ -162,6 +162,27 @@ func (f *fakeNginxImages) Activate(context.Context, string) (images.Build, error
 	return images.Build{}, nil
 }
 
+// The image answer says whether a rebuild may take a CI-built package, so the
+// page can say where the build comes from. It is off unless the setting is on.
+func TestNginxImageReportsPrebuiltSetting(t *testing.T) {
+	h := newPHPHarness(t, &phpHost{})
+	h.deps.Nginx.Images = &fakeNginxImages{}
+	on := false
+	h.deps.Nginx.Prebuilt = func(context.Context) bool { return on }
+	var err error
+	h.handler, err = New(h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []bool{false, true} {
+		on = want
+		code, out := h.call(http.MethodGet, "/api/nginx/image", nil)
+		if code != http.StatusOK || out["prebuilt"] != want {
+			t.Fatalf("with the setting %v: prebuilt = %v, code %d", want, out["prebuilt"], code)
+		}
+	}
+}
+
 // The nginx image answers what serves and what served before, and an
 // activation of the build that already serves is refused.
 func TestNginxImageShowsCurrentAndPrevious(t *testing.T) {

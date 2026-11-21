@@ -317,6 +317,12 @@ export function BuildCard() {
                   </dd>
                 </>
               )}
+              <dt className="text-muted-foreground">Source</dt>
+              <dd className="text-xs">
+                {data.prebuilt
+                  ? "CI-built package when one fits this host, otherwise compiled here"
+                  : "Compiled on this host (Settings › Runtimes can use CI-built packages)"}
+              </dd>
               <dt className="text-muted-foreground">Built from</dt>
               <dd className="text-xs">{data.base}</dd>
             </dl>
@@ -348,7 +354,9 @@ export function BuildCard() {
               )}
             </div>
             <p className="text-muted-foreground text-xs">
-              A rebuild compiles nginx from the newest sources and takes about 5 to 8 minutes. It
+              {data.prebuilt
+                ? "A rebuild downloads the package CI built for this host when one fits, and compiles nginx here (5 to 8 minutes) when none does. It"
+                : "A rebuild compiles nginx from the newest sources and takes about 5 to 8 minutes. It"}
               serves only once nginx -t passes; the build before it stays for rollback.
             </p>
             <ApplyError error={update.error ?? activate.error} fallback="The build could not be changed." />
