@@ -15,7 +15,6 @@ import (
 // substitute a fake.
 type SSHAuthMonitor interface {
 	Attempts(ctx context.Context, q sshauth.Query) (sshauth.Report, error)
-	Available(ctx context.Context) error
 }
 
 // sshMaxLimit bounds the limit parameter. A request above it is refused rather

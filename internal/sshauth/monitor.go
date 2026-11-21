@@ -250,13 +250,3 @@ func topOrder(failedI, totalI, failedJ, totalJ int, lessIJ bool) bool {
 	}
 	return lessIJ
 }
-
-// Available reports whether the host has a journal to read. A Journal that does
-// not implement Prober is assumed usable.
-func (m *Monitor) Available(ctx context.Context) error {
-	p, ok := m.journal.(Prober)
-	if !ok {
-		return nil
-	}
-	return p.Probe(ctx)
-}

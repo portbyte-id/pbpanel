@@ -257,8 +257,8 @@ func TestMonitorBoundsRangeAndLimit(t *testing.T) {
 	}
 }
 
-// A host without a readable journal is a 503 in the HTTP layer and not a panic:
-// the error must survive the Monitor intact.
+// A Journal that cannot read says so as ErrUnavailable, which the HTTP layer
+// turns into a 503; the monitor does not try to guess before it asks.
 func TestMonitorReportsAnUnreadableJournal(t *testing.T) {
 	m := newMonitor(t, &fakeJournal{err: ErrUnavailable}, time.Now())
 	if _, err := m.Attempts(context.Background(), Query{}); !errors.Is(err, ErrUnavailable) {
@@ -289,31 +289,6 @@ func TestMonitorSummaryMatchesTheAttemptsReport(t *testing.T) {
 		t.Errorf("top users = %+v", s.TopUsers)
 	}
 }
-
-// A Journal that can probe says whether this host has one; one that cannot is
-// taken at its word until the first query.
-func TestAvailability(t *testing.T) {
-	m := newMonitor(t, &fakeJournal{}, time.Now())
-	if err := m.Available(context.Background()); err != nil {
-		t.Errorf("a plain Journal reported %v", err)
-	}
-	m = newMonitor(t, probeJournal{err: ErrUnavailable}, time.Now())
-	if err := m.Available(context.Background()); !errors.Is(err, ErrUnavailable) {
-		t.Errorf("a failing probe reported %v", err)
-	}
-	if err := m.Available(context.Background()); !errors.Is(err, ErrUnavailable) {
-		t.Errorf("a failing probe reported %v on the second call", err)
-	}
-}
-
-// probeJournal is a Journal and a Prober.
-type probeJournal struct{ err error }
-
-func (p probeJournal) Entries(context.Context, []string, time.Time, time.Time, int) ([]byte, error) {
-	return nil, nil
-}
-
-func (p probeJournal) Probe(context.Context) error { return p.err }
 
 // runner records the argv journalctl is called with, which is the only thing
 // standing between this package and a wrong journal read.
@@ -361,7 +336,7 @@ func TestJournalctlFailureIsUnavailable(t *testing.T) {
 	if _, err := j.Entries(context.Background(), DefaultUnits, time.Now(), time.Now(), 1); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("err = %v", err)
 	}
-	if err := j.Probe(context.Background()); !errors.Is(err, ErrUnavailable) {
-		t.Errorf("probe err = %v", err)
+	if _, err := j.Entries(context.Background(), DefaultUnits, time.Now(), time.Now(), 1); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("err = %v on the second call", err)
 	}
 }

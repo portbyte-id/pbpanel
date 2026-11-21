@@ -49,26 +49,9 @@ type Journal interface {
 	Entries(ctx context.Context, units []string, since, until time.Time, limit int) ([]byte, error)
 }
 
-// Prober is a Journal that can report, before the first query, whether the host
-// has a journal to read. *Journalctl implements it. A Journal without it is
-// assumed usable and reports the failure on the first query.
-type Prober interface {
-	Probe(ctx context.Context) error
-}
-
 // Journalctl reads the journal through journalctl on this host.
 type Journalctl struct {
 	Run Runner
-}
-
-// Probe runs journalctl without a unit filter and asks for no records: it fails
-// on a host without journalctl, with an unreadable journal, or outside systemd.
-func (j Journalctl) Probe(ctx context.Context) error {
-	out, err := j.Run.Run(ctx, "journalctl", "-n", "0", "--no-pager", "-q")
-	if err != nil {
-		return fmt.Errorf("%w: journalctl: %v: %s", ErrUnavailable, err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 // Entries implements Journal.
