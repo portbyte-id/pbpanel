@@ -15,6 +15,7 @@ import {
   ScrollText,
   Server,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Terminal,
 } from "lucide-react"
@@ -88,6 +89,7 @@ export const navGroups: NavGroup[] = [
     label: "Server",
     items: [
       { label: "Firewall", icon: ShieldCheck, path: "/firewall", description: "Open ports and rules", keywords: "iptables ports" },
+      { label: "SSH", icon: ShieldAlert, path: "/ssh", description: "SSH login attempts, failed and succeeded", keywords: "sshd auth login security brute force attempts journal" },
       { label: "Cron", icon: CalendarClock, path: "/cron", description: "Scheduled jobs and their run history", keywords: "schedule" },
       { label: "Docker", icon: Container, path: "/docker", description: "Containers, images and volumes, with live resource use", keywords: "containers images volumes stats compose" },
       { label: "Traffic", icon: Activity, path: "/traffic", description: "Live requests, errors and firewall events", keywords: "waf requests monitor modsecurity" },

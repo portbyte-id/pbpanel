@@ -17,6 +17,7 @@ import { phpRoute } from "@/routes/_app/php"
 import { runtimesRoute } from "@/routes/_app/runtimes"
 import { servicesRoute } from "@/routes/_app/services"
 import { settingsRoute } from "@/routes/_app/settings"
+import { sshRoute } from "@/routes/_app/ssh"
 import { tlsRoute } from "@/routes/_app/tls"
 import { trafficRoute } from "@/routes/_app/traffic"
 import { siteRoute } from "@/routes/_app/site"
@@ -52,6 +53,7 @@ const routeTree = rootRoute.addChildren([
     tlsRoute,
     settingsRoute,
     auditRoute,
+    sshRoute,
   ]),
 ])
 
