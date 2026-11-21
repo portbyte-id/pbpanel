@@ -44,7 +44,60 @@ export interface AlertInputs {
 
 /** A certificate this close to its end that the renewal has not dealt with is worth a line. */
 export const EXPIRY_WARNING_DAYS = 14
+/**
+ * A certificate that names an IP can only come from Let's Encrypt's `shortlived`
+ * profile, which issues for about six days and renews with a third of that left.
+ * Fourteen days would warn for the whole life of a healthy certificate, so
+ * short-lived ones use a window that fits their lifetime.
+ */
+export const SHORT_LIVED_EXPIRY_WARNING_DAYS = 2
 export const AUDIT_WINDOW_MS = 24 * 3_600_000
+
+const OCTET = /^(?:0|[1-9]\d{0,2})$/
+const HEX_GROUP = /^[0-9a-f]{1,4}$/i
+
+/** Dotted quad only: four decimal octets, each 0-255, no leading zeros. */
+export function isIPv4(value: string): boolean {
+  const parts = value.split(".")
+  return parts.length === 4 && parts.every((p) => OCTET.test(p) && Number(p) <= 255)
+}
+
+/**
+ * IPv6, compressed or full, optionally with an embedded IPv4 tail, optionally
+ * in the bracketed form a URL uses. A host that merely contains a colon does not
+ * qualify: every group must be hex and the count must add up.
+ */
+export function isIPv6(value: string): boolean {
+  const v =
+    value.length > 1 && value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value
+  if (!v.includes(":")) return false
+  const halves = v.split("::")
+  if (halves.length > 2) return false
+  const compressed = halves.length === 2
+  const head = halves[0] === "" ? [] : halves[0]!.split(":")
+  const tail = compressed && halves[1] !== "" ? halves[1]!.split(":") : []
+  let groups = [...head, ...tail]
+  let embedded = 0
+  const last = groups[groups.length - 1]
+  if (last !== undefined && last.includes(".")) {
+    if (!isIPv4(last)) return false
+    embedded = 2
+    groups = groups.slice(0, -1)
+  }
+  if (!groups.every((g) => HEX_GROUP.test(g))) return false
+  const count = groups.length + embedded
+  return compressed ? count <= 7 : count === 8
+}
+
+/** True when a certificate name is an IP literal, which makes the certificate short-lived. */
+export function isIPName(name: string): boolean {
+  return isIPv4(name) || isIPv6(name)
+}
+
+/** The expiry window that suits this certificate's lifetime. */
+export function expiryWarningDays(cert: CertView): number {
+  return cert.names.some(isIPName) ? SHORT_LIVED_EXPIRY_WARNING_DAYS : EXPIRY_WARNING_DAYS
+}
 
 export function certAlerts(certs: CertView[]): DashboardAlert[] {
   const out: DashboardAlert[] = []
@@ -67,7 +120,7 @@ export function certAlerts(certs: CertView[]): DashboardAlert[] {
         title: `The certificate for ${c.domain} has expired`,
         link: { kind: "tls" },
       })
-    } else if (c.days_left <= EXPIRY_WARNING_DAYS) {
+    } else if (c.days_left <= expiryWarningDays(c)) {
       out.push({
         id: `cert-expiring:${c.domain}`,
         severity: "warning",

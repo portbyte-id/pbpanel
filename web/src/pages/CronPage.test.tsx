@@ -285,6 +285,75 @@ describe("CronPage", () => {
     expect(api.cronRuns).toHaveBeenCalledWith(1, 30)
   })
 
+  it("keeps the output panel outside the run list, not scrolled away inside it", async () => {
+    // The list is the only element that scrolls; the output must be its sibling
+    // so reading it never means scrolling past every row first. jsdom has no
+    // layout, so this follows the tree: the output's wrapper must not sit under
+    // the run table's scrolling wrapper.
+    setup([job()])
+    const user = userEvent.setup()
+    vi.mocked(api.cronRuns).mockResolvedValue([run({ id: 12, status: "failed", output_tail: "boom\n" })])
+    vi.mocked(api.cronRun).mockResolvedValue(run({ id: 12, status: "failed", output_tail: "boom\n" }))
+
+    await user.click(await screen.findByRole("button", { name: "History of backup" }))
+    const dialog = await screen.findByRole("dialog")
+    const list = within(dialog).getByRole("table", { name: /Runs of backup/ }).parentElement as HTMLElement
+    expect(list.className).toMatch(/overflow-auto/)
+
+    await user.click(within(list).getByRole("button", { name: /Output of the run/ }))
+    const pre = await within(dialog).findByLabelText("Output of run 12")
+    for (let n: HTMLElement | null = pre; n && n !== dialog; n = n.parentElement) {
+      expect(n).not.toBe(list)
+    }
+  })
+
+  it("moves the open output when another run is chosen", async () => {
+    setup([job()])
+    const user = userEvent.setup()
+    vi.mocked(api.cronRuns).mockResolvedValue([
+      run({ id: 13, status: "succeeded", output_tail: "second\n" }),
+      run({ id: 12, status: "failed", exit_code: 3, output_tail: "first\n" }),
+    ])
+    vi.mocked(api.cronRun).mockImplementation(async (_j, id) =>
+      id === 12 ? run({ id: 12, status: "failed", output_tail: "first\n" }) : run({ id: 13, status: "succeeded", output_tail: "second\n" }),
+    )
+
+    await user.click(await screen.findByRole("button", { name: "History of backup" }))
+    const dialog = await screen.findByRole("dialog")
+    const rows = await within(dialog).findAllByTestId("run-row")
+
+    await user.click(within(rows[1]!).getByRole("button", { name: /Output of the run/ }))
+    expect(await within(dialog).findByLabelText("Output of run 12")).toHaveTextContent("first")
+    expect(within(dialog).getAllByLabelText(/Output of run/)).toHaveLength(1)
+
+    await user.click(within(rows[0]!).getByRole("button", { name: /Output of the run/ }))
+    expect(await within(dialog).findByLabelText("Output of run 13")).toHaveTextContent("second")
+    expect(within(dialog).queryByLabelText("Output of run 12")).not.toBeInTheDocument()
+    expect(within(dialog).getAllByLabelText(/Output of run/)).toHaveLength(1)
+    expect(within(rows[0]!).getByRole("button", { name: /Output of the run/ })).toHaveAttribute("aria-pressed", "true")
+    expect(within(rows[1]!).getByRole("button", { name: /Output of the run/ })).toHaveAttribute("aria-pressed", "false")
+  })
+
+  it("shows a dash rather than a stale exit code for a run still going", async () => {
+    setup([job()])
+    const user = userEvent.setup()
+    vi.mocked(api.cronRuns).mockResolvedValue([
+      run({ id: 14, status: "running", exit_code: 0, finished_at: undefined }),
+    ])
+    vi.mocked(api.cronRun).mockResolvedValue(run({ id: 14, status: "running", exit_code: 0, finished_at: undefined, output_tail: "" }))
+
+    await user.click(await screen.findByRole("button", { name: "History of backup" }))
+    const dialog = await screen.findByRole("dialog")
+    const row = (await within(dialog).findAllByTestId("run-row"))[0]!
+    const cells = within(row).getAllByRole("cell").map((c) => c.textContent)
+    expect(cells[2]).toBe("Running")
+    expect(cells[3]).toBe("–")
+    expect(cells[4]).toBe("–")
+
+    await user.click(within(row).getByRole("button", { name: /Output of the run/ }))
+    expect(await within(dialog).findByLabelText("Output of run 14")).toHaveTextContent("No output yet.")
+  })
+
   describe("built-in jobs", () => {
     const sslRenew = (over: Partial<CronJob> = {}): CronJob =>
       job({
