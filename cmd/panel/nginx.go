@@ -184,7 +184,25 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		return nil, err
 	}
 	run := nginx.ExecRunner{}
-	imgs, err := nginx.NewImages(paths, run, nginx.DockerBuilder{Eng: eng, P: paths}, images.NewCatalog(st), logger)
+	// A build takes a package CI already compiled when the operator turned that on
+	// and one fits this host; otherwise Docker compiles it here. Both settings are
+	// read per build, so the Settings page applies to the next one.
+	builder := &nginx.Prebuilt{
+		Fallback: nginx.DockerBuilder{Eng: eng, P: paths},
+		P:        paths,
+		Enabled: func(ctx context.Context) bool {
+			on, err := reg.Bool(ctx, settings.KeyRuntimesPrebuilt)
+			return err == nil && on
+		},
+		URL: func(ctx context.Context) string {
+			u, err := reg.Str(ctx, settings.KeyRuntimesURL)
+			if err != nil {
+				return ""
+			}
+			return u
+		},
+	}
+	imgs, err := nginx.NewImages(paths, run, builder, images.NewCatalog(st), logger)
 	if err != nil {
 		return nil, err
 	}

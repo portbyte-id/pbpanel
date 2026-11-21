@@ -394,3 +394,35 @@ func TestNewIDHasTheShapeTheTagsNeed(t *testing.T) {
 		}
 	}
 }
+
+// A prebuilt package is compiled with its own ID in its prefix, so a family has to
+// be able to build under an ID it was offered. An offer that is not an ID, or one
+// the catalogue already holds, must never replace a row.
+func TestChooseIDBuildsUnderAnOfferedID(t *testing.T) {
+	r := newRig(t)
+	offered := "20261121120000-a1b2c3"
+	r.fam.o.ChooseID = func(_ context.Context, exists func(string) bool) (string, bool) {
+		if exists(offered) {
+			return "", false
+		}
+		return offered, true
+	}
+
+	first := r.build(t)
+	if first.ID != offered || first.Tag != "panel/php:8.3-"+offered {
+		t.Fatalf("first build = %s (%s), want the offered ID %s", first.ID, first.Tag, offered)
+	}
+
+	// The offered ID is held now: the family generates one instead of colliding.
+	second := r.build(t)
+	if second.ID == offered || CheckID(second.ID) != nil {
+		t.Fatalf("second build reused %s or made a bad ID: %q", offered, second.ID)
+	}
+
+	// An offer that is not shaped like an ID is ignored rather than trusted.
+	r.fam.o.ChooseID = func(context.Context, func(string) bool) (string, bool) { return "../etc", true }
+	third := r.build(t)
+	if CheckID(third.ID) != nil || strings.Contains(third.ID, "etc") {
+		t.Fatalf("a malformed offer was used: %q", third.ID)
+	}
+}

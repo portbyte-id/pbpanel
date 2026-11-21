@@ -1,0 +1,144 @@
+name: Runtimes
+
+# Builds the prebuilt nginx packages a panel can download instead of compiling nginx
+# on the host (Settings > Runtimes > runtimes.prebuilt). It runs the same recipe the
+# host would, through the same code (cmd/mkruntime), once per distro release and
+# architecture the builder supports, and publishes the results to a rolling
+# prerelease named `runtimes`:
+#
+#   index.json                      what the panel reads
+#   nginx-<release>-<distro><ver>-<arch>-<id>.tar.gz
+#   nginx-<release>-<distro><ver>-<arch>-<id>.manifest.json
+#
+# The release is a prerelease and never "latest", so install.sh, which installs the
+# latest release's binaries, never sees it.
+#
+# A package is only used by a host of exactly its distro release and architecture,
+# under the install root /www, from this recipe. Anything else compiles on the host
+# as before, so a failed job here only means fewer hosts take the shortcut.
+#
+# The arm64 jobs need arm64 runners, which are free on public repositories.
+# Design and limits: docs/design/prebuilt-runtimes.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      series:
+        description: "nginx series (1.30) or release (1.30.2) to build"
+        default: "1.30"
+  schedule:
+    # Mondays: picks up a new nginx or OpenSSL patch release.
+    - cron: "23 3 * * 1"
+  push:
+    branches: [main]
+    # Anything that changes the recipe, or what it pins, changes its ID: every
+    # package built before it stops fitting until these jobs have run again.
+    paths:
+      - internal/nginx/builder.Dockerfile
+      - internal/nginx/builder.go
+      - internal/nginx/paths.go
+      - internal/native/**
+      - "!**/*_test.go"
+      - cmd/mkruntime/**
+      - .github/workflows/runtimes.yml
+
+permissions:
+  contents: write
+
+# One publisher at a time: two runs merging into the same index would race.
+concurrency:
+  group: runtimes
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: runtimes
+
+jobs:
+  prepare:
+    name: Make sure the release exists
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Prebuilt runtimes" \
+              --notes "Packages the panel downloads instead of compiling nginx. Written by the Runtimes workflow; do not edit by hand."
+          fi
+
+  build:
+    name: nginx on ${{ matrix.host }} (${{ matrix.runner }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      # A distro whose recipe does not build must not stop the others publishing.
+      fail-fast: false
+      matrix:
+        host: ["ubuntu 22.04", "ubuntu 24.04", "ubuntu 26.04", "debian 12", "debian 13"]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the package
+        env:
+          HOST: ${{ matrix.host }}
+          SERIES: ${{ inputs.series || '1.30' }}
+        run: |
+          set -eu
+          case "$SERIES" in
+            "" | *[!0-9.]*) echo "::error::series must look like 1.30 or 1.30.2"; exit 1 ;;
+          esac
+          # HOST is "<distro> <version>"; splitting it on the space is the point.
+          # shellcheck disable=SC2086
+          set -- $HOST
+          go run ./cmd/mkruntime build \
+            -distro "$1" -version-id "$2" -series "$SERIES" -root /www -out out
+          ls -l out
+
+      - name: Upload the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" out/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  index:
+    name: Publish the index
+    needs: [prepare, build]
+    # Some builds failing still leaves packages worth publishing.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Merge the manifests into index.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir manifests
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.manifest.json' --dir manifests
+          go run ./cmd/mkruntime index \
+            -manifests manifests -out index.json -drop drop.txt -keep 2
+          cat index.json
+
+          # The index goes up first, so it never names a package that is gone.
+          gh release upload "$RELEASE_TAG" index.json --clobber --repo "$GITHUB_REPOSITORY"
+          while IFS= read -r name; do
+            if [ -n "$name" ]; then
+              gh release delete-asset "$RELEASE_TAG" "$name" --yes --repo "$GITHUB_REPOSITORY" \
+                || echo "already gone: $name"
+            fi
+          done < drop.txt

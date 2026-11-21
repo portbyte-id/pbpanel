@@ -65,7 +65,7 @@ func (i *Images) family(version string) (*images.Family, error) {
 	if f, ok := i.fams[version]; ok {
 		return f, nil
 	}
-	fam, err := images.NewFamily(images.FamilyOptions{
+	opts := images.FamilyOptions{
 		Kind: images.KindNginx, Version: version, Repo: Repo, Catalog: i.cat, Engine: dirStore{i.p}, Log: i.log,
 		Hooks: images.Hooks{
 			Build: func(ctx context.Context, b images.Build, progress docker.Progress) error {
@@ -87,7 +87,15 @@ func (i *Images) family(version string) (*images.Family, error) {
 			},
 			Swap: i.swap,
 		},
-	})
+	}
+	// A builder that can take a prebuilt package names the ID it will build under,
+	// because that ID is compiled into the package's prefix.
+	if picker, ok := i.b.(IDPicker); ok {
+		opts.ChooseID = func(ctx context.Context, exists func(id string) bool) (string, bool) {
+			return picker.PickID(ctx, version, exists)
+		}
+	}
+	fam, err := images.NewFamily(opts)
 	if err != nil {
 		return nil, err
 	}

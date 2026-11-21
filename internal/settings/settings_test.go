@@ -519,7 +519,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
 	groups := r.Groups()
-	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Firewall", "Cron", "Logs"}
+	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Firewall", "Cron", "Logs", "Runtimes"}
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("got %d groups, want %d: %+v", len(groups), len(wantGroups), groups)
 	}
@@ -542,6 +542,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"Firewall": {"waf.turnstile.site_key", "waf.turnstile.secret"},
 		"Cron":     {"cron.allow_shell"},
 		"Logs":     {"logs.rotate.max_bytes", "logs.rotate.keep"},
+		"Runtimes": {"runtimes.prebuilt", "runtimes.url"},
 	}
 	seen := 0
 	for _, g := range groups {
@@ -556,6 +557,33 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	}
 	if seen != len(defaultKeys()) {
 		t.Fatalf("groups expose %d keys, want %d", seen, len(defaultKeys()))
+	}
+}
+
+// The prebuilt-runtimes URL is where a program that then runs as root is fetched
+// from, so only https (or loopback http, for tests) is accepted.
+func TestRuntimesSettingsDefaultOffAndRefuseInsecureURLs(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+
+	if on, err := r.Bool(ctx, KeyRuntimesPrebuilt); err != nil || on {
+		t.Errorf("%s = %v, %v; prebuilt packages must be off until the operator turns them on", KeyRuntimesPrebuilt, on, err)
+	}
+	if got, err := r.Str(ctx, KeyRuntimesURL); err != nil || got != DefaultRuntimesURL {
+		t.Errorf("%s = %q, %v; want the project's release folder", KeyRuntimesURL, got, err)
+	}
+	for _, v := range []string{DefaultRuntimesURL, "https://mirror.example.com/runtimes", "http://127.0.0.1:8080/x"} {
+		if err := validateRuntimesURL(v); err != nil {
+			t.Errorf("%q refused: %v", v, err)
+		}
+	}
+	for _, v := range []string{"", "http://example.com/x", "ftp://example.com/x", "https://u:p@example.com/x", "https://example.com/x?a=b", "example.com/x"} {
+		if err := validateRuntimesURL(v); err == nil {
+			t.Errorf("%q accepted", v)
+		}
+	}
+	if err := r.Set(ctx, KeyRuntimesURL, "http://example.com/x"); err == nil {
+		t.Error("the registry stored a plain-http URL")
 	}
 }
 

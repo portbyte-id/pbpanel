@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -23,7 +24,39 @@ const (
 	groupFirewall = "Firewall"
 	groupCron     = "Cron"
 	groupLogs     = "Logs"
+	groupRuntimes = "Runtimes"
 )
+
+// Prebuilt runtime settings. nginx can be taken from a build a CI job already
+// compiled instead of being compiled on this host. Both are read at the start of
+// every build, so a change applies to the next one.
+const (
+	// KeyRuntimesPrebuilt turns the shortcut on. Off by default: it makes the
+	// panel download a program it then runs as root, so it is an operator's choice.
+	KeyRuntimesPrebuilt = "runtimes.prebuilt"
+	// KeyRuntimesURL is where the index and the packages are published.
+	KeyRuntimesURL = "runtimes.url"
+	// DefaultRuntimesURL is the rolling release the project's CI publishes to.
+	DefaultRuntimesURL = "https://github.com/portbyte-id/pbpanel/releases/download/runtimes"
+)
+
+// validateRuntimesURL accepts an https URL, or http on a loopback address. A
+// package is unpacked as root, so it never travels in clear.
+func validateRuntimesURL(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("must be a plain URL such as https://example.com/runtimes")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" || h == "::1" {
+			return nil
+		}
+	}
+	return errors.New("must start with https://")
+}
 
 // Firewall settings. The Turnstile keys are shared by every site whose challenge
 // page uses Turnstile; the site key is public and the secret is checked on each
@@ -402,6 +435,25 @@ func defaultKeys() []key {
 				Group:           groupLogs,
 			},
 			check: rangeInt(1, 365),
+		},
+		{
+			meta: Meta{
+				Name:        KeyRuntimesPrebuilt,
+				Type:        TypeBool,
+				Default:     "false",
+				Description: "Install nginx from a build the project's CI already compiled, instead of compiling it on this host. A package is used only when it was made for this exact distro, release and architecture, under this install root, from the recipe this panel ships, and its sha256 matches the published index; otherwise the panel compiles as before. It downloads a program that then runs as root, so it is off until you choose it.",
+				Group:       groupRuntimes,
+			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyRuntimesURL,
+				Type:        TypeString,
+				Default:     DefaultRuntimesURL,
+				Description: "Where prebuilt packages are published: a folder holding index.json and the packages it lists. Must be https. Change it to use a fork or a mirror.",
+				Group:       groupRuntimes,
+			},
+			check: validateRuntimesURL,
 		},
 	}
 }
