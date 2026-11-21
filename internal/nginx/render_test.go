@@ -112,7 +112,8 @@ func TestRenderPHPUsesTheRewritePreset(t *testing.T) {
 	}
 }
 
-func TestSettingsRenderEveryField(t *testing.T) {	s := HTTPSettings{
+func TestSettingsRenderEveryField(t *testing.T) {
+	s := HTTPSettings{
 		WorkerProcesses: "4", ClientMaxBodySize: "0", Gzip: false,
 		KeepaliveTimeout: 10, ClientBodyTimeout: 11, ClientHeaderTimeout: 12, SendTimeout: 13, ServerTokens: true,
 	}
