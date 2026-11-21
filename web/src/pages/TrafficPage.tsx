@@ -75,7 +75,9 @@ export function TrafficPage() {
   )
 
   return (
-    <div className="flex flex-col gap-6">
+    // `relative` contains the absolutely-positioned `sr-only` table captions, so
+    // they cannot escape `main`'s clip and grow the document past the viewport.
+    <div className="relative flex flex-col gap-6">
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-site`}>Site</Label>

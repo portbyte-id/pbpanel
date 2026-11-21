@@ -267,8 +267,10 @@ export function CronPage() {
 function HistoryDialog({ job, onClose }: { job: CronJob | null; onClose: () => void }) {
   return (
     <Dialog open={job !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      {/* The header stays put and only the table scrolls, so the title and the
+          close button never scroll away and the output panel stays on screen. */}
+      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{job ? `${job.name}: run history` : "Run history"}</DialogTitle>
           <DialogDescription>Newest first. Choose a run to read the end of its output.</DialogDescription>
         </DialogHeader>
@@ -295,11 +297,13 @@ export function RunHistory({ job }: { job: CronJob }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="border-border overflow-x-auto rounded-md border">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {/* Only the run list scrolls. The output panel keeps its place under it, so
+          asking for a run's output never means scrolling past every row first. */}
+      <div className="border-border min-h-0 overflow-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Runs of {job.name}</caption>
-          <thead className="bg-muted text-muted-foreground text-left text-xs">
+          <thead className="bg-muted text-muted-foreground sticky top-0 text-left text-xs">
             <tr>
               <th scope="col" className="px-3 py-1.5 font-medium">Started</th>
               <th scope="col" className="px-3 py-1.5 font-medium">Trigger</th>
@@ -338,11 +342,13 @@ export function RunHistory({ job }: { job: CronJob }) {
         </table>
       </div>
       {openRun !== null && (
-        <RunOutput
-          jobId={job.id}
-          row={runs.data.find((r) => r.id === openRun) ?? null}
-          runId={openRun}
-        />
+        <div className="shrink-0">
+          <RunOutput
+            jobId={job.id}
+            row={runs.data.find((r) => r.id === openRun) ?? null}
+            runId={openRun}
+          />
+        </div>
       )}
     </div>
   )
