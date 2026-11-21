@@ -45,7 +45,7 @@ func mustRender(t *testing.T, b []byte, err error) []byte {
 
 func TestGoldenFiles(t *testing.T) {
 	static := Site{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test"}
-	proxy := Site{Domain: "b.test", Kind: KindProxy, ProxyTarget: "http://127.0.0.1:3000"}
+	proxy := Site{Domain: "b.test", Kind: KindProxy, ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}}
 
 	b, err := testPaths.RenderMainConf()
 	golden(t, "nginx.conf", mustRender(t, b, err))
@@ -72,12 +72,14 @@ func TestGoldenFiles(t *testing.T) {
 	redirect.RedirectHTTP = true
 	b, err = testPaths.RenderTLS("a.test", &redirect)
 	golden(t, "tls-redirect.conf", mustRender(t, b, err))
-	b, err = RenderProxy("http://127.0.0.1:3000")
+	b, err = RenderProxy([]ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}})
 	golden(t, "proxy.conf", mustRender(t, b, err))
 
-	phpSite := Site{Domain: "c.test", Kind: KindPHP, Root: "/www/services/sites/c.test"}
+	phpSite := Site{Domain: "c.test", Kind: KindPHP, Root: "/www/services/sites/c.test", HasPHP: true, ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}}
 	b, err = testPaths.RenderSiteFile(phpSite)
 	golden(t, "site-php.conf", mustRender(t, b, err))
+	b, err = RenderProxy(phpSite.ProxyRoutes)
+	golden(t, "proxy-subpath.conf", mustRender(t, b, err))
 	b, err = testPaths.RenderPHP("/www/panel/run/php-8.3-c_test.sock", "")
 	golden(t, "php.conf", mustRender(t, b, err))
 }
@@ -225,10 +227,182 @@ func TestRenderRefusesInjection(t *testing.T) {
 		{Domain: "a.test", Kind: KindStatic, Root: "relative"},
 		{Domain: "a b", Kind: KindProxy},
 		{Domain: "a.test", Kind: "php"},
+		// Two `location /` blocks would not parse: PHP plus a "/" route, a root
+		// plus a "/" route, and a proxy site that also claims a root.
+		{Domain: "a.test", Kind: KindPHP, Root: "/www/services/sites/a.test", ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}},
+		{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test", ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}},
+		{Domain: "a.test", Kind: KindProxy, Root: "/www/services/sites/a.test", ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}},
 	} {
 		if _, err := testPaths.RenderSiteFile(s); err == nil {
 			t.Errorf("site %+v was rendered", s)
 		}
+	}
+}
+
+// proxyPassOf returns the proxy_pass line of the first location block for path.
+func proxyPassOf(t *testing.T, conf, path string) string {
+	t.Helper()
+	lines := strings.Split(conf, "\n")
+	in := false
+	for _, l := range lines {
+		switch {
+		case strings.TrimSpace(l) == "location "+path+" {":
+			in = true
+		case in && strings.HasPrefix(strings.TrimSpace(l), "proxy_pass "):
+			return strings.TrimSpace(l)
+		case in && strings.TrimSpace(l) == "}":
+			t.Fatalf("no proxy_pass in location %s:\n%s", path, conf)
+		}
+	}
+	t.Fatalf("no location %s in:\n%s", path, conf)
+	return ""
+}
+
+// strip_prefix is the difference between `proxy_pass http://up;` (the request
+// URI arrives unchanged: /api/x stays /api/x) and `proxy_pass http://up/;` (the
+// matched location prefix is replaced: /api/x arrives as /x). Reading the
+// rendered proxy_pass back is the only way to tell the two apart without nginx.
+func TestProxyRouteStripPrefixSemantics(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		route ProxyRoute
+		want  string
+	}{
+		{"strip: target gains a URI", ProxyRoute{Path: "/api", Target: "http://up.test:8080", StripPrefix: true}, "proxy_pass http://up.test:8080/;"},
+		{"keep: no URI", ProxyRoute{Path: "/api", Target: "http://up.test:8080"}, "proxy_pass http://up.test:8080;"},
+	} {
+		b, err := RenderProxy([]ProxyRoute{c.route})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := proxyPassOf(t, string(b), "/api"); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A subpath route is one `location <path>` per route, each with the same proxy
+// headers, and the Host stays the site's own name (the backend is a service
+// behind the site, not a site of its own).
+func TestProxyRouteRendersOneLocationPerRoute(t *testing.T) {
+	routes := []ProxyRoute{
+		{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true},
+		{Path: "/api/v2", Target: "http://127.0.0.1:8081"},
+	}
+	b, err := RenderProxy(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		"location /api {", "location /api/v2 {",
+		"proxy_set_header Host $host;",
+		"proxy_set_header X-Forwarded-Proto $scheme;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("proxy.conf lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "location / {") {
+		t.Errorf("a subpath route must not render a location /:\n%s", got)
+	}
+	// Nested prefixes render both and leave longest-prefix match to nginx: /api
+	// is declared first, /api/v2 second, and nginx still picks /api/v2 for a
+	// request under it.
+	if strings.Index(got, "location /api {") > strings.Index(got, "location /api/v2 {") {
+		t.Errorf("the routes were rendered out of order:\n%s", got)
+	}
+}
+
+// A PHP site with a proxy route gets both: the PHP locations in the pb:php
+// block and the route's location from the proxy include. `location /` belongs
+// to PHP and is not duplicated.
+func TestPHPSiteWithProxyRouteRendersBoth(t *testing.T) {
+	s := Site{Domain: "app.test", Kind: KindPHP, Root: "/www/services/sites/app.test", HasPHP: true,
+		ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}}
+	site, err := testPaths.RenderSiteFile(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The PHP site keeps its PHP block and, because it has routes, includes the
+	// proxy include.
+	for _, want := range []string{"# >>> pb:php", "# <<< pb:php", "include /www/panel/nginx/includes/app.test/proxy.conf;"} {
+		if !strings.Contains(string(site), want) {
+			t.Errorf("site file lacks %q:\n%s", want, site)
+		}
+	}
+	// Filling the PHP block (what siteFile does) puts the PHP `location /` and
+	// `location ~ \.php$` in it, and `location /` is not written a second time.
+	php, err := testPaths.RenderPHP("/www/panel/run/php-8.3-app_test.sock", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filled, ok := ReplaceBlock(site, BlockPHP, php)
+	if !ok {
+		t.Fatal("the php block was not filled")
+	}
+	proxy, err := RenderProxy(s.ProxyRoutes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := string(filled) + "\n" + string(proxy)
+	if n := strings.Count(whole, "location / {"); n != 1 {
+		t.Errorf("location / appears %d times, want 1 (PHP owns it):\n%s", n, whole)
+	}
+	if !strings.Contains(whole, "location /api {") {
+		t.Errorf("the subpath route is missing:\n%s", whole)
+	}
+}
+
+// A static site with a subpath route keeps its own `location /` and adds the
+// route beside it, so the route wins for its prefix by longest-prefix match.
+func TestStaticSiteWithSubpathRouteKeepsItsLocation(t *testing.T) {
+	s := Site{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test",
+		ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}}
+	b, err := testPaths.RenderSiteFile(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, "location / {") {
+		t.Errorf("a static site with a subpath route lost its location /:\n%s", got)
+	}
+	if !strings.Contains(got, "include /www/panel/nginx/includes/a.test/proxy.conf;") {
+		t.Errorf("the route include is missing:\n%s", got)
+	}
+}
+
+func TestCheckProxyPath(t *testing.T) {
+	good := map[string]string{
+		"/":          "/",
+		"/api":       "/api",
+		" /api/v2 ":  "/api/v2",
+		"/static/js": "/static/js",
+	}
+	for in, want := range good {
+		if got, err := CheckProxyPath(in); err != nil || got != want {
+			t.Errorf("CheckProxyPath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{
+		"", "api", "/api/", "/api/../x", "/api//v2", "/api x", "/api{x}", "/api$uri", "/a#b",
+		"/api;return 200", "/~api", "/api?x", "/a b/c",
+	} {
+		if got, err := CheckProxyPath(in); err == nil {
+			t.Errorf("CheckProxyPath(%q) = %q, want an error", in, got)
+		}
+	}
+}
+
+// Duplicate paths are refused: nginx would see two location blocks for the same
+// prefix. Nested prefixes are accepted by CheckProxyRoutes, since nginx's
+// longest-prefix match handles them.
+func TestCheckProxyRoutes(t *testing.T) {
+	if err := CheckProxyRoutes([]ProxyRoute{{Path: "/api"}, {Path: "/api"}}); err == nil {
+		t.Error("a duplicate route path was accepted")
+	}
+	if err := CheckProxyRoutes([]ProxyRoute{{Path: "/api"}, {Path: "/api/v2"}}); err != nil {
+		t.Errorf("nested prefixes were refused: %v", err)
 	}
 }
 
@@ -433,14 +607,17 @@ func TestRenderSiteFileHasEveryBlockEmpty(t *testing.T) {
 	p := Paths{Root: "/www"}
 	for _, s := range []Site{
 		{Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a.test"},
-		{Domain: "a.test", Kind: KindPHP, Root: "/www/services/sites/a.test"},
+		{Domain: "a.test", Kind: KindPHP, Root: "/www/services/sites/a.test", HasPHP: true},
+		// A proxy site has no root and no PHP: only the domains, the challenge
+		// location and the TLS lines are its own.
+		{Domain: "b.test", Kind: KindProxy, ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}},
 	} {
 		b, err := p.RenderSiteFile(s)
 		if err != nil {
 			t.Fatalf("%v: %v", s.Kind, err)
 		}
 		names := []string{BlockListen, BlockNames, BlockACME, BlockTLS}
-		if s.Kind == KindPHP {
+		if s.HasPHP {
 			names = append(names, BlockPHP)
 		}
 		for _, n := range names {

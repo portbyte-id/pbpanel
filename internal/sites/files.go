@@ -109,13 +109,12 @@ func (m *Manager) IncludeFiles(ctx context.Context, domain string) ([]IncludeFil
 	return out, nil
 }
 
-// siteHasInclude reports whether an include name applies to a site's kind.
+// siteHasInclude reports whether an include file applies to a site. The proxy
+// include is written for every site; the PHP one only for a site that runs PHP.
 func (m *Manager) siteHasInclude(s Site, name string) bool {
 	switch name {
-	case nginx.IncludeProxy:
-		return s.Kind == KindProxy
 	case nginx.IncludePHP:
-		return s.Kind == KindPHP
+		return s.PHPVersion != nil
 	default:
 		return true
 	}

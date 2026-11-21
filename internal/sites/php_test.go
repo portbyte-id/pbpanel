@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -212,15 +213,164 @@ func TestUpdateRewriteChangesTheFrontController(t *testing.T) {
 	}
 }
 
+// A site may run PHP and proxy a subpath at the same time. The rendered site
+// file carries the PHP locations in its block and the /api location in the
+// proxy include, `location /` belongs to PHP exactly once, and the strip-prefix
+// rendering is what makes /api/x arrive at the backend as /x.
+func TestPHPSiteWithProxyRoute(t *testing.T) {
+	r := newPHPRig(t)
+	res, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3",
+		ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Site.ProxyRoutes; !slices.Equal(got, []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}) {
+		t.Errorf("routes = %+v", got)
+	}
+	site, _ := r.fs.ReadFile(siteConf)
+	php := blockOf(t, string(site), "php")
+	if !strings.Contains(php, "fastcgi_pass unix:/www/panel/run/php-8.3-a_test.sock;") {
+		t.Errorf("the PHP block is missing its fastcgi_pass:\n%s", php)
+	}
+	if !strings.Contains(string(site), "include /www/panel/nginx/includes/a.test/proxy.conf;") {
+		t.Errorf("the site file does not include the proxy routes:\n%s", site)
+	}
+	proxy, _ := r.fs.ReadFile("/www/panel/nginx/includes/a.test/proxy.conf")
+	if !strings.Contains(string(proxy), "location /api {") ||
+		!strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:8080/;") {
+		t.Errorf("proxy.conf = %q", proxy)
+	}
+	// One location / in the whole site: PHP's. The proxy route is /api only.
+	if n := strings.Count(string(site)+string(proxy), "location / {"); n != 1 {
+		t.Errorf("location / appears %d times, want 1 (PHP owns it)", n)
+	}
+
+	// The detail advertises both controls: PHP's and the proxy's.
+	d, err := r.m.Detail(ctx, "a.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	feat := map[Feature]bool{}
+	for _, f := range d.Features {
+		feat[f.Feature] = f.Attached
+	}
+	if !feat[FeaturePHP] || !feat[FeatureProxy] {
+		t.Errorf("features = %+v, want php and proxy attached", d.Features)
+	}
+
+	// FPM still gets its pool: a PHP site that proxies a subpath is a PHP site.
+	if !r.fs.has(poolFile83) {
+		t.Error("the pool file was not written")
+	}
+}
+
+// A route on "/" next to PHP is refused with a field-level error naming the
+// conflict, never rendered into two `location /` blocks.
+func TestProxyRouteOnRootIsRefusedWithPHP(t *testing.T) {
+	r := newPHPRig(t)
+	for _, in := range []CreateInput{
+		{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", ProxyTarget: "http://127.0.0.1:8080"},
+		{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:8080"}}},
+	} {
+		_, err := r.m.Create(ctx, in)
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != "proxy_routes" || !strings.Contains(ve.Msg, "location /") {
+			t.Errorf("%+v: err = %v, want a ValidationError on proxy_routes naming location /", in, err)
+		}
+	}
+	if list, _ := r.m.List(ctx); len(list) != 0 || len(r.ap.applied) != 0 {
+		t.Errorf("a rejected create left %d site(s) and %d apply(s)", len(list), len(r.ap.applied))
+	}
+}
+
+// Switching a PHP site's rewrite preset leaves its proxy routes alone, and
+// switching the routes leaves the PHP block alone: the two features are
+// independent of each other and of Kind.
+func TestProxyRoutesAndRewriteAreIndependent(t *testing.T) {
+	r := newPHPRig(t)
+	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3",
+		ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080"}}}); err != nil {
+		t.Fatal(err)
+	}
+	wp := RewriteWordPress
+	if _, err := r.m.Update(ctx, "a.test", UpdateInput{Rewrite: &wp}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.m.Get(ctx, "a.test")
+	if !slices.Equal(got.ProxyRoutes, []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080"}}) {
+		t.Errorf("a rewrite change altered the routes: %+v", got.ProxyRoutes)
+	}
+
+	routes := []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:9090", StripPrefix: true}, {Path: "/api/v2", Target: "http://127.0.0.1:9091"}}
+	if _, err := r.m.Update(ctx, "a.test", UpdateInput{ProxyRoutes: &routes}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = r.m.Get(ctx, "a.test")
+	if !slices.Equal(got.ProxyRoutes, routes) || got.Rewrite != RewriteWordPress {
+		t.Errorf("after a route change: routes %+v, rewrite %q", got.ProxyRoutes, got.Rewrite)
+	}
+	site, _ := r.fs.ReadFile(siteConf)
+	if !strings.Contains(blockOf(t, string(site), "php"), "?$args") {
+		t.Errorf("a route change rewrote the PHP block:\n%s", site)
+	}
+	proxy, _ := r.fs.ReadFile("/www/panel/nginx/includes/a.test/proxy.conf")
+	for _, want := range []string{"location /api {", "location /api/v2 {", "proxy_pass http://127.0.0.1:9090/;", "proxy_pass http://127.0.0.1:9091;"} {
+		if !strings.Contains(string(proxy), want) {
+			t.Errorf("proxy.conf lacks %q:\n%s", want, proxy)
+		}
+	}
+}
+
+// An old single-target proxy site keeps working: updating it with proxy_target
+// rewrites the same one "/" route it has always had.
+func TestLegacyProxyTargetUpdateStaysOneRootRoute(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindProxy, ProxyTarget: "http://127.0.0.1:3000"}); err != nil {
+		t.Fatal(err)
+	}
+	target := "http://127.0.0.1:4000"
+	res, err := r.m.Update(ctx, "a.test", UpdateInput{ProxyTarget: &target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Site.ProxyRoutes, []ProxyRoute{{Path: "/", Target: target}}) || res.Site.ProxyTarget != target {
+		t.Errorf("site = %+v", res.Site)
+	}
+	proxy, _ := r.fs.ReadFile("/www/panel/nginx/includes/a.test/proxy.conf")
+	if !strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:4000;") || strings.Contains(string(proxy), "location /api") {
+		t.Errorf("proxy.conf = %q", proxy)
+	}
+}
+
+// Every read derives proxy_target from the "/" route, so the field can never
+// disagree with proxy_routes.
+func TestProxyTargetIsDerivedFromRoutes(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindProxy,
+		ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080"}}}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.m.Get(ctx, "a.test")
+	if err != nil || s.ProxyTarget != "" {
+		t.Errorf("a site with no / route has proxy_target %q, %v", s.ProxyTarget, err)
+	}
+	list, _ := r.m.List(ctx)
+	if len(list) != 1 || list[0].ProxyTarget != "" || len(list[0].ProxyRoutes) != 1 {
+		t.Errorf("list = %+v", list)
+	}
+}
+
 func TestCreatePHPSiteRejections(t *testing.T) {
 	r := newPHPRig(t)
 	for name, in := range map[string]CreateInput{
-		"php_version":    {Domain: "a.test", Kind: KindPHP},                       // none given
-		"php_version ":   {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.5"},    // not pulled
-		"php_version  ":  {Domain: "a.test", Kind: KindPHP, PHPVersion: "7.4"},    // unknown
-		"php_version   ": {Domain: "a.test", Kind: KindStatic, PHPVersion: "8.3"}, // not a PHP site
-		"proxy_target":   {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", ProxyTarget: "http://x"},
-		"root":           {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", Root: "/etc"},
+		"php_version":     {Domain: "a.test", Kind: KindPHP},                    // none given
+		"php_version ":    {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.5"}, // not pulled
+		"php_version  ":   {Domain: "a.test", Kind: KindPHP, PHPVersion: "7.4"}, // unknown
+		"root":            {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", Root: "/etc"},
+		"proxy_routes":    {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3", ProxyTarget: "http://x"},
+		"php_version   ":  {Domain: "a.test", Kind: KindPHP, PHPVersion: ""},             // no version at all
+		"php_version    ": {Domain: "a.test", Kind: KindStatic, PHPInfo: true},           // no version to run it on
+		"rewrite":         {Domain: "a.test", Kind: KindStatic, Rewrite: RewriteLaravel}, // no PHP to rewrite for
 	} {
 		_, err := r.m.Create(ctx, in)
 		var ve *ValidationError
@@ -232,11 +382,11 @@ func TestCreatePHPSiteRejections(t *testing.T) {
 		t.Errorf("a rejected create left %d site(s) and %d apply(s)", len(list), len(r.ap.applied))
 	}
 
-	// Without a PHP runtime the kind is refused outright.
+	// Without a PHP runtime the version is refused outright.
 	plain := newRig(t)
 	_, err := plain.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3"})
 	var ve *ValidationError
-	if !errors.As(err, &ve) || ve.Field != "kind" {
+	if !errors.As(err, &ve) || ve.Field != "php_version" {
 		t.Errorf("no runtime: err = %v", err)
 	}
 }

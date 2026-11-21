@@ -84,10 +84,12 @@ func (e *DetachedError) Is(target error) bool { return target == ErrDetached }
 
 func (m *Manager) featuresOf(s Site) []Feature {
 	f := []Feature{FeatureListen, FeatureNames, FeatureACME, FeatureTLS}
-	if s.Kind == KindProxy {
+	// The proxy include exists for every site now, but only a site with routes
+	// has anything in it to keep honest.
+	if len(s.ProxyRoutes) > 0 {
 		f = append(f, FeatureProxy)
 	}
-	if s.Kind == KindPHP {
+	if s.PHPVersion != nil {
 		f = append(f, FeaturePHP)
 	}
 	return f
@@ -144,7 +146,11 @@ func (d Detail) require(f Feature) error {
 
 // UpdateInput is what a panel action may change. A nil field is left alone.
 type UpdateInput struct {
-	Aliases     *[]string
+	Aliases *[]string
+	// ProxyRoutes replaces the whole route list. ProxyTarget is the old
+	// single-root spelling: it replaces the list with one "/" route, and is
+	// refused alongside ProxyRoutes rather than guessed between.
+	ProxyRoutes *[]ProxyRoute
 	ProxyTarget *string
 	// Rewrite changes a PHP site's URL-rewrite preset; it re-renders php.conf.
 	Rewrite *Rewrite
@@ -161,8 +167,11 @@ type UpdateResult struct {
 // detached is refused with a DetachedError instead of being written into a file
 // nothing reads.
 func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (UpdateResult, error) {
-	if in.Aliases == nil && in.ProxyTarget == nil && in.Rewrite == nil {
+	if in.Aliases == nil && in.ProxyRoutes == nil && in.ProxyTarget == nil && in.Rewrite == nil {
 		return UpdateResult{}, invalid("body", "nothing to change")
+	}
+	if in.ProxyRoutes != nil && in.ProxyTarget != nil {
+		return UpdateResult{}, invalid("proxy_routes", "give either proxy_target or proxy_routes, not both")
 	}
 
 	m.mu.Lock()
@@ -197,27 +206,49 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 		}
 		patch.set(FeatureNames, b)
 	}
-	if in.ProxyTarget != nil {
-		if prev.Kind != KindProxy {
-			return UpdateResult{}, invalid("proxy_target", "only a reverse-proxy site has one")
+
+	// The routes: the whole list, or the old single target as a "/" route.
+	var routes []ProxyRoute
+	changeRoutes := false
+	switch {
+	case in.ProxyRoutes != nil:
+		routes, changeRoutes = *in.ProxyRoutes, true
+	case in.ProxyTarget != nil:
+		routes, changeRoutes = []ProxyRoute{{Path: "/", Target: *in.ProxyTarget}}, true
+	}
+	if changeRoutes {
+		// A route edit writes the proxy include, which a site file must still
+		// include. A site that had no routes has no proxy feature in its detail
+		// yet (the include exists from creation), so the requirement is only
+		// checked when the previous site had one.
+		if len(prev.ProxyRoutes) > 0 {
+			if err := detail.require(FeatureProxy); err != nil {
+				return UpdateResult{}, err
+			}
 		}
-		if err := detail.require(FeatureProxy); err != nil {
+		if next.ProxyRoutes, err = m.checkRoutes(routes, prev); err != nil {
 			return UpdateResult{}, err
 		}
-		t, err := nginx.CheckProxyTarget(*in.ProxyTarget)
-		if err != nil {
-			return UpdateResult{}, invalid("proxy_target", "%s", trimPrefix(err))
+		next.ProxyTarget = ""
+		for _, r := range next.ProxyRoutes {
+			if r.Path == "/" {
+				next.ProxyTarget = r.Target
+			}
 		}
-		next.ProxyTarget = t
-		b, err := nginx.RenderProxy(t)
+		b, err := nginx.RenderProxy(next.ProxyRoutes)
 		if err != nil {
 			return UpdateResult{}, err
 		}
+		// A site file written before proxy routes existed has no route list; a
+		// first route also needs the site file's include line and a static
+		// site's `location /` back-fixed, which is what Regenerate is for. The
+		// include line is written here; a static site that gains its first route
+		// on a subpath keeps its own location, which costs nothing.
 		patch.set(FeatureProxy, b)
 	}
 	if in.Rewrite != nil {
-		if prev.Kind != KindPHP {
-			return UpdateResult{}, invalid("rewrite", "only a PHP site has a URL-rewrite preset")
+		if prev.PHPVersion == nil {
+			return UpdateResult{}, invalid("rewrite", "only a site that runs PHP has a URL-rewrite preset")
 		}
 		if !ValidRewrite(*in.Rewrite) {
 			return UpdateResult{}, invalid("rewrite", "choose one of the URL-rewrite presets")
@@ -254,8 +285,11 @@ func (m *Manager) store(ctx context.Context, s Site) error {
 		} else if taken {
 			return fmt.Errorf("%w: %s", ErrConflict, name)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sites SET proxy_target = ?, rewrite = ? WHERE domain = ?`, s.ProxyTarget, string(s.Rewrite), s.Domain); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sites SET rewrite = ? WHERE domain = ?`, string(s.Rewrite), s.Domain); err != nil {
 			return fmt.Errorf("sites: update %s: %w", s.Domain, err)
+		}
+		if err := setProxyRoutes(ctx, tx, s.Domain, s.ProxyRoutes); err != nil {
+			return err
 		}
 		return setAliases(ctx, tx, s.Domain, s.Aliases)
 	})
@@ -408,14 +442,14 @@ func (m *Manager) managedFiles(ctx context.Context, s Site) ([]confedit.File, er
 		patch.set(FeatureWAF, rendered.Block)
 		files = rendered.Files
 	}
-	switch s.Kind {
-	case KindProxy:
-		proxy, err := nginx.RenderProxy(s.ProxyTarget)
-		if err != nil {
-			return nil, err
-		}
-		patch.set(FeatureProxy, proxy)
-	case KindPHP:
+	// The proxy include is kept current for every site: a site with routes has
+	// its locations in it, one without has a comment saying so.
+	proxy, err := nginx.RenderProxy(s.ProxyRoutes)
+	if err != nil {
+		return nil, err
+	}
+	patch.set(FeatureProxy, proxy)
+	if s.PHPVersion != nil {
 		body, err := m.renderPHPInclude(s)
 		if err != nil {
 			return nil, err

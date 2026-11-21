@@ -44,14 +44,15 @@ func phpInputError(field string, err error) error {
 	return err
 }
 
-// requirePHP returns the site's version, or a rejection for a site that is not
-// a PHP site.
+// requirePHP returns the site's version, or a rejection for a site that does not
+// run PHP. It keys on the version, not on Kind: a PHP site is a site with a
+// folder and a version, whatever kind it reports as its primary mode.
 func (m *Manager) requirePHP(s Site) (string, error) {
-	if s.Kind != KindPHP || s.PHPVersion == nil || s.PHPPool == "" {
-		return "", invalid("kind", "%s is not a PHP site", s.Domain)
+	if s.PHPVersion == nil || s.PHPPool == "" {
+		return "", invalid("php_version", "%s does not run PHP", s.Domain)
 	}
 	if m.php == nil {
-		return "", invalid("kind", "PHP is not available on this host")
+		return "", invalid("php_version", "PHP is not available on this host")
 	}
 	return *s.PHPVersion, nil
 }
@@ -327,7 +328,7 @@ func (m *Manager) ReconcilePHP(ctx context.Context) []PHPStep {
 	}
 	byVer := map[string][]Site{}
 	for _, s := range sites {
-		if s.Kind == KindPHP && s.PHPVersion != nil {
+		if s.PHPVersion != nil {
 			byVer[*s.PHPVersion] = append(byVer[*s.PHPVersion], s)
 		}
 	}
