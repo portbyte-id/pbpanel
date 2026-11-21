@@ -1,0 +1,17 @@
+{
+	"__CURSOR": "s=1b2c3d4e5f6a7b8c;t=6708dc00;i=4a1f",
+	"__REALTIME_TIMESTAMP": "1723000000123456",
+	"__MONOTONIC_TIMESTAMP": "12345678",
+	"__SEQNUM": "18975",
+	"_BOOT_ID": "3f1e5b6a9c0d4e2f8a7b6c5d4e3f2a1b",
+	"_MACHINE_ID": "b1a2c3d4e5f60718293a4b5c6d7e8f90",
+	"_HOSTNAME": "svr-01",
+	"_SYSTEMD_UNIT": "ssh.service",
+	"_TRANSPORT": "syslog",
+	"PRIORITY": "6",
+	"SYSLOG_FACILITY": "10",
+	"SYSLOG_IDENTIFIER": "sshd",
+	"_PID": "4821",
+	"_COMM": "sshd",
+	"MESSAGE": "Failed password for invalid user admin from 45.155.205.233 port 44556 ssh2"
+}
