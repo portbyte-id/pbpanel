@@ -80,33 +80,33 @@ type Query struct {
 // Report is the answer to one query: the attempts newest first, and a summary
 // of the whole window (not only of the returned page).
 type Report struct {
-	From     time.Time    `json:"from"`
-	To       time.Time    `json:"to"`
-	Outcome  string       `json:"outcome"`
-	Limit    int          `json:"limit"`
-	Total    int          `json:"total"`
-	Attempts []Attempt    `json:"attempts"`
-	Summary  Summary      `json:"summary"`
+	From     time.Time `json:"from"`
+	To       time.Time `json:"to"`
+	Outcome  string    `json:"outcome"`
+	Limit    int       `json:"limit"`
+	Total    int       `json:"total"`
+	Attempts []Attempt `json:"attempts"`
+	Summary  Summary   `json:"summary"`
 }
 
 // Summary is the aggregate above the table, shaped like wafmon's summary: a
 // totals block and the two top lists the page shows.
 type Summary struct {
-	Failed    int      `json:"failed"`
-	Succeeded int      `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Succeeded int `json:"succeeded"`
 	// DistinctIPs and DistinctUsers count the distinct values in the window.
-	DistinctIPs   int      `json:"distinct_ips"`
-	DistinctUsers int      `json:"distinct_users"`
-	TopIPs        []IPRow  `json:"top_ips"`
+	DistinctIPs   int       `json:"distinct_ips"`
+	DistinctUsers int       `json:"distinct_users"`
+	TopIPs        []IPRow   `json:"top_ips"`
 	TopUsers      []UserRow `json:"top_users"`
 }
 
 // IPRow is one row of the offenders list.
 type IPRow struct {
-	IP       string `json:"ip"`
-	Failed   int    `json:"failed"`
-	Succeeded int   `json:"succeeded"`
-	Total    int    `json:"total"`
+	IP        string `json:"ip"`
+	Failed    int    `json:"failed"`
+	Succeeded int    `json:"succeeded"`
+	Total     int    `json:"total"`
 }
 
 // UserRow is one row of the account list.

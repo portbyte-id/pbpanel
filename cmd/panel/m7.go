@@ -42,7 +42,7 @@ const (
 	// registry defaults.
 	fallbackRotateBytes     = 52428800
 	fallbackRotateKeep      = 7
-	fallbackRotateMaxAge    = 168 * time.Hour  // 7d
+	fallbackRotateMaxAge    = 168 * time.Hour // 7d
 	fallbackRotateRetainAge = 720 * time.Hour // 30d
 
 	// sampleErrEvery limits how often a failing host sample is logged, so a host
