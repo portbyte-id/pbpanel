@@ -17,6 +17,21 @@ export function kindLabel(kind: Site["kind"]): string {
   return kind === "proxy" ? "Reverse proxy" : "Static files"
 }
 
+/**
+ * What the site actually does, from its parts rather than its kind: a site may
+ * serve files, run PHP and proxy subpaths at once. The kind badge stays as the
+ * primary mode; this is the detail line the list shows beside it.
+ */
+export function describeSite(site: Site): string[] {
+  const parts: string[] = []
+  if (site.php_version) parts.push(`PHP ${site.php_version}`)
+  if (site.root) parts.push("files")
+  for (const r of site.proxy_routes ?? []) {
+    parts.push(`${r.path} → ${r.target.replace(/^https?:\/\//, "")}`)
+  }
+  return parts
+}
+
 /** HTTPS state for the list: expiry soon is a warning, not just a number. */
 function TLSCell({ cert }: { cert: CertView | undefined }) {
   if (!cert) return <span className="text-muted-foreground">No HTTPS</span>
@@ -54,7 +69,11 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
     const q = filter.trim().toLowerCase()
     if (q === "") return sites
     return sites.filter((s) =>
-      `${s.domain} ${s.aliases.join(" ")} ${s.proxy_target ?? ""} ${s.root ?? ""}`.toLowerCase().includes(q),
+      `${s.domain} ${s.aliases.join(" ")} ${s.root ?? ""} ${(s.proxy_routes ?? [])
+        .map((r) => `${r.path} ${r.target}`)
+        .join(" ")}`
+        .toLowerCase()
+        .includes(q),
     )
   }, [sites, filter])
 
@@ -101,8 +120,8 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
         <div className="rounded-lg border border-dashed p-8 text-center">
           <p className="text-sm font-medium">Add your first site</p>
           <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
-            A site answers for one or more domains. It can serve files from a folder or pass
-            requests to an app running on this server.
+            A site answers for one or more domains. It can serve files from a folder, run PHP, and
+            pass subpaths such as <code>/api</code> to apps on this server — all at once.
           </p>
           <Button className="mt-4" onClick={() => setCreating(true)}>
             <Plus aria-hidden="true" />
@@ -157,12 +176,24 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
                       <TLSCell cert={certByDomain.get(site.domain)} />
                     )}
                   </td>
-                  <td className="px-3 py-1.5 font-mono text-xs break-all">
-                    {site.kind === "proxy" ? site.proxy_target : site.root}
-                    {site.kind === "proxy" && appByURL.has(site.proxy_target ?? "") && (
-                      <span className="text-muted-foreground block font-sans">
-                        App: {appByURL.get(site.proxy_target ?? "")}
-                      </span>
+                  <td className="px-3 py-1.5">
+                    {describeSite(site).length === 0 ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <ul className="flex flex-col gap-0.5 font-mono text-xs">
+                        {describeSite(site).map((part) => (
+                          <li key={part} className="break-all">
+                            {part}
+                          </li>
+                        ))}
+                        {(site.proxy_routes ?? [])
+                          .filter((r) => appByURL.has(r.target))
+                          .map((r) => (
+                            <li key={r.path + "-app"} className="text-muted-foreground font-sans">
+                              {r.path}: app {appByURL.get(r.target)}
+                            </li>
+                          ))}
+                      </ul>
                     )}
                   </td>
                   <td className="text-muted-foreground px-3 py-1.5">
@@ -177,7 +208,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
 
       <CreateSiteDialog
         open={creating}
-        initial={proxy === undefined ? undefined : { kind: "proxy", target: proxy }}
+        initial={proxy === undefined ? undefined : { target: proxy }}
         onOpenChange={(open) => {
           setCreating(open)
           // Drop the parameter so a reload does not reopen a dialog that was closed.

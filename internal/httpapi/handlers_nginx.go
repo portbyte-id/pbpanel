@@ -224,15 +224,46 @@ func (s *server) handleListSites(n *NginxDeps, w http.ResponseWriter, r *http.Re
 	}{list})
 }
 
+// proxyRouteJSON is one proxy route on the wire. strip_prefix is a pointer so
+// the default can be applied here, in the one place the request is read: an
+// omitted strip_prefix strips the matched prefix, which is what an app mounted
+// under /api needs, and false keeps the whole path.
+type proxyRouteJSON struct {
+	Path        string `json:"path"`
+	Target      string `json:"target"`
+	StripPrefix *bool  `json:"strip_prefix"`
+}
+
+// routeInput converts the wire shape into the model, applying the default.
+func (r proxyRouteJSON) routeInput() sites.ProxyRoute {
+	strip := true
+	if r.StripPrefix != nil {
+		strip = *r.StripPrefix
+	}
+	return sites.ProxyRoute{Path: r.Path, Target: r.Target, StripPrefix: strip}
+}
+
+func routeInputs(in []proxyRouteJSON) []sites.ProxyRoute {
+	if in == nil {
+		return nil
+	}
+	out := make([]sites.ProxyRoute, 0, len(in))
+	for _, r := range in {
+		out = append(out, r.routeInput())
+	}
+	return out
+}
+
 type createSiteRequest struct {
-	Domain      string   `json:"domain"`
-	Aliases     []string `json:"aliases"`
-	Kind        string   `json:"kind"`
-	Root        string   `json:"root"`
-	ProxyTarget string   `json:"proxy_target"`
-	PHPVersion  string   `json:"php_version"`
-	PHPInfo     bool     `json:"phpinfo"`
-	Rewrite     string   `json:"rewrite"`
+	Domain      string           `json:"domain"`
+	Aliases     []string         `json:"aliases"`
+	Kind        string           `json:"kind"`
+	Root        string           `json:"root"`
+	ProxyRoutes []proxyRouteJSON `json:"proxy_routes"`
+	ProxyTarget string           `json:"proxy_target"`
+	PHPVersion  string           `json:"php_version"`
+	PHPInfo     bool             `json:"phpinfo"`
+	Rewrite     string           `json:"rewrite"`
 }
 
 type siteResponse struct {
@@ -248,7 +279,7 @@ func (s *server) handleCreateSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 	}
 	res, err := n.Sites.Create(r.Context(), sites.CreateInput{
 		Domain: req.Domain, Aliases: req.Aliases, Kind: sites.Kind(req.Kind),
-		Root: req.Root, ProxyTarget: req.ProxyTarget,
+		Root: req.Root, ProxyRoutes: routeInputs(req.ProxyRoutes), ProxyTarget: req.ProxyTarget,
 		PHPVersion: req.PHPVersion, PHPInfo: req.PHPInfo,
 		Rewrite: sites.Rewrite(req.Rewrite),
 	})
@@ -269,11 +300,12 @@ func (s *server) handleGetSite(n *NginxDeps, w http.ResponseWriter, r *http.Requ
 }
 
 // updateSiteRequest uses pointers so an absent field is left alone and an empty
-// list clears the aliases.
+// list clears the aliases or the proxy routes.
 type updateSiteRequest struct {
-	Aliases     *[]string `json:"aliases"`
-	ProxyTarget *string   `json:"proxy_target"`
-	Rewrite     *string   `json:"rewrite"`
+	Aliases     *[]string         `json:"aliases"`
+	ProxyRoutes *[]proxyRouteJSON `json:"proxy_routes"`
+	ProxyTarget *string           `json:"proxy_target"`
+	Rewrite     *string           `json:"rewrite"`
 }
 
 func (s *server) handleUpdateSite(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
@@ -283,6 +315,10 @@ func (s *server) handleUpdateSite(n *NginxDeps, w http.ResponseWriter, r *http.R
 		return
 	}
 	in := sites.UpdateInput{Aliases: req.Aliases, ProxyTarget: req.ProxyTarget}
+	if req.ProxyRoutes != nil {
+		routes := routeInputs(*req.ProxyRoutes)
+		in.ProxyRoutes = &routes
+	}
 	if req.Rewrite != nil {
 		rw := sites.Rewrite(*req.Rewrite)
 		in.Rewrite = &rw

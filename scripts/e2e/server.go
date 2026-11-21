@@ -34,7 +34,9 @@ import (
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/images"
 	"github.com/portbyte-id/server-panel/internal/jobs"
+	"github.com/portbyte-id/server-panel/internal/native"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/store"
@@ -207,7 +209,8 @@ func fakeNginxDeps(st *store.Store) (*httpapi.NginxDeps, error) {
 	}
 	mfs.files[paths.ConfPath()] = conf
 
-	mgr, err := sites.New(sites.Options{Store: st, Applier: fake, Service: fake, Paths: paths, FS: mfs})
+	fp := &fakePHP{paths: php.Paths{Root: "/www"}}
+	mgr, err := sites.New(sites.Options{Store: st, Applier: fake, Service: fake, Paths: paths, FS: mfs, PHP: fp})
 	if err != nil {
 		return nil, err
 	}
@@ -216,8 +219,79 @@ func fakeNginxDeps(st *store.Store) (*httpapi.NginxDeps, error) {
 		Global:  nginx.NewGlobal(st, fake, fake, paths).ReadWith(mfs.ReadFile),
 		History: fake, Service: fake, Reconciler: fake, Paths: paths,
 		Images: newFakeNginxBuilds(paths),
+		PHP:    fp,
 	}, nil
 }
+
+// --- a stand-in for PHP --------------------------------------------------------
+//
+// One version, 8.3, always ready, with all its files on disk as far as anyone
+// asks. The e2e machine has no PHP build, and the journey needs the site dialog
+// to accept a PHP version: the pool file, the socket and the fastcgi_pass line
+// are rendered for real, so the site file the browser reads has the PHP block
+// exactly as a host would get it. Nothing is installed or started.
+type fakePHP struct{ paths php.Paths }
+
+func (f *fakePHP) Paths() php.Paths { return f.paths }
+
+func (f *fakePHP) List(context.Context) ([]php.Version, error) {
+	return []php.Version{{Version: "8.3", Image: "8.3.37", State: php.StateReady, Supported: true}}, nil
+}
+
+func (f *fakePHP) Get(_ context.Context, ver string) (php.Version, error) {
+	if ver != "8.3" {
+		return php.Version{}, php.ErrUnknownVersion
+	}
+	v, _ := f.List(context.Background())
+	return v[0], nil
+}
+
+func (f *fakePHP) StartPull(context.Context, string) error                    { return nil }
+func (f *fakePHP) Pull(_ context.Context, _ string, _ []php.Extension, _ docker.Progress) error { return nil }
+func (f *fakePHP) CurrentExtensions(context.Context, string) ([]php.Extension, error)         { return nil, nil }
+func (f *fakePHP) StartRebuild(context.Context, string, []string) ([]php.Extension, error) {
+	return nil, nil
+}
+func (f *fakePHP) Rebuild(_ context.Context, _ string, _ []php.Extension, _ docker.Progress) (images.Build, error) {
+	return images.Build{}, nil
+}
+func (f *fakePHP) Builds(context.Context, string) ([]images.Build, error) { return nil, nil }
+func (f *fakePHP) StartActivate(context.Context, string) error           { return nil }
+func (f *fakePHP) Activate(context.Context, string, string) (images.Build, error) {
+	return images.Build{}, nil
+}
+func (f *fakePHP) Remove(context.Context, string, func(context.Context) (bool, error)) error { return nil }
+func (f *fakePHP) Settings(context.Context, string) (php.Settings, error)                   { return php.DefaultSettings(), nil }
+func (f *fakePHP) SetSettings(context.Context, string, php.Settings) (confedit.Result, error) {
+	return confedit.Result{}, nil
+}
+func (f *fakePHP) ReadIni(context.Context, string) ([]byte, error) { return []byte("; php.ini\n"), nil }
+func (f *fakePHP) WriteIni(context.Context, string, []byte) (confedit.Result, error) {
+	return confedit.Result{}, nil
+}
+func (f *fakePHP) Service(ver string, _ bool) confedit.Service { return fakePHPUnit{ver} }
+func (f *fakePHP) Status(context.Context, string) (native.Status, bool, error) {
+	return native.Status{Loaded: true, Active: true, State: "active", PID: 7}, true, nil
+}
+
+// The sites model's side of the runtime.
+func (f *fakePHP) Usable(_ context.Context, ver string) error {
+	if ver != "8.3" {
+		return php.ErrUnknownVersion
+	}
+	return nil
+}
+func (f *fakePHP) BaseFiles(context.Context, string) ([]confedit.File, error) { return nil, nil }
+func (f *fakePHP) EnsureRunning(context.Context, string) (php.EnsureResult, error) {
+	return php.EnsureResult{Action: php.ActionNone, Reason: "the e2e stand-in is always up"}, nil
+}
+
+type fakePHPUnit struct{ ver string }
+
+func (u fakePHPUnit) Name() string                             { return "php-" + u.ver }
+func (u fakePHPUnit) Validate(context.Context) (string, error) { return "", nil }
+func (u fakePHPUnit) Reload(context.Context) error             { return nil }
+func (u fakePHPUnit) Healthy(context.Context) error            { return nil }
 
 // fakeNginxBuilds answers the build routes without Docker. Each build gets a real
 // directory holding the release it compiled, so the page shows 1.30.2 where the

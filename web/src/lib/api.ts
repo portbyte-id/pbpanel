@@ -114,11 +114,29 @@ export interface AuditResponse {
 
 export type SiteKind = "static" | "proxy" | "php"
 
+/**
+ * One subpath of a site sent to a backend. `strip_prefix` decides whether the
+ * matched prefix reaches the backend: with it (the default), /api/users arrives
+ * as /users; without it, as /api/users.
+ */
+export interface ProxyRoute {
+  path: string
+  target: string
+  strip_prefix: boolean
+}
+
 export interface Site {
   domain: string
   aliases: string[]
+  /** The site's primary serving mode. It does not limit what the site may have. */
   kind: SiteKind
   root?: string
+  /** The site's proxy routes. A site may have PHP, a root, and routes at once. */
+  proxy_routes?: ProxyRoute[]
+  /**
+   * The target of the "/" route, kept for the callers that predate routes. Empty
+   * when the site has no "/" route. `proxy_routes` is the truth.
+   */
   proxy_target?: string
   php_version: string | null
   /** The FPM pool name of a PHP site. */
@@ -150,12 +168,18 @@ export interface CreateSiteInput {
   aliases: string[]
   kind: SiteKind
   root?: string
+  /** The subpath routes. Independent of `kind`. */
+  proxy_routes?: ProxyRoute[]
+  /**
+   * The old single-target spelling: one route on "/". Refused next to
+   * `proxy_routes`, and refused for a site that runs PHP or serves a folder.
+   */
   proxy_target?: string
-  /** PHP sites only. */
+  /** Runs PHP on the site. Any kind may have it, except a pure proxy site. */
   php_version?: string
-  /** PHP sites only: put a phpinfo() page in a new folder. */
+  /** Put a phpinfo() page in a new folder. Needs `php_version`. */
   phpinfo?: boolean
-  /** PHP sites only. */
+  /** A PHP site's rewrite preset. Needs `php_version`. */
   rewrite?: SiteRewrite
 }
 
@@ -502,6 +526,9 @@ export interface FMDownloadFolderOptions {
 
 export interface UpdateSiteInput {
   aliases?: string[]
+  /** Replaces the whole route list. An empty list removes every route. */
+  proxy_routes?: ProxyRoute[]
+  /** The old single-target spelling: replaces the list with one "/" route. */
   proxy_target?: string
   /** A PHP site's URL-rewrite preset. */
   rewrite?: SiteRewrite
