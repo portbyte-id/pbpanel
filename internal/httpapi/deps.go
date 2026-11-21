@@ -76,6 +76,10 @@ type Deps struct {
 	// /api/waf/traffic, /requests and /events answering 503.
 	WAFMon WAFMonitor
 
+	// SSHAuth is the SSH login-attempt monitor over the sshd journal. Nil leaves
+	// /api/ssh/attempts answering 503.
+	SSHAuth SSHAuthMonitor
+
 	// Docker is the Docker page: listings, resource monitor and container
 	// controls. Nil leaves /api/docker answering 503.
 	Docker DockerService

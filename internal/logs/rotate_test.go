@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func jsonMarshal(v any) (string, error) {
@@ -220,9 +221,233 @@ func TestRotatedSetIsSearchable(t *testing.T) {
 }
 
 func TestNewRotatorValidation(t *testing.T) {
-	for _, c := range []RotateConfig{{}, {Root: "/x"}, {Root: "/x", MaxBytes: 1}, {Root: "/x", MaxBytes: 1, Keep: 0}, {Root: "/x", MaxBytes: -1, Keep: 1}} {
+	for _, c := range []RotateConfig{{}, {Root: "/x"}, {Root: "/x", MaxBytes: 1}, {Root: "/x", MaxBytes: 1, Keep: 0}, {Root: "/x", MaxBytes: -1, Keep: 1},
+		{Root: "/x", MaxBytes: 1, Keep: 1, MaxAge: -time.Hour}, {Root: "/x", MaxBytes: 1, Keep: 1, RetainAge: -time.Minute}} {
 		if _, err := NewRotator(c); err == nil {
 			t.Errorf("accepted %+v", c)
 		}
+	}
+	if _, err := NewRotator(RotateConfig{Root: "/x", MaxBytes: 1, Keep: 1, MaxAge: time.Hour, RetainAge: 24 * time.Hour}); err != nil {
+		t.Errorf("refused a valid age policy: %v", err)
+	}
+}
+
+// age sets a file's mtime.
+func age(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	when := time.Now().Add(-d)
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mtime(t *testing.T, path string) time.Time {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.ModTime()
+}
+
+// A log that stays small but went quiet is still cut on a schedule: the age
+// trigger is the mtime of the last write.
+func TestRotateOnAge(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, "quiet.log")
+	fresh := filepath.Join(root, "busy.log")
+	writeFile(t, stale, "old\n")
+	writeFile(t, fresh, "new\n")
+	// Far below MaxBytes, so only the age trigger can fire.
+	age(t, stale, 30*time.Hour)
+
+	hooks := 0
+	rot, err := NewRotator(RotateConfig{Root: root, MaxBytes: 1 << 20, Keep: 3, MaxAge: 24 * time.Hour, Compress: true},
+		func(context.Context) error { hooks++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := rot.Rotate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rotated) != 1 || rep.Rotated[0] != stale {
+		t.Fatalf("rotated = %v, want only the stale log", rep.Rotated)
+	}
+	if hooks != 1 {
+		t.Errorf("the reopen hook ran %d times, want 1", hooks)
+	}
+	if got := strings.Join(names(t, root), ","); got != "busy.log,quiet.log.1.gz" {
+		t.Fatalf("files = %s", got)
+	}
+	// The hook contract is unchanged: it runs after the rename and before the
+	// gzip, so a writer has reopened by the time the file is compressed.
+	if readAny(t, stale+".1.gz") != "old\n" {
+		t.Error("the rotated content was lost")
+	}
+	if readAny(t, fresh) != "new\n" {
+		t.Error("the fresh log was touched")
+	}
+
+	// The next pass has nothing stale: the rotated file's mtime is the moment of
+	// rotation, not that of its content.
+	if rep, err = rot.Rotate(context.Background()); err != nil || len(rep.Rotated) != 0 || hooks != 1 {
+		t.Fatalf("second pass: %+v hooks=%d err=%v", rep, hooks, err)
+	}
+}
+
+// MaxAge zero is exactly today's behaviour: size only.
+func TestRotateWithMaxAgeZeroIgnoresAge(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "ancient.log")
+	writeFile(t, old, "x\n")
+	age(t, old, 400*24*time.Hour)
+	hooks := 0
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 10, Keep: 2},
+		func(context.Context) error { hooks++; return nil })
+	rep, err := rot.Rotate(context.Background())
+	if err != nil || len(rep.Rotated) != 0 || hooks != 0 {
+		t.Fatalf("%+v hooks=%d err=%v; an old but small file must stay", rep, hooks, err)
+	}
+	if got := strings.Join(names(t, root), ","); got != "ancient.log" {
+		t.Fatalf("files = %s", got)
+	}
+}
+
+// The size rule is still the size rule when an age policy is also set.
+func TestRotateOnSizeWithAnAgePolicySet(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "big.log")
+	writeFile(t, live, strings.Repeat("x", 2048)+"\n")
+	// Fresh, so only the size trigger can fire.
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 1024, Keep: 1, MaxAge: 24 * time.Hour})
+	rep, err := rot.Rotate(context.Background())
+	if err != nil || len(rep.Rotated) != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}
+
+// Both triggers at once: two files, one over each threshold, both rotate in one
+// pass and the hook runs once for the pass.
+func TestRotateOnEitherTriggerInOnePass(t *testing.T) {
+	root := t.TempDir()
+	big := filepath.Join(root, "big.log")
+	old := filepath.Join(root, "old.log")
+	writeFile(t, big, strings.Repeat("x", 2048)+"\n")
+	writeFile(t, old, "y\n")
+	age(t, old, 48*time.Hour)
+	hooks := 0
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 1024, Keep: 1, MaxAge: 24 * time.Hour},
+		func(context.Context) error { hooks++; return nil })
+	rep, err := rot.Rotate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rotated) != 2 || hooks != 1 {
+		t.Fatalf("%+v hooks=%d", rep, hooks)
+	}
+}
+
+// RetainAge prunes a rotated file older than the retention and keeps a newer
+// one, independently of the count.
+func TestRotatePrunesByRetainAge(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "app.log")
+	oldGz := filepath.Join(root, "app.log.2.gz")
+	newPlain := filepath.Join(root, "app.log.3")
+	writeGz(t, oldGz, "old\n")
+	writeFile(t, newPlain, "new\n")
+	age(t, oldGz, 10*24*time.Hour)
+	age(t, newPlain, time.Hour)
+	// A live log older than the retention must survive: only rotated files age
+	// out, because only a rotated file's writer has reopened.
+	writeFile(t, live, "live\n")
+	age(t, live, 30*24*time.Hour)
+	// A rotated-looking name that is not a slot number is an app's own file.
+	timestamped := filepath.Join(root, "svc.log.20260101")
+	writeFile(t, timestamped, "keep\n")
+	age(t, timestamped, 60*24*time.Hour)
+
+	rot, err := NewRotator(RotateConfig{Root: root, MaxBytes: 1 << 20, Keep: 10, RetainAge: 7 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := rot.Rotate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Pruned) != 1 || rep.Pruned[0] != oldGz {
+		t.Fatalf("pruned = %v", rep.Pruned)
+	}
+	if got := strings.Join(names(t, root), ","); got != "app.log,app.log.3,svc.log.20260101" {
+		t.Fatalf("files = %s", got)
+	}
+}
+
+// RetainAge zero is the count-only retention.
+func TestRotateWithRetainAgeZeroKeepsOldRotations(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "app.log.1")
+	writeFile(t, old, "old\n")
+	age(t, old, 400*24*time.Hour)
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 1 << 20, Keep: 5})
+	if rep, err := rot.Rotate(context.Background()); err != nil || len(rep.Pruned) != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := strings.Join(names(t, root), ","); got != "app.log.1" {
+		t.Fatalf("files = %s", got)
+	}
+}
+
+// A rotation stamps the newest rotated file with the moment of rotation, which
+// is what RetainAge then counts from. Without it, a file written a week before
+// it was rotated would be pruned on the very next pass.
+func TestRotateStampsTheRotatedFile(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "app.log")
+	writeFile(t, live, "payload\n")
+	age(t, live, 10*24*time.Hour)
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 1 << 20, Keep: 5, MaxAge: 24 * time.Hour, RetainAge: 7 * 24 * time.Hour})
+	if _, err := rot.Rotate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(mtime(t, live+".1")); d > time.Minute {
+		t.Fatalf("rotated file mtime is %v old, want the moment of rotation", d)
+	}
+	// The content's age is irrelevant now: the retention counts from here.
+	rep, err := rot.Rotate(context.Background())
+	if err != nil || len(rep.Pruned) != 0 {
+		t.Fatalf("pruned a just-rotated file: %+v %v", rep, err)
+	}
+}
+
+// The hook contract survives an age-triggered rotation: it runs once, after the
+// rename and before compression, exactly as a size-triggered one does.
+func TestAgeRotationHookContract(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "php8.4", "error.log")
+	writeFile(t, live, "boom\n")
+	age(t, live, 48*time.Hour)
+	calls := 0
+	rot, _ := NewRotator(RotateConfig{Root: root, MaxBytes: 1 << 20, Keep: 2, MaxAge: 24 * time.Hour, Compress: true},
+		func(context.Context) error {
+			calls++
+			if _, err := os.Stat(live); !os.IsNotExist(err) {
+				t.Errorf("live file still present at hook time: %v", err)
+			}
+			if _, err := os.Stat(live + ".1"); err != nil {
+				t.Errorf("rotated file missing at hook time: %v", err)
+			}
+			return nil
+		})
+	rep, err := rot.Rotate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(rep.Rotated) != 1 || rep.Compressed != 1 {
+		t.Fatalf("calls=%d report=%+v", calls, rep)
+	}
+	if got := strings.Join(names(t, filepath.Dir(live)), ","); got != "error.log.1.gz" {
+		t.Fatalf("files = %s", got)
 	}
 }
