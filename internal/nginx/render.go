@@ -523,7 +523,7 @@ func CheckProxyPath(raw string) (string, error) {
 	case p != "/" && strings.HasSuffix(p, "/"):
 		return "", fmt.Errorf("nginx: proxy route path %q must not end with /", raw)
 	case path.Clean(p) != p:
-		return "", fmt.Errorf("nginx: proxy route path %q must be a clean path without . or ..", raw)
+		return "", fmt.Errorf("nginx: proxy route path %q must be a clean path with no . or .. segments", raw)
 	case strings.Contains(p, "//"):
 		return "", fmt.Errorf("nginx: proxy route path %q has an empty segment", raw)
 	}
@@ -666,7 +666,7 @@ func checkSite(p Paths, s Site) error {
 // config the panel cannot parse still gets a straight answer.
 func HasIncludeLine(content []byte, file string) bool {
 	want := "include " + file + ";"
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		if strings.TrimSpace(line) == want {
 			return true
 		}
