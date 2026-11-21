@@ -4,6 +4,7 @@ import { useId, useState } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
+import { ProxyRouteEditor, routesFromDrafts, type RouteDraft } from "@/components/CreateSiteDialog"
 import { SiteControls } from "@/components/SiteControls"
 import { SitePHP } from "@/components/SitePHP"
 import { SiteTLS } from "@/components/SiteTLS"
@@ -33,7 +34,7 @@ import {
 } from "@/lib/queries"
 import { kindLabel } from "@/pages/SitesPage"
 
-type Section = "domains" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
+type Section = "domains" | "proxy" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
 
 /**
  * One site, as a dialog over the sites list: a rail of sections on the left, the
@@ -56,12 +57,13 @@ export function SiteDetailDialog({
   const [section, setSection] = useState<Section>(wafPrefill ? "waf" : "domains")
 
   const sections: { id: Section; label: string }[] = [
-    { id: "domains", label: data?.kind === "proxy" ? "Domains & proxy" : "Domain manager" },
+    { id: "domains", label: "Domain manager" },
+    { id: "proxy", label: "Reverse proxy" },
     { id: "config", label: "Config" },
     { id: "ssl", label: "SSL" },
     { id: "waf", label: "Firewall" },
-    ...(data?.kind === "php" ? [{ id: "php" as const, label: "PHP version" }] : []),
-    ...(data?.kind === "php" ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
+    ...(data?.php_version ? [{ id: "php" as const, label: "PHP version" }] : []),
+    ...(data?.php_version ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
     { id: "logs", label: "Response log" },
     { id: "delete", label: "Reset or delete" },
   ]
@@ -113,12 +115,13 @@ export function SiteDetailDialog({
 
             <div className="min-h-0 overflow-y-auto p-4">
               {section === "domains" && <Overview detail={data} />}
+              {section === "proxy" && <SiteProxyRoutes detail={data} />}
               {section === "config" && <SiteConfig detail={data} />}
               {section === "ssl" && <SiteTLS detail={data} />}
               {section === "waf" && <SiteWAF domain={data.domain} prefill={wafPrefill} />}
-              {section === "php" && data.kind === "php" && <SitePHP detail={data} />}
-              {section === "rewrite" && data.kind === "php" && <SiteRewriteSection detail={data} />}
-              {section === "logs" && <Logs domain={data.domain} php={data.kind === "php"} />}
+              {section === "php" && data.php_version && <SitePHP detail={data} />}
+              {section === "rewrite" && data.php_version && <SiteRewriteSection detail={data} />}
+              {section === "logs" && <Logs domain={data.domain} php={data.php_version !== null} />}
               {section === "delete" && <DangerZone detail={data} onGone={onClose} />}
             </div>
           </div>
@@ -130,22 +133,38 @@ export function SiteDetailDialog({
 
 function Overview({ detail }: { detail: SiteDetail }) {
   const update = useUpdateSite(detail.domain)
+  const routes = detail.proxy_routes ?? []
 
   return (
     <div className="flex flex-col gap-8">
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">
-          {detail.kind === "proxy" ? "Passes requests to" : "Folder"}
-        </dt>
-        <dd className="font-mono text-xs break-all">
-          {detail.kind === "proxy" ? detail.proxy_target : detail.root}
-        </dd>
-        {detail.kind === "php" && (
+        {detail.root && (
+          <>
+            <dt className="text-muted-foreground">Folder</dt>
+            <dd className="font-mono text-xs break-all">{detail.root}</dd>
+          </>
+        )}
+        {detail.php_version && (
           <>
             <dt className="text-muted-foreground">PHP version</dt>
             <dd>{detail.php_version}</dd>
           </>
         )}
+        <dt className="text-muted-foreground">Reverse proxy</dt>
+        <dd>
+          {routes.length === 0 ? (
+            <span className="text-muted-foreground">No route</span>
+          ) : (
+            <ul className="flex flex-col gap-0.5 font-mono text-xs">
+              {routes.map((r) => (
+                <li key={r.path} className="break-all">
+                  {r.path} → {r.target}
+                  {r.strip_prefix ? " (prefix stripped)" : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </dd>
         <dt className="text-muted-foreground">Site file</dt>
         <dd className="font-mono text-xs break-all">
           {detail.site_file}
@@ -157,13 +176,96 @@ function Overview({ detail }: { detail: SiteDetail }) {
 
       {/* Keyed on the saved values so the inputs follow a save or a reload. */}
       <SiteControls
-        key={`${detail.aliases.join(" ")}|${detail.proxy_target ?? ""}`}
+        key={detail.aliases.join(" ")}
         detail={detail}
         pending={update.isPending}
         error={update.error}
         onSave={(input) => update.mutate(input)}
       />
     </div>
+  )
+}
+
+/**
+ * The site's reverse-proxy routes, editable after creation.
+ *
+ * The list is the whole truth: saving replaces it, an empty list removes every
+ * route. A route on "/" is refused by the server when the site also serves PHP
+ * or a folder (both would claim `location /`), and the refusal says so.
+ */
+function SiteProxyRoutes({ detail }: { detail: SiteDetail }) {
+  const update = useUpdateSite(detail.domain)
+  const saved = detail.proxy_routes ?? []
+  const [routes, setRoutes] = useState<RouteDraft[]>(() =>
+    saved.map((r) => ({ path: r.path, target: r.target, strip_prefix: r.strip_prefix })),
+  )
+  const [done, setDone] = useState<string | null>(null)
+
+  const next = routesFromDrafts(routes)
+  const dirty = JSON.stringify(next) !== JSON.stringify(saved)
+  const feature = detail.features.find((f) => f.feature === "proxy")
+  const detached = feature !== undefined && !feature.attached
+
+  return (
+    <section aria-labelledby="proxy-heading" className="flex flex-col gap-4">
+      <div>
+        <h3 id="proxy-heading" className="text-sm font-semibold">
+          Reverse proxy
+        </h3>
+        <p className="text-muted-foreground text-xs">
+          Send a subpath, such as <code>/api</code>, to an app or another server. The rest of the
+          site is served by its folder
+          {detail.php_version ? " and PHP" : ""}.
+        </p>
+      </div>
+
+      {detached ? (
+        <p role="status" className="text-muted-foreground text-sm">
+          Switched off: {feature.reason ?? "the site file no longer includes this control's file."}
+        </p>
+      ) : (
+        <>
+          <ProxyRouteEditor
+            routes={routes}
+            onChange={(r) => {
+              setRoutes(r)
+              setDone(null)
+            }}
+            error={update.error}
+            disabled={update.isPending}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              disabled={!dirty || update.isPending}
+              onClick={() =>
+                update.mutate(
+                  { proxy_routes: next },
+                  { onSuccess: () => setDone("Saved. nginx reloaded.") },
+                )
+              }
+            >
+              {update.isPending ? "Saving…" : "Save routes"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!dirty}
+              onClick={() => {
+                setRoutes(
+                  saved.map((r) => ({ path: r.path, target: r.target, strip_prefix: r.strip_prefix })),
+                )
+                update.reset()
+              }}
+            >
+              Discard
+            </Button>
+            <span className="text-muted-foreground text-xs" aria-live="polite">
+              {done ?? ""}
+            </span>
+          </div>
+          <ApplyError error={update.error} fallback="The routes could not be saved." />
+        </>
+      )}
+    </section>
   )
 }
 
