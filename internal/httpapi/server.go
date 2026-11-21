@@ -71,6 +71,7 @@ func (s *server) routes() http.Handler {
 	s.logsRoutes(mux)
 	s.cronRoutes(mux)
 	s.wafMonRoutes(mux)
+	s.sshAuthRoutes(mux)
 	s.dockerRoutes(mux)
 
 	// The jobs SSE handler is served by internal/jobs and guarded here, so a job

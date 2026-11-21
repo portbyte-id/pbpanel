@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/webroots"
 )
@@ -75,8 +76,14 @@ const (
 	KeyCronAllowShell = "cron.allow_shell"
 	// KeyLogsRotateMaxBytes is the size at which a panel-owned log is rotated.
 	KeyLogsRotateMaxBytes = "logs.rotate.max_bytes"
+	// KeyLogsRotateMaxAge is how long a log may go unwritten before it is cut
+	// whatever its size is.
+	KeyLogsRotateMaxAge = "logs.rotate.max_age"
 	// KeyLogsRotateKeep is how many rotated files are kept per log.
 	KeyLogsRotateKeep = "logs.rotate.keep"
+	// KeyLogsRotateRetainAge is how long a rotated file is kept, independently
+	// of the count.
+	KeyLogsRotateRetainAge = "logs.rotate.retain_age"
 )
 
 // File manager settings (development plan M3). Sizes are bytes.
@@ -120,6 +127,20 @@ const (
 	// ACMEDirectoryGoogleStaging is Google Public CA's test endpoint. It needs EAB.
 	ACMEDirectoryGoogleStaging = "https://dv.acme-v02.test-api.pki.goog/directory"
 )
+
+// nonNegativeDuration accepts a duration, zero included: for the log-rotation
+// keys, zero is not a missing value but "this half of the policy is off", which
+// is what keeps a key able to restore the size-only behaviour exactly.
+func nonNegativeDuration(value string) error {
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return errors.New("must be a duration such as 24h, or 0s to turn it off")
+	}
+	if d < 0 {
+		return errors.New("must not be negative")
+	}
+	return nil
+}
 
 func validateOptionalEmail(value string) error {
 	if value == "" {
@@ -435,6 +456,28 @@ func defaultKeys() []key {
 				Group:           groupLogs,
 			},
 			check: rangeInt(1, 365),
+		},
+		{
+			meta: Meta{
+				Name:            KeyLogsRotateMaxAge,
+				Type:            TypeDuration,
+				Default:         "168h",
+				RestartRequired: true,
+				Description:     "A panel-owned log is rotated once nothing has been written to it for this long, even if it is small, so a log that went quiet is still cut. A log that is still being written to is never rotated this way; it is cut by size instead. Checked hourly. Set 0s to rotate on size alone.",
+				Group:           groupLogs,
+			},
+			check: nonNegativeDuration,
+		},
+		{
+			meta: Meta{
+				Name:            KeyLogsRotateRetainAge,
+				Type:            TypeDuration,
+				Default:         "720h",
+				RestartRequired: true,
+				Description:     "A rotated file is deleted once it has been rotated for this long, whatever the keep count says, so the retention is measured in days and not only in files. A rotated file's age counts from the moment it was cut. Checked hourly. Set 0s to keep by count alone.",
+				Group:           groupLogs,
+			},
+			check: nonNegativeDuration,
 		},
 		{
 			meta: Meta{
