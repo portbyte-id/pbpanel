@@ -91,7 +91,8 @@ func appsHarness(t *testing.T, a AppsService, r RuntimesService) (*harness, sess
 	return h, h.login()
 }
 
-func TestAppsRoutesUnavailableWithoutServices(t *testing.T) {	h, s := appsHarness(t, nil, nil)
+func TestAppsRoutesUnavailableWithoutServices(t *testing.T) {
+	h, s := appsHarness(t, nil, nil)
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/api/apps"},
 		{http.MethodGet, "/api/apps/web"},
