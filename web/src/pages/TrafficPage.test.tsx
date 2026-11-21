@@ -129,6 +129,21 @@ describe("pollWhileVisible", () => {
 })
 
 describe("TrafficPage", () => {
+  it("puts the page root in a containing block so sr-only captions cannot escape main", async () => {
+    // Each table's caption is `sr-only`: absolutely positioned, so without a
+    // positioned ancestor it lays out against the initial containing block,
+    // past `main`'s clip, and grows the document taller than the viewport — a
+    // second scrollbar beside the app shell's. `relative` on the page root keeps
+    // them inside. jsdom has no layout, so this pins the class.
+    renderPage()
+    await screen.findByText("Requests per second now")
+    const root = screen.getByText("Requests per second now").closest("div.relative")
+    expect(root).not.toBeNull()
+    for (const table of screen.getAllByRole("table")) {
+      if (table.querySelector("caption.sr-only")) expect(root!.contains(table)).toBe(true)
+    }
+  })
+
   it("shows the totals, the chart, the sites and the top lists under their tabs", async () => {
     const user = userEvent.setup()
     renderPage()

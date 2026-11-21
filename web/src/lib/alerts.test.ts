@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { deriveAlerts } from "@/lib/alerts"
+import { deriveAlerts, EXPIRY_WARNING_DAYS, isIPName, SHORT_LIVED_EXPIRY_WARNING_DAYS } from "@/lib/alerts"
 import type { AuditEntry, CertView, FirewallState, SiteDetail } from "@/lib/api"
 import type { CronJob } from "@/lib/cron"
 
@@ -73,6 +73,88 @@ const audit = (over: Partial<AuditEntry>): AuditEntry => ({
   result: "failure",
   detail: null,
   ...over,
+})
+
+describe("isIPName", () => {
+  it("accepts IPv4 dotted quads and IPv6 literals, bracketed or not", () => {
+    for (const name of [
+      "203.0.113.9",
+      "0.0.0.0",
+      "255.255.255.255",
+      "::1",
+      "2001:db8::1",
+      "2001:0db8:0000:0000:0000:0000:0000:0001",
+      "fe80::1",
+      "[2001:db8::1]",
+      "::ffff:203.0.113.9",
+    ]) {
+      expect(isIPName(name), name).toBe(true)
+    }
+  })
+
+  it("rejects names that only look like addresses", () => {
+    for (const name of [
+      "1.2.3.example",
+      "::1.example",
+      "a.test",
+      "1.2.3",
+      "1.2.3.4.5",
+      "256.1.1.1",
+      "01.2.3.4",
+      "2001:db8::1:zzzz",
+      "2001:db8::1::2",
+      "1:2:3",
+      "example.com:443",
+      "",
+    ]) {
+      expect(isIPName(name), name).toBe(false)
+    }
+  })
+})
+
+describe("certificates that name an IP", () => {
+  it("pins both windows", () => {
+    expect(EXPIRY_WARNING_DAYS).toBe(14)
+    expect(SHORT_LIVED_EXPIRY_WARNING_DAYS).toBe(2)
+  })
+
+  const ipCert = (over: Partial<CertView> = {}) =>
+    cert({ domain: "203.0.113.9", names: ["203.0.113.9"], ...over })
+
+  it("says nothing about a healthy IP certificate six days from its end", () => {
+    expect(deriveAlerts({ now: NOW, certs: [ipCert({ days_left: 6 })] })).toEqual([])
+  })
+
+  it("warns an IP certificate with two days left, still under the 14-day window", () => {
+    const alerts = deriveAlerts({ now: NOW, certs: [ipCert({ days_left: SHORT_LIVED_EXPIRY_WARNING_DAYS })] })
+    expect(alerts.map((a) => a.id)).toEqual(["cert-expiring:203.0.113.9"])
+    expect(alerts[0]?.severity).toBe("warning")
+    expect(alerts[0]?.title).toMatch(/2 days$/)
+  })
+
+  it("warns an IP certificate with one day left, singular", () => {
+    const alerts = deriveAlerts({ now: NOW, certs: [ipCert({ days_left: 1 })] })
+    expect(alerts.map((a) => a.id)).toEqual(["cert-expiring:203.0.113.9"])
+    expect(alerts[0]?.title).toMatch(/1 day$/)
+  })
+
+  it("keeps the 14-day window for a domain certificate", () => {
+    expect(deriveAlerts({ now: NOW, certs: [cert({ days_left: 10 })] }).map((a) => a.id)).toEqual([
+      "cert-expiring:a.test",
+    ])
+    expect(deriveAlerts({ now: NOW, certs: [cert({ days_left: 20 })] })).toEqual([])
+  })
+
+  it("treats an IPv6 name as short-lived and a mixed set as short-lived", () => {
+    expect(deriveAlerts({ now: NOW, certs: [cert({ names: ["2001:db8::1"], days_left: 5 })] })).toEqual([])
+    expect(deriveAlerts({ now: NOW, certs: [cert({ names: ["2001:db8::1"], days_left: 2 })] })).toHaveLength(1)
+    expect(deriveAlerts({ now: NOW, certs: [cert({ names: ["a.test", "2001:db8::1"], days_left: 6 })] })).toEqual([])
+  })
+
+  it("still reports an expired IP certificate as an error", () => {
+    const alerts = deriveAlerts({ now: NOW, certs: [ipCert({ days_left: -1 })] })
+    expect(alerts.map((a) => [a.id, a.severity])).toEqual([["cert-expired:203.0.113.9", "error"]])
+  })
 })
 
 describe("deriveAlerts", () => {
