@@ -231,8 +231,11 @@ func TestCreateStaticSite(t *testing.T) {
 	if b := blockOf(t, string(site), "listen"); !strings.Contains(b, "listen 80;") {
 		t.Errorf("listen block = %q", b)
 	}
-	if r.fs.has("/www/panel/nginx/includes/a.test/proxy.conf") {
-		t.Error("a static site got a proxy.conf")
+	// The proxy include now exists for every site (the site file always includes
+	// it), but a site with no route has nothing in it to proxy.
+	proxy, err := r.fs.ReadFile("/www/panel/nginx/includes/a.test/proxy.conf")
+	if err != nil || strings.Contains(string(proxy), "location") {
+		t.Errorf("a static site's proxy.conf = %q, %v; want a comment-only file and no location", proxy, err)
 	}
 	if len(r.ap.applied) != 1 || len(r.ap.applied[0].Services) != 1 {
 		t.Errorf("applies = %d, want one change through the nginx service", len(r.ap.applied))
@@ -240,6 +243,9 @@ func TestCreateStaticSite(t *testing.T) {
 	got, err := r.m.Get(ctx, "a.test")
 	if err != nil || got.Domain != "a.test" || got.CreatedAt.IsZero() || got.PHPVersion != nil {
 		t.Errorf("Get = %+v, %v", got, err)
+	}
+	if len(got.ProxyRoutes) != 0 {
+		t.Errorf("a static site got routes: %+v", got.ProxyRoutes)
 	}
 }
 
@@ -249,11 +255,15 @@ func TestCreateProxySite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Site.ProxyTarget != "http://127.0.0.1:3000" || res.Site.Root != "" {
+	want := []ProxyRoute{{Path: "/", Target: "http://127.0.0.1:3000"}}
+	if !slices.Equal(res.Site.ProxyRoutes, want) || res.Site.Root != "" {
 		t.Errorf("site = %+v", res.Site)
 	}
+	if res.Site.ProxyTarget != "http://127.0.0.1:3000" {
+		t.Errorf("the compatibility field = %q, want the / route's target", res.Site.ProxyTarget)
+	}
 	proxy, err := r.fs.ReadFile("/www/panel/nginx/includes/api.test/proxy.conf")
-	if err != nil || !strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:3000;") {
+	if err != nil || !strings.Contains(string(proxy), "location / {") || !strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:3000;") {
 		t.Errorf("proxy.conf = %q, %v", proxy, err)
 	}
 	if r.fs.has("/www/services/sites/api.test") {
@@ -261,22 +271,62 @@ func TestCreateProxySite(t *testing.T) {
 	}
 }
 
+// A site may now be created with the route list, and it need not be kind=proxy:
+// a static site with a subpath route serves files and proxies /api.
+func TestCreateStaticSiteWithSubpathRoute(t *testing.T) {
+	r := newRig(t)
+	res, err := r.m.Create(ctx, CreateInput{Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{
+		{Path: "/api", Target: "http://127.0.0.1:8080/", StripPrefix: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ProxyRoute{{Path: "/api", Target: "http://127.0.0.1:8080", StripPrefix: true}}
+	if !slices.Equal(res.Site.ProxyRoutes, want) {
+		t.Errorf("routes = %+v, want %+v", res.Site.ProxyRoutes, want)
+	}
+	if res.Site.ProxyTarget != "" {
+		t.Errorf("ProxyTarget = %q, want empty (there is no / route)", res.Site.ProxyTarget)
+	}
+	proxy, _ := r.fs.ReadFile("/www/panel/nginx/includes/a.test/proxy.conf")
+	if !strings.Contains(string(proxy), "location /api {") || !strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:8080/;") {
+		t.Errorf("proxy.conf = %q", proxy)
+	}
+	site, _ := r.fs.ReadFile("/www/panel/nginx/sites/a.test.conf")
+	if strings.Contains(string(site), "fastcgi_pass") {
+		t.Errorf("a static site got PHP locations:\n%s", site)
+	}
+	if !strings.Contains(string(site), "include /www/panel/nginx/includes/a.test/proxy.conf;") {
+		t.Errorf("the site file does not include the proxy routes:\n%s", site)
+	}
+}
+
 func TestCreateRejectsBadInput(t *testing.T) {
 	r := newRig(t)
 	for name, in := range map[string]CreateInput{
-		"no domain":          {Kind: KindStatic},
-		"wildcard":           {Domain: "*.a.test", Kind: KindStatic},
-		"unknown kind":       {Domain: "a.test", Kind: "php"},
-		"alias is primary":   {Domain: "a.test", Aliases: []string{"A.test"}, Kind: KindStatic},
-		"repeated alias":     {Domain: "a.test", Aliases: []string{"b.test", "b.test"}, Kind: KindStatic},
-		"proxy w/o target":   {Domain: "a.test", Kind: KindProxy},
-		"proxy with path":    {Domain: "a.test", Kind: KindProxy, ProxyTarget: "http://x.test/app"},
-		"static w/ target":   {Domain: "a.test", Kind: KindStatic, ProxyTarget: "http://x.test"},
-		"proxy w/ root":      {Domain: "a.test", Kind: KindProxy, ProxyTarget: "http://x.test", Root: "/www/services/sites/a.test"},
-		"root outside sites": {Domain: "a.test", Kind: KindStatic, Root: "/etc"},
-		"root is sites dir":  {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites"},
-		"root traversal":     {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/../../../etc"},
-		"root injection":     {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a;b"},
+		"no domain":            {Kind: KindStatic},
+		"wildcard":             {Domain: "*.a.test", Kind: KindStatic},
+		"unknown kind":         {Domain: "a.test", Kind: "bogus"},
+		"php without runtime":  {Domain: "a.test", Kind: KindPHP, PHPVersion: "8.3"},
+		"alias is primary":     {Domain: "a.test", Aliases: []string{"A.test"}, Kind: KindStatic},
+		"repeated alias":       {Domain: "a.test", Aliases: []string{"b.test", "b.test"}, Kind: KindStatic},
+		"proxy w/o target":     {Domain: "a.test", Kind: KindProxy},
+		"proxy with path":      {Domain: "a.test", Kind: KindProxy, ProxyTarget: "http://x.test/app"},
+		"root and / route":     {Domain: "a.test", Kind: KindProxy, Root: "/www/services/sites/a.test", ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://x.test"}}},
+		"root outside sites":   {Domain: "a.test", Kind: KindStatic, Root: "/etc"},
+		"root is sites dir":    {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites"},
+		"root traversal":       {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/../../../etc"},
+		"root injection":       {Domain: "a.test", Kind: KindStatic, Root: "/www/services/sites/a;b"},
+		"route without target": {Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{{Path: "/api"}}},
+		"route without path":   {Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{{Target: "http://x.test"}}},
+		"route path no slash":  {Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{{Path: "api", Target: "http://x.test"}}},
+		"route path trailing /": {Domain: "a.test", Kind: KindStatic,
+			ProxyRoutes: []ProxyRoute{{Path: "/api/", Target: "http://x.test"}}},
+		"duplicate route path": {Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{
+			{Path: "/api", Target: "http://x.test"}, {Path: "/api", Target: "http://y.test"}}},
+		"static with / route": {Domain: "a.test", Kind: KindStatic, ProxyRoutes: []ProxyRoute{{Path: "/", Target: "http://x.test"}}},
+		"both target and routes": {Domain: "a.test", Kind: KindStatic, ProxyTarget: "http://x.test",
+			ProxyRoutes: []ProxyRoute{{Path: "/api", Target: "http://y.test"}}},
 	} {
 		_, err := r.m.Create(ctx, in)
 		var ve *ValidationError

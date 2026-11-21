@@ -258,6 +258,11 @@ func TestSiteLifecycle(t *testing.T) {
 	if code != 200 || out["site"].(map[string]any)["proxy_target"] != "http://127.0.0.1:4000" {
 		t.Fatalf("update: %d %v", code, out)
 	}
+	// The single target stays one route on "/", and the list carries it too.
+	routes := out["site"].(map[string]any)["proxy_routes"].([]any)
+	if len(routes) != 1 || routes[0].(map[string]any)["path"] != "/" || routes[0].(map[string]any)["target"] != "http://127.0.0.1:4000" {
+		t.Errorf("routes = %v, want one / route to the new target", routes)
+	}
 
 	if code, _ := h.call(http.MethodDelete, "/api/sites/a.test", nil); code != http.StatusBadRequest {
 		t.Errorf("delete without confirm = %d, want 400", code)
@@ -287,10 +292,22 @@ func TestSiteInputErrors(t *testing.T) {
 	}{
 		{"wildcard", map[string]any{"domain": "*.a.test", "kind": "static"}, 422, errInvalidInput, "domain"},
 		{"no kind", map[string]any{"domain": "b.test"}, 422, errInvalidInput, "kind"},
-		{"proxy without target", map[string]any{"domain": "b.test", "kind": "proxy"}, 422, errInvalidInput, "proxy_target"},
+		{"proxy without target", map[string]any{"domain": "b.test", "kind": "proxy"}, 422, errInvalidInput, "proxy_routes"},
 		{"root outside", map[string]any{"domain": "b.test", "kind": "static", "root": "/etc"}, 422, errInvalidInput, "root"},
 		{"duplicate", map[string]any{"domain": "a.test", "kind": "static"}, 409, errConflict, ""},
 		{"alias taken", map[string]any{"domain": "b.test", "aliases": []string{"a.test"}, "kind": "static"}, 409, errConflict, ""},
+		// A "/" route next to a web root is the classic two-`location /` bug,
+		// refused with the field the operator has to change.
+		{"static with / route", map[string]any{"domain": "b.test", "kind": "static", "proxy_routes": []map[string]any{
+			{"path": "/", "target": "http://127.0.0.1:3000"}}}, 422, errInvalidInput, "proxy_routes"},
+		{"route path without a slash", map[string]any{"domain": "b.test", "kind": "proxy", "proxy_routes": []map[string]any{
+			{"path": "api", "target": "http://127.0.0.1:3000"}}}, 422, errInvalidInput, "proxy_routes"},
+		{"route target with a path", map[string]any{"domain": "b.test", "kind": "proxy", "proxy_routes": []map[string]any{
+			{"path": "/api", "target": "http://127.0.0.1:3000/app"}}}, 422, errInvalidInput, "proxy_routes"},
+		{"duplicate route paths", map[string]any{"domain": "b.test", "kind": "proxy", "proxy_routes": []map[string]any{
+			{"path": "/api", "target": "http://127.0.0.1:3000"}, {"path": "/api", "target": "http://127.0.0.1:4000"}}}, 422, errInvalidInput, "proxy_routes"},
+		{"both spellings", map[string]any{"domain": "b.test", "kind": "proxy", "proxy_target": "http://127.0.0.1:3000",
+			"proxy_routes": []map[string]any{{"path": "/api", "target": "http://127.0.0.1:4000"}}}, 422, errInvalidInput, "proxy_routes"},
 	}
 	for _, c := range cases {
 		rec := h.do(http.MethodPost, "/api/sites", h.s.cookie, h.s.csrf, c.body)
@@ -309,6 +326,70 @@ func TestSiteInputErrors(t *testing.T) {
 	}
 	if code, _ := h.call(http.MethodPut, "/api/sites/nope.test", map[string]any{"aliases": []string{}}); code != 404 {
 		t.Errorf("update of an unknown site = %d, want 404", code)
+	}
+}
+
+// The request and response shape of proxy routes: strip_prefix defaults to true
+// when omitted, the detail carries the routes, and updating the list rewrites
+// proxy.conf without touching anything else.
+func TestSiteProxyRoutesShape(t *testing.T) {
+	h := newNginxHarness(t)
+
+	code, out := h.call(http.MethodPost, "/api/sites", map[string]any{
+		"domain": "a.test", "kind": "static",
+		"proxy_routes": []map[string]any{
+			{"path": "/api", "target": "http://127.0.0.1:8080"},
+			{"path": "/api/v2", "target": "http://127.0.0.1:8081", "strip_prefix": false},
+		},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	routes := out["site"].(map[string]any)["proxy_routes"].([]any)
+	if len(routes) != 2 {
+		t.Fatalf("routes = %v, want two", routes)
+	}
+	first, second := routes[0].(map[string]any), routes[1].(map[string]any)
+	if first["path"] != "/api" || first["strip_prefix"] != true {
+		t.Errorf("omitted strip_prefix = %v; want the default true", first)
+	}
+	if second["path"] != "/api/v2" || second["strip_prefix"] != false {
+		t.Errorf("explicit strip_prefix = %v; want false kept", second)
+	}
+	if got := out["site"].(map[string]any)["proxy_target"]; got != nil && got != "" {
+		t.Errorf("proxy_target = %v, want empty (there is no / route)", got)
+	}
+
+	// The detail exposes the same list.
+	code, out = h.call(http.MethodGet, "/api/sites/a.test", nil)
+	if code != 200 || len(out["proxy_routes"].([]any)) != 2 {
+		t.Fatalf("detail: %d %v", code, out)
+	}
+
+	// A static site cannot take a "/" route: its own folder claims that
+	// location. The refusal names the field.
+	code, out = h.call(http.MethodPut, "/api/sites/a.test", map[string]any{"proxy_target": "http://127.0.0.1:9090"})
+	if code != 422 {
+		t.Fatalf("a / route on a static site = %d %v, want 422", code, out)
+	}
+
+	// A proxy site does take it, and the old single-target spelling collapses
+	// the list to one "/" route.
+	h.mustCreate(map[string]any{"domain": "p.test", "kind": "proxy", "proxy_routes": []map[string]any{
+		{"path": "/api", "target": "http://127.0.0.1:8080"}, {"path": "/v2", "target": "http://127.0.0.1:8081"}}})
+	code, out = h.call(http.MethodPut, "/api/sites/p.test", map[string]any{"proxy_target": "http://127.0.0.1:9090"})
+	if code != 200 {
+		t.Fatalf("update: %d %v", code, out)
+	}
+	routes = out["site"].(map[string]any)["proxy_routes"].([]any)
+	if len(routes) != 1 || routes[0].(map[string]any)["path"] != "/" {
+		t.Errorf("routes after a proxy_target update = %v", routes)
+	}
+	proxy, err := h.fs.ReadFile("/www/panel/nginx/includes/p.test/proxy.conf")
+	if err != nil || !strings.Contains(string(proxy), "location / {") ||
+		!strings.Contains(string(proxy), "proxy_pass http://127.0.0.1:9090;") ||
+		strings.Contains(string(proxy), "/api") {
+		t.Errorf("proxy.conf = %q, %v", proxy, err)
 	}
 }
 

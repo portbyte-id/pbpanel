@@ -33,12 +33,40 @@ const (
 )
 
 // Site is what the templates need about one site.
+//
+// Kind is the site's primary serving mode, for display and for validating a
+// root; it does not decide what is rendered. The template branches on what the
+// site actually has: a root, PHP, and proxy routes (all three can be present).
 type Site struct {
 	Domain      string
 	Aliases     []string
 	Kind        Kind
 	Root        string
-	ProxyTarget string
+	ProxyRoutes []ProxyRoute
+	// HasPHP says the site runs PHP. The template writes the PHP locations for
+	// it whatever Kind says, so the two can never disagree.
+	HasPHP bool
+}
+
+// ProxyRoute sends one path prefix to a backend. Path is a normalised absolute
+// path ("/", "/api", "/api/v2"); nginx matches it as a prefix location, so
+// "/api" also covers "/api/x" and "/apiary", and the longest prefix wins
+// (/api/v2 beats /api). StripPrefix decides whether the matched path prefix
+// reaches the backend: with it, /api/x arrives as /x; without it, as /api/x.
+type ProxyRoute struct {
+	Path        string `json:"path"`
+	Target      string `json:"target"`
+	StripPrefix bool   `json:"strip_prefix"`
+}
+
+// ProxyPass is the proxy_pass argument of the route: nginx strips the matched
+// location prefix exactly when the target carries a URI, so the trailing slash
+// is the whole of the strip_prefix semantics.
+func (r ProxyRoute) ProxyPass() string {
+	if r.StripPrefix {
+		return r.Target + "/"
+	}
+	return r.Target
 }
 
 // mainConfTemplate is nginx.conf. It sets nothing the settings form owns and
@@ -135,21 +163,22 @@ server {
 
     access_log {{.AccessLog}} ` + LogFormat + `;
     error_log {{.ErrorLog}};
-{{- if .Static}}
+{{- if .ServesRoot}}
 
     root {{.Root}};
-    index index.html index.htm;
+    index {{.Index}};
+{{- end}}
+{{- if .StaticLocation}}
 
     location / {
         try_files $uri $uri/ =404;
     }
-{{- else if .PHPSite}}
-
-    root {{.Root}};
-    index index.php index.html index.htm;
+{{- end}}
+{{- if .PHPSite}}
 
 {{.PHPBlock}}
-{{- else}}
+{{- end}}
+{{- if .HasProxy}}
 
     include {{.Proxy}};
 {{- end}}
@@ -228,9 +257,23 @@ if ($pb_https_redirect) {
 {{- end}}
 `
 
-const proxyIncludeTemplate = `# Managed by PB panel (proxy target).
-location / {
-    proxy_pass {{.Target}};
+// proxyIncludeTemplate renders one prefix location per proxy route.
+//
+// Host stays $host, the site's own name, for every route. The backend is a
+// service behind this site, not a site of its own: it usually builds self
+// -referencing URLs and checks an Origin against the public name, and an app on
+// 127.0.0.1 is useless to a browser that would have to follow it. A backend that
+// needs its own name gets a `proxy_set_header Host <name>;` typed into the
+// location by hand.
+//
+// The proxy_pass argument carries the strip_prefix semantics: a target with a
+// URI (the trailing slash ProxyPass adds) makes nginx replace the matched
+// location prefix, one without it passes the request URI untouched.
+const proxyIncludeTemplate = `# Managed by PB panel (proxy routes).
+{{range .}}{{if .StripPrefix}}# {{.Path}} -> {{.Target}}, prefix stripped
+{{else}}# {{.Path}} -> {{.Target}}, prefix kept
+{{end}}location {{.Path}} {
+    proxy_pass {{.ProxyPass}};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -239,7 +282,7 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
 }
-`
+{{end}}`
 
 // phpIncludeTemplate sends a request for a file that does not exist to
 // index.php, which is what front-controller applications expect, and passes
@@ -342,6 +385,12 @@ func emptyBlock(name string) string {
 // RenderSiteFile renders a site's own file: the whole server block, with an empty
 // managed block for each part the panel keeps current. Fill them with
 // ReplaceBlock.
+//
+// What the server block contains is decided by what the site is, not by Kind:
+// a root (and, for a static site with no proxy at "/", the static location), the
+// PHP locations, and one include line for the proxy routes when it has any. A
+// PHP site with proxy routes gets both; a proxy site whose routes include "/"
+// gets no static `location /`, since two `location /` blocks do not parse.
 func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 	if err := checkSite(p, s); err != nil {
 		return nil, err
@@ -349,18 +398,37 @@ func (p Paths) RenderSiteFile(s Site) ([]byte, error) {
 	blocks := strings.Join([]string{
 		emptyBlock(BlockListen), emptyBlock(BlockNames), emptyBlock(BlockACME), emptyBlock(BlockTLS), emptyBlock(BlockWAF),
 	}, "\n")
+	servesRoot := s.Root != ""
+	staticLocation := s.Kind == KindStatic && s.Root != "" && !s.HasPHP && !s.HasProxyRoute("/")
+	index := "index.html index.htm"
+	if s.HasPHP {
+		index = "index.php index.html index.htm"
+	}
 	return execute("site", struct {
-		Domain, Blocks, PHPBlock  string
-		Proxy                     string
-		AccessLog, ErrorLog, Root string
-		Static                    bool
-		PHPSite                   bool
+		Domain, Blocks, PHPBlock                      string
+		Proxy                                         string
+		AccessLog, ErrorLog, Root, Index               string
+		ServesRoot, StaticLocation, PHPSite, HasProxy bool
 	}{
-		s.Domain, blocks, emptyBlock(BlockPHP),
-		p.SiteInclude(s.Domain, IncludeProxy),
-		p.AccessLog(s.Domain), p.ErrorLog(s.Domain), s.Root,
-		s.Kind == KindStatic, s.Kind == KindPHP,
+		Domain: s.Domain, Blocks: blocks, PHPBlock: emptyBlock(BlockPHP),
+		Proxy:      p.SiteInclude(s.Domain, IncludeProxy),
+		AccessLog:  p.AccessLog(s.Domain),
+		ErrorLog:   p.ErrorLog(s.Domain),
+		Root:       s.Root,
+		Index:      index,
+		ServesRoot: servesRoot, StaticLocation: staticLocation,
+		PHPSite: s.HasPHP, HasProxy: len(s.ProxyRoutes) > 0,
 	})
+}
+
+// HasProxyRoute reports whether the site has a proxy route on exactly path.
+func (s Site) HasProxyRoute(path string) bool {
+	for _, r := range s.ProxyRoutes {
+		if r.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 // RenderListen, RenderNames, RenderACME and RenderProxy render a site's
@@ -417,13 +485,75 @@ func RenderNames(domain string, aliases []string) ([]byte, error) {
 	return execute("names", names)
 }
 
-// RenderProxy renders proxy.conf for a target.
-func RenderProxy(target string) ([]byte, error) {
-	t, err := CheckProxyTarget(target)
-	if err != nil {
+// RenderProxy renders proxy.conf: one prefix location per route. An empty list
+// renders a comment-only file, so a site that dropped its last route keeps a
+// proxy.conf that parses instead of a dangling include.
+func RenderProxy(routes []ProxyRoute) ([]byte, error) {
+	if len(routes) == 0 {
+		return []byte("# Managed by PB panel (proxy routes). This site has no reverse-proxy route.\n"), nil
+	}
+	clean := make([]ProxyRoute, 0, len(routes))
+	for _, r := range routes {
+		p, err := CheckProxyPath(r.Path)
+		if err != nil {
+			return nil, err
+		}
+		t, err := CheckProxyTarget(r.Target)
+		if err != nil {
+			return nil, err
+		}
+		clean = append(clean, ProxyRoute{Path: p, Target: t, StripPrefix: r.StripPrefix})
+	}
+	if err := CheckProxyRoutes(clean); err != nil {
 		return nil, err
 	}
-	return execute("proxy", struct{ Target string }{t})
+	return execute("proxy", clean)
+}
+
+// CheckProxyPath validates a proxy route's path and returns its canonical form:
+// an absolute, clean path that is safe to write as an nginx `location` token.
+// The root is "/", everything else has no trailing slash.
+func CheckProxyPath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	switch {
+	case p == "":
+		return "", errors.New("nginx: proxy route path is required")
+	case !strings.HasPrefix(p, "/"):
+		return "", fmt.Errorf("nginx: proxy route path %q must start with /", raw)
+	case p != "/" && strings.HasSuffix(p, "/"):
+		return "", fmt.Errorf("nginx: proxy route path %q must not end with /", raw)
+	case path.Clean(p) != p:
+		return "", fmt.Errorf("nginx: proxy route path %q must be a clean path without . or ..", raw)
+	case strings.Contains(p, "//"):
+		return "", fmt.Errorf("nginx: proxy route path %q has an empty segment", raw)
+	}
+	if err := safeToken("proxy route path", p); err != nil {
+		return "", err
+	}
+	// A location token ends at whitespace or `{`; a regex-sensitive character
+	// would change the match from a prefix to something else.
+	for _, bad := range []string{" ", "\t", "\r", "\n", "{", "}", ";", "?", "#", "\\", "\"", "'", "=", "(", ")", "[", "]", "$", "~", "^", ",", "*", "|", "&", "%", "+", "!", "<", ">"} {
+		if strings.Contains(p, bad) {
+			return "", fmt.Errorf("nginx: proxy route path %q may not contain %q", raw, bad)
+		}
+	}
+	return p, nil
+}
+
+// CheckProxyRoutes rejects a route set nginx could not serve as the operator
+// means it. A duplicate path would be two `location` blocks for one prefix,
+// which nginx refuses ("duplicate location"); nested prefixes are allowed, since
+// nginx's longest-prefix match sends /api/v2 to the more specific block, which is
+// what the operator asked for by writing both.
+func CheckProxyRoutes(routes []ProxyRoute) error {
+	seen := make(map[string]bool, len(routes))
+	for _, r := range routes {
+		if seen[r.Path] {
+			return fmt.Errorf("nginx: proxy route %s is listed twice", r.Path)
+		}
+		seen[r.Path] = true
+	}
+	return nil
 }
 
 // RenderPHP renders php.conf for a pool socket. front is the `try_files`
@@ -484,6 +614,11 @@ func CheckProxyTarget(raw string) (string, error) {
 // checkSite guards the site template. Domains are validated by the sites
 // package; this is the second line, and it also checks the path the template
 // writes as root.
+//
+// The kind decides only whether a root is required; what is rendered comes from
+// what the site has. A render may not produce two `location /` blocks: a site
+// with PHP and a proxy route on "/", or a root and a `/` route, is refused here
+// as a second line (the sites package refuses it first with a field-level error).
 func checkSite(p Paths, s Site) error {
 	if err := safeToken("domain", s.Domain); err != nil {
 		return err
@@ -502,6 +637,25 @@ func checkSite(p Paths, s Site) error {
 	case KindProxy:
 	default:
 		return errors.New("nginx: unknown site kind " + string(s.Kind))
+	}
+	for _, r := range s.ProxyRoutes {
+		if _, err := CheckProxyPath(r.Path); err != nil {
+			return err
+		}
+		if _, err := CheckProxyTarget(r.Target); err != nil {
+			return err
+		}
+	}
+	if err := CheckProxyRoutes(s.ProxyRoutes); err != nil {
+		return err
+	}
+	switch {
+	case s.HasPHP && s.HasProxyRoute("/"):
+		return errors.New("nginx: a PHP site cannot also proxy /: both would claim `location /`")
+	case !s.HasPHP && s.Root != "" && s.HasProxyRoute("/"):
+		return errors.New("nginx: a site with a web root cannot also proxy /: both would claim `location /`")
+	case s.Kind == KindProxy && s.Root != "":
+		return errors.New("nginx: a proxy site has no web root")
 	}
 	return nil
 }
