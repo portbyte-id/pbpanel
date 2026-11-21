@@ -46,13 +46,23 @@ const placeholderIndex = `<!doctype html>
 `
 
 // Site is one website.
+//
+// Kind is the site's primary serving mode: where its content lives and how a
+// request that no proxy route claims is answered. It does not decide the feature
+// set. A site may serve files from a folder, run PHP, and proxy one or more
+// subpaths, all at once; what is rendered follows what the site actually has.
 type Site struct {
-	Domain      string   `json:"domain"`
-	Aliases     []string `json:"aliases"`
-	Kind        Kind     `json:"kind"`
-	Root        string   `json:"root,omitempty"`
-	ProxyTarget string   `json:"proxy_target,omitempty"`
-	PHPVersion  *string  `json:"php_version"`
+	Domain  string   `json:"domain"`
+	Aliases []string `json:"aliases"`
+	Kind    Kind     `json:"kind"`
+	Root    string   `json:"root,omitempty"`
+	// ProxyRoutes are the subpath routes, in the order the site lists them.
+	ProxyRoutes []ProxyRoute `json:"proxy_routes"`
+	// ProxyTarget repeats the target of the "/" route, for the API clients that
+	// predate proxy routes (the Apps page and the old create form). It is derived
+	// on every read and never stored on its own; `proxy_routes` is the truth.
+	ProxyTarget string  `json:"proxy_target,omitempty"`
+	PHPVersion  *string `json:"php_version"`
 	// PHPPool is the FPM pool name of a PHP site.
 	PHPPool string `json:"php_pool,omitempty"`
 	// Rewrite is the URL-rewrite preset of a PHP site: "" (the generic default),
@@ -60,6 +70,12 @@ type Site struct {
 	Rewrite   Rewrite   `json:"rewrite"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// ProxyRoute sends one path prefix of a site to a backend. Path is normalised by
+// nginx.CheckProxyPath ("/", "/api", "/api/v2"); Target by
+// nginx.CheckProxyTarget. StripPrefix decides whether the matched prefix reaches
+// the backend: with it, /api/users arrives as /users; without it, as /api/users.
+type ProxyRoute = nginx.ProxyRoute
 
 // Rewrite names a front-controller preset that decides the php.conf `location /`
 // line. The zero value is the panel's generic default.
@@ -95,7 +111,7 @@ func ValidRewrite(r Rewrite) bool {
 }
 
 func (s Site) nginx() nginx.Site {
-	return nginx.Site{Domain: s.Domain, Aliases: s.Aliases, Kind: s.Kind, Root: s.Root, ProxyTarget: s.ProxyTarget}
+	return nginx.Site{Domain: s.Domain, Aliases: s.Aliases, Kind: s.Kind, Root: s.Root, ProxyRoutes: s.ProxyRoutes, HasPHP: s.PHPVersion != nil}
 }
 
 // TLSInfo is a site's certificate as the nginx config needs it.
@@ -209,10 +225,16 @@ type CreateInput struct {
 	Domain  string
 	Aliases []string
 	Kind    Kind
-	// Root is the web root of a static site; empty means /www/services/sites/<domain>.
-	Root        string
+	// Root is the web root; empty means /www/services/sites/<domain>. A proxy
+	// site has none.
+	Root string
+	// ProxyRoutes are the subpath routes. ProxyTarget is the single-root form the
+	// old create form sends: it becomes the "/" route and is refused alongside
+	// ProxyRoutes, since two spellings of one route would be ambiguous.
+	ProxyRoutes []ProxyRoute
 	ProxyTarget string
-	// PHPVersion is the version a PHP site runs on.
+	// PHPVersion is the version a PHP site runs on. Empty means no PHP, which is
+	// what a static or proxy site has.
 	PHPVersion string
 	// PHPInfo puts an index.php that prints phpinfo() in a new web root. It is
 	// off by default: that page tells a visitor everything about the server.
@@ -239,7 +261,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if site.Kind == KindPHP {
+	if site.PHPVersion != nil {
 		if err := m.php.Usable(ctx, *site.PHPVersion); err != nil {
 			return CreateResult{}, phpInputError("php_version", err)
 		}
@@ -250,14 +272,16 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		return CreateResult{}, err
 	}
 
+	// A site that serves files from a folder — static or PHP — gets the folder.
+	// A pure proxy site has none.
 	var created bool
 	index := "index.html"
-	if site.Kind == KindPHP && in.PHPInfo {
+	if site.PHPVersion != nil && in.PHPInfo {
 		index = "index.php"
 	}
-	if site.Kind != KindProxy {
+	if site.Root != "" {
 		created, err = m.prepareRoot(site, index)
-		if err == nil && site.Kind == KindPHP {
+		if err == nil && site.PHPVersion != nil {
 			err = m.prepareLog(site.Domain)
 		}
 		if err != nil {
@@ -268,7 +292,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 
 	files, err := m.allFiles(ctx, site)
 	services := []confedit.Service{m.svc}
-	if err == nil && site.Kind == KindPHP {
+	if err == nil && site.PHPVersion != nil {
 		// FPM first: nginx must not be pointed at a socket nothing listens on.
 		var more []confedit.File
 		if more, err = m.phpFiles(ctx, site, php.DefaultPoolSettings()); err == nil {
@@ -297,6 +321,9 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	return CreateResult{}, err
 }
 
+// checkCreate validates a new site and returns the row to store: the kind, the
+// folder, the PHP set, and the proxy routes, each validated on its own and then
+// against each other (no duplicate path, no "/" next to PHP or a web root).
 func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 	domain, err := NormalizeDomain("domain", in.Domain)
 	if err != nil {
@@ -306,12 +333,21 @@ func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
-	site := Site{Domain: domain, Aliases: aliases, Kind: in.Kind}
+	site := Site{Domain: domain, Aliases: aliases, Kind: in.Kind, ProxyRoutes: []ProxyRoute{}}
 	switch in.Kind {
-	case KindStatic:
-		if in.ProxyTarget != "" {
-			return Site{}, invalid("proxy_target", "is only for a reverse-proxy site")
+	case KindStatic, KindProxy, KindPHP:
+	default:
+		return Site{}, invalid("kind", "must be static, proxy or php")
+	}
+
+	// The folder: a static or PHP site has one (the default when none is given),
+	// a pure proxy site has none.
+	switch in.Kind {
+	case KindProxy:
+		if in.Root != "" {
+			return Site{}, invalid("root", "is only for a site that serves files")
 		}
+	default:
 		site.Root = in.Root
 		if site.Root == "" {
 			site.Root = m.p.SiteRoot(domain)
@@ -319,48 +355,104 @@ func (m *Manager) checkCreate(in CreateInput) (Site, error) {
 		if err := m.checkRoot(site.Root); err != nil {
 			return Site{}, err
 		}
-	case KindProxy:
-		if in.Root != "" {
-			return Site{}, invalid("root", "is only for a static site")
-		}
-		t, err := nginx.CheckProxyTarget(in.ProxyTarget)
-		if err != nil {
-			return Site{}, invalid("proxy_target", "%s", strings.TrimPrefix(err.Error(), "nginx: "))
-		}
-		site.ProxyTarget = t
-	case KindPHP:
-		if in.ProxyTarget != "" {
-			return Site{}, invalid("proxy_target", "is only for a reverse-proxy site")
-		}
+	}
+
+	// PHP, which no longer needs kind=php: a site with a version runs PHP.
+	if in.PHPVersion == "" && in.Kind == KindPHP {
+		return Site{}, invalid("php_version", "choose an installed PHP version")
+	}
+	if in.PHPVersion != "" {
 		if m.php == nil {
-			return Site{}, invalid("kind", "PHP is not available on this host")
+			return Site{}, invalid("php_version", "PHP is not available on this host")
 		}
 		if php.CheckVersion(in.PHPVersion) != nil {
 			return Site{}, invalid("php_version", "choose an installed PHP version")
 		}
-		site.Root = in.Root
+		if in.Kind == KindProxy {
+			return Site{}, invalid("php_version", "a site that serves files is required for PHP; a pure proxy site has no folder")
+		}
 		if site.Root == "" {
 			site.Root = m.p.SiteRoot(domain)
-		}
-		if err := m.checkRoot(site.Root); err != nil {
-			return Site{}, err
+			if err := m.checkRoot(site.Root); err != nil {
+				return Site{}, err
+			}
 		}
 		v := in.PHPVersion
 		site.PHPVersion, site.PHPPool = &v, php.PoolName(domain)
-		if !ValidRewrite(in.Rewrite) {
-			return Site{}, invalid("rewrite", "choose one of the URL-rewrite presets")
+		// A site that runs PHP is primarily a PHP site: that is the mode its
+		// folder is served in, and it is what the list shows.
+		if site.Kind == KindStatic {
+			site.Kind = KindPHP
 		}
-		site.Rewrite = in.Rewrite
-	default:
-		return Site{}, invalid("kind", "must be static, proxy or php")
 	}
-	if in.Kind != KindPHP && (in.PHPVersion != "" || in.PHPInfo) {
-		return Site{}, invalid("php_version", "is only for a PHP site")
+	if in.PHPInfo && site.PHPVersion == nil {
+		return Site{}, invalid("php_version", "choose a PHP version to get a phpinfo() page")
 	}
-	if in.Kind != KindPHP && in.Rewrite != RewriteNone {
-		return Site{}, invalid("rewrite", "is only for a PHP site")
+	if !ValidRewrite(in.Rewrite) {
+		return Site{}, invalid("rewrite", "choose one of the URL-rewrite presets")
+	}
+	if in.Rewrite != RewriteNone && site.PHPVersion == nil {
+		return Site{}, invalid("rewrite", "is only for a site that runs PHP")
+	}
+	site.Rewrite = in.Rewrite
+
+	// Proxy routes: the new list, or the old single root target.
+	routes := in.ProxyRoutes
+	if in.ProxyTarget != "" {
+		if len(routes) > 0 {
+			return Site{}, invalid("proxy_routes", "give either proxy_target or proxy_routes, not both")
+		}
+		routes = []ProxyRoute{{Path: "/", Target: in.ProxyTarget}}
+	}
+	if site.ProxyRoutes, err = m.checkRoutes(routes, site); err != nil {
+		return Site{}, err
+	}
+	// A proxy site has no folder, so its routes are all it serves: one with none
+	// would answer nothing.
+	if site.Kind == KindProxy && len(site.ProxyRoutes) == 0 {
+		return Site{}, invalid("proxy_routes", "a reverse-proxy site needs at least one route")
+	}
+	// Every read derives this field from the "/" route.
+	for _, r := range site.ProxyRoutes {
+		if r.Path == "/" {
+			site.ProxyTarget = r.Target
+		}
 	}
 	return site, nil
+}
+
+// checkRoutes normalises and validates a site's proxy routes against the site
+// they belong to. Each path and target is checked on its own, duplicates are
+// refused, and a route on "/" is refused when something else already claims
+// `location /`: the PHP front controller, or a static site's own location.
+func (m *Manager) checkRoutes(in []ProxyRoute, s Site) ([]ProxyRoute, error) {
+	out := make([]ProxyRoute, 0, len(in))
+	for _, r := range in {
+		p, err := nginx.CheckProxyPath(r.Path)
+		if err != nil {
+			return nil, invalid("proxy_routes", "%s", trimPrefix(err))
+		}
+		t, err := nginx.CheckProxyTarget(r.Target)
+		if err != nil {
+			return nil, invalid("proxy_routes", "%s: %s", p, trimPrefix(err))
+		}
+		out = append(out, ProxyRoute{Path: p, Target: t, StripPrefix: r.StripPrefix})
+	}
+	if err := nginx.CheckProxyRoutes(out); err != nil {
+		return nil, invalid("proxy_routes", "%s", trimPrefix(err))
+	}
+	for _, r := range out {
+		if r.Path != "/" {
+			continue
+		}
+		switch {
+		case s.PHPVersion != nil:
+			return nil, invalid("proxy_routes", `/ cannot be proxied while the site runs PHP: both would claim "location /". Proxy a subpath such as /api instead`)
+		case s.Root != "":
+			return nil, invalid("proxy_routes", `/ cannot be proxied while the site serves files from %s: both would claim "location /". Proxy a subpath such as /api instead`, s.Root)
+		}
+	}
+	return out, nil
 }
 
 // checkRoot keeps a web root where PHP can be given it: below
@@ -406,13 +498,11 @@ func (m *Manager) prepareRoot(s Site, indexName string) (created bool, err error
 	return true, nil
 }
 
-// includeFiles renders the include files a site still has: the reverse proxy's.
-// Everything else is a block in the site file.
+// includeFiles renders the include files a site still has: the reverse proxy's,
+// one file whatever the kind. A site with no route gets a comment-only file, so
+// the site file's include line never dangles.
 func (m *Manager) includeFiles(s Site) ([]confedit.File, error) {
-	if s.Kind != KindProxy {
-		return nil, nil
-	}
-	proxy, err := nginx.RenderProxy(s.ProxyTarget)
+	proxy, err := nginx.RenderProxy(s.ProxyRoutes)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +557,7 @@ func (m *Manager) siteFile(ctx context.Context, s Site) (confedit.File, error) {
 	} else if ok {
 		parts = append(parts, part{nginx.BlockWAF, rendered.Block})
 	}
-	if s.Kind == KindPHP {
+	if s.PHPVersion != nil {
 		phpBody, err := m.renderPHPInclude(s)
 		if err != nil {
 			return confedit.File{}, err
@@ -534,7 +624,7 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 		files = append(files, shared...)
 	}
 	services := []confedit.Service{m.svc}
-	if s.Kind == KindPHP && m.php != nil && s.PHPVersion != nil && s.PHPPool != "" {
+	if s.PHPVersion != nil && m.php != nil && s.PHPPool != "" {
 		// nginx lets go of the socket first, then FPM drops the pool. The
 		// master stays up even when this was its last site (step 2.7).
 		files = append(files, confedit.File{Path: m.php.Paths().PoolFile(*s.PHPVersion, s.PHPPool), Delete: true})
@@ -551,7 +641,7 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 		return DeleteResult{Apply: res}, fmt.Errorf("sites: the configuration of %s was removed but its database row was not: %w", s.Domain, err)
 	}
 	out := DeleteResult{Apply: res}
-	if s.Kind != KindProxy {
+	if s.Root != "" {
 		out.WebRoot = s.Root
 	}
 	return out, nil
@@ -593,6 +683,9 @@ func (m *Manager) list(ctx context.Context, q queryer) ([]Site, error) {
 	_ = rows.Close()
 
 	for i := range out {
+		if out[i], err = withRoutes(ctx, q, out[i]); err != nil {
+			return nil, err
+		}
 		if out[i].Aliases, err = aliasesOf(ctx, q, out[i].Domain); err != nil {
 			return nil, err
 		}
@@ -612,10 +705,16 @@ func (m *Manager) get(ctx context.Context, q queryer, domain string) (Site, erro
 	if err != nil {
 		return Site{}, err
 	}
+	if s, err = withRoutes(ctx, q, s); err != nil {
+		return Site{}, err
+	}
 	s.Aliases, err = aliasesOf(ctx, q, s.Domain)
 	return s, err
 }
 
+// siteColumns reads a site row. `proxy_target` is still selected for a rollback
+// to a build that predates proxy routes: it is no longer the truth and nothing
+// writes it, but a downgraded daemon reads a proxy site the way it used to.
 const siteColumns = `SELECT s.domain, s.kind, s.root, s.proxy_target, s.php_version, s.created_at, COALESCE(p.name, ''), s.rewrite
 	FROM sites s LEFT JOIN php_pools p ON p.domain = s.domain`
 
@@ -624,15 +723,20 @@ type scanner interface{ Scan(dest ...any) error }
 func scanSite(r scanner) (Site, error) {
 	var s Site
 	var phpVer sql.NullString
+	var legacyTarget string
 	var created string
 	var rewrite string
-	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &s.ProxyTarget, &phpVer, &created, &s.PHPPool, &rewrite); err != nil {
+	if err := r.Scan(&s.Domain, &s.Kind, &s.Root, &legacyTarget, &phpVer, &created, &s.PHPPool, &rewrite); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Site{}, err
 		}
 		return Site{}, fmt.Errorf("sites: read row: %w", err)
 	}
 	s.Rewrite = Rewrite(rewrite)
+	// Rows written before migration 0020 carry their route in proxy_target and
+	// have no site_proxy_routes row, and a row written by this build carries an
+	// empty proxy_target. Either way the derived field is the "/" route's target.
+	s.ProxyTarget = legacyTarget
 	if phpVer.Valid {
 		s.PHPVersion = &phpVer.String
 	}
@@ -641,6 +745,47 @@ func scanSite(r scanner) (Site, error) {
 		return Site{}, fmt.Errorf("sites: %s has a damaged creation time: %w", s.Domain, err)
 	}
 	s.CreatedAt = t
+	return s, nil
+}
+
+func proxyRoutesOf(ctx context.Context, q queryer, domain string) ([]ProxyRoute, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT path, target, strip_prefix FROM site_proxy_routes WHERE domain = ? ORDER BY position`, domain)
+	if err != nil {
+		return nil, fmt.Errorf("sites: proxy routes of %s: %w", domain, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []ProxyRoute{}
+	for rows.Next() {
+		var r ProxyRoute
+		var strip int
+		if err := rows.Scan(&r.Path, &r.Target, &strip); err != nil {
+			return nil, fmt.Errorf("sites: proxy routes of %s: %w", domain, err)
+		}
+		r.StripPrefix = strip != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// withRoutes fills in a site's proxy routes from the table and derives
+// ProxyTarget from the "/" route, so the two spellings agree on every read.
+func withRoutes(ctx context.Context, q queryer, s Site) (Site, error) {
+	routes, err := proxyRoutesOf(ctx, q, s.Domain)
+	if err != nil {
+		return Site{}, err
+	}
+	s.ProxyRoutes = routes
+	s.ProxyTarget = ""
+	for _, r := range routes {
+		if r.Path == "/" {
+			s.ProxyTarget = r.Target
+		}
+	}
+	// An unmigrated row (proxy_target set, no route rows) reads as a "/" route.
+	if len(routes) == 0 && s.ProxyTarget != "" {
+		s.ProxyRoutes = []ProxyRoute{{Path: "/", Target: s.ProxyTarget}}
+	}
 	return s, nil
 }
 
@@ -690,16 +835,38 @@ func (m *Manager) insert(ctx context.Context, s Site) error {
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO sites (domain, kind, root, proxy_target, php_version, rewrite, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			s.Domain, string(s.Kind), s.Root, s.ProxyTarget, s.PHPVersion, string(s.Rewrite), s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			s.Domain, string(s.Kind), s.Root, "", s.PHPVersion, string(s.Rewrite), s.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("sites: insert %s: %w", s.Domain, err)
 		}
-		if s.Kind == KindPHP {
+		if err := setProxyRoutes(ctx, tx, s.Domain, s.ProxyRoutes); err != nil {
+			return err
+		}
+		if s.PHPVersion != nil {
 			if err := insertPool(ctx, tx, s.Domain, s.PHPPool, php.DefaultPoolSettings()); err != nil {
 				return err
 			}
 		}
 		return setAliases(ctx, tx, s.Domain, s.Aliases)
 	})
+}
+
+// setProxyRoutes replaces a site's routes in the order given.
+func setProxyRoutes(ctx context.Context, tx *sql.Tx, domain string, routes []ProxyRoute) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM site_proxy_routes WHERE domain = ?`, domain); err != nil {
+		return fmt.Errorf("sites: clear proxy routes of %s: %w", domain, err)
+	}
+	for i, r := range routes {
+		strip := 0
+		if r.StripPrefix {
+			strip = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO site_proxy_routes (domain, position, path, target, strip_prefix) VALUES (?, ?, ?, ?, ?)`,
+			domain, i, r.Path, r.Target, strip); err != nil {
+			return fmt.Errorf("sites: add proxy route %s of %s: %w", r.Path, domain, err)
+		}
+	}
+	return nil
 }
 
 func setAliases(ctx context.Context, tx *sql.Tx, domain string, aliases []string) error {
@@ -722,6 +889,9 @@ func (m *Manager) deleteRow(ctx context.Context, domain string) error {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM php_pools WHERE domain = ?`, domain); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM site_proxy_routes WHERE domain = ?`, domain); err != nil {
 			return err
 		}
 		if err := waf.DeleteTx(ctx, tx, domain); err != nil {
