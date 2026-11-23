@@ -25,6 +25,7 @@ import {
   STATUS_LABELS,
   type CronJob,
   type CronRun,
+  type RunStatus,
 } from "@/lib/cron"
 import {
   useCronJobs,
@@ -269,7 +270,7 @@ function HistoryDialog({ job, onClose }: { job: CronJob | null; onClose: () => v
     <Dialog open={job !== null} onOpenChange={(open) => !open && onClose()}>
       {/* The header stays put and only the table scrolls, so the title and the
           close button never scroll away and the output panel stays on screen. */}
-      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader className="shrink-0">
           <DialogTitle>{job ? `${job.name}: run history` : "Run history"}</DialogTitle>
           <DialogDescription>Newest first. Choose a run to read the end of its output.</DialogDescription>
@@ -285,19 +286,26 @@ export function RunHistory({ job }: { job: CronJob }) {
   const [openRun, setOpenRun] = useState<number | null>(null)
 
   if (runs.isPending) return <SkeletonRows label="Loading runs…" />
-  if (runs.error) {
-    return (
-      <p role="alert" className="text-destructive text-sm">
-        {runs.error instanceof ApiError ? runs.error.detail : "The run history could not be loaded."}
-      </p>
-    )
-  }
+  // The list refreshes every few seconds while a run is going. A failed refresh keeps
+  // the rows already read on screen; only a first load that failed shows the error alone.
+  const error = runs.error ? (
+    <p role="alert" className="text-destructive text-sm">
+      {runs.error instanceof ApiError ? runs.error.detail : "The run history could not be loaded."}
+    </p>
+  ) : null
+  if (runs.data === undefined) return error
   if (runs.data.length === 0) {
-    return <p className="text-muted-foreground text-sm">This job has not run yet.</p>
+    return (
+      <>
+        {error}
+        <p className="text-muted-foreground text-sm">This job has not run yet.</p>
+      </>
+    )
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {error}
       {/* Only the run list scrolls. The output panel keeps its place under it, so
           asking for a run's output never means scrolling past every row first. */}
       <div className="border-border min-h-0 overflow-auto rounded-md border">
@@ -323,8 +331,8 @@ export function RunHistory({ job }: { job: CronJob }) {
                 <td className="px-3 py-1.5">
                   <Badge variant={statusVariant(r.status)}>{STATUS_LABELS[r.status]}</Badge>
                 </td>
-                <td className="px-3 py-1.5 tabular-nums">{r.status === "running" ? "–" : r.exit_code}</td>
-                <td className="px-3 py-1.5">{runDuration(r) || "–"}</td>
+                <td className="px-3 py-1.5 tabular-nums">{ranCommand(r.status) ? r.exit_code : "–"}</td>
+                <td className="px-3 py-1.5">{ranCommand(r.status) ? runDuration(r) || "–" : "–"}</td>
                 <td className="px-3 py-1.5 text-right">
                   <Button
                     size="sm"
@@ -354,7 +362,12 @@ export function RunHistory({ job }: { job: CronJob }) {
   )
 }
 
-function RunOutput({ jobId, runId, row }: { jobId: number; runId: number; row: CronRun | null }) {
+/** A run that started its command has an exit code and a duration. A skipped run never did, so its row has neither. */
+function ranCommand(status: RunStatus): boolean {
+  return status !== "running" && status !== "skipped"
+}
+
+function RunOutput({ jobId, runId, row }:{ jobId: number; runId: number; row: CronRun | null }) {
   const detail = useCronRun(jobId, runId)
   const run = detail.data ?? row
 
