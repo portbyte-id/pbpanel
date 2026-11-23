@@ -172,6 +172,23 @@ func resetPassword(ctx context.Context, w io.Writer, path string) error {
 	return nil
 }
 
+// unlockLogin implements `panel unlock-login`: it clears every failed-login
+// lockout. The running daemon applies it at its next login attempt, so no restart
+// is needed.
+func unlockLogin(ctx context.Context, w io.Writer, path string) error {
+	st, err := openStore(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := newAuthService(st).UnlockLogin(ctx); err != nil {
+		return err
+	}
+	printf(w, "Failed-login lockouts are cleared; the panel applies this at the next login attempt.\n")
+	return nil
+}
+
 // passwordAlphabet leaves out the characters an operator reading a console
 // confuses: 0 and O, 1 and I, l.
 const passwordAlphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"

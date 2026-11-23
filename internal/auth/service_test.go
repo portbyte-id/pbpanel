@@ -61,6 +61,51 @@ func TestSetPasswordThenVerifyLogin(t *testing.T) {
 	}
 }
 
+// A lockout holds until the operator clears it from the CLI. The CLI is another
+// process with its own Service on the same database, so the unlock goes through a
+// second Service here: the running one must notice it without a restart.
+func TestUnlockLoginClearsALockoutFromAnotherService(t *testing.T) {
+	svc, st, clock := seeded(t)
+	cli := newService(t, st, clock)
+	ctx := context.Background()
+	const ip = "203.0.113.7"
+
+	for range testMaxAttempts {
+		_, _ = svc.VerifyLogin(ctx, testUser, "wrong password", ip, "agent")
+	}
+	if _, err := svc.VerifyLogin(ctx, testUser, testPassword, ip, "agent"); !errors.Is(err, ErrLockedOut) {
+		t.Fatalf("VerifyLogin while locked = %v, want ErrLockedOut", err)
+	}
+
+	clock.advance(time.Second)
+	if err := cli.UnlockLogin(ctx); err != nil {
+		t.Fatalf("UnlockLogin: %v", err)
+	}
+	if _, err := svc.VerifyLogin(ctx, testUser, testPassword, ip, "agent"); err != nil {
+		t.Fatalf("VerifyLogin after the unlock = %v, want success", err)
+	}
+}
+
+// An unlock is one-shot: failures after it count and lock again, and the old
+// marker must not clear them a second time.
+func TestUnlockLoginDoesNotReapplyAnOldMarker(t *testing.T) {
+	svc, st, clock := seeded(t)
+	cli := newService(t, st, clock)
+	ctx := context.Background()
+	const ip = "203.0.113.8"
+
+	clock.advance(time.Second)
+	if err := cli.UnlockLogin(ctx); err != nil {
+		t.Fatalf("UnlockLogin: %v", err)
+	}
+	for range testMaxAttempts {
+		_, _ = svc.VerifyLogin(ctx, testUser, "wrong password", ip, "agent")
+	}
+	if _, err := svc.VerifyLogin(ctx, testUser, testPassword, ip, "agent"); !errors.Is(err, ErrLockedOut) {
+		t.Fatalf("VerifyLogin after fresh failures = %v, want ErrLockedOut", err)
+	}
+}
+
 func TestHasAdminOnAnEmptyDatabase(t *testing.T) {
 	st := openStore(t)
 	svc := newService(t, st, newFakeClock())

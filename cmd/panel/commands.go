@@ -53,6 +53,14 @@ func commandSet(stdout io.Writer) []*command {
 			},
 		},
 		{
+			name:    "unlock-login",
+			summary: "clear failed-login lockouts on the running panel",
+			usage:   "pbp unlock-login",
+			run: func(ctx context.Context, _ []string) error {
+				return unlockLogin(ctx, stdout, databasePath())
+			},
+		},
+		{
 			name:    "set",
 			summary: "change one setting through the registry validators",
 			usage:   "pbp set <key> <value>",

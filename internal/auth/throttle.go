@@ -125,6 +125,16 @@ func (t *Throttle) Reset(ip string) {
 	delete(t.perIP, ip)
 }
 
+// Clear forgets every counter and lockout, per address and global. It is what an
+// operator-issued unlock (`pbp unlock-login`) ends in: the lockout is a real
+// control, but the one person it can lock out must have a way back in.
+func (t *Throttle) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.perIP = make(map[string]*counter)
+	t.global = counter{}
+}
+
 // LockedUntil returns when ip or the global counter unlocks, and false when
 // neither is locked. The HTTP layer uses it for the Retry-After header.
 func (t *Throttle) LockedUntil(ip string) (time.Time, bool) {

@@ -109,7 +109,7 @@ func TestCommandSetIsWellFormed(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"serve", "install", "upgrade", "info", "reset-password", "set",
+		"serve", "install", "upgrade", "info", "reset-password", "unlock-login", "set",
 		"firewall restore", "firewall disable", "version",
 	} {
 		if !seen[want] {
@@ -264,7 +264,7 @@ func TestRecoveryCommandsAreNotStubs(t *testing.T) {
 	cmds := commandSet(io.Discard)
 	t.Setenv(dataDirEnv, t.TempDir())
 
-	for _, name := range []string{"info", "reset-password", "set"} {
+	for _, name := range []string{"info", "reset-password", "unlock-login", "set"} {
 		c, _ := lookup(strings.Fields(name), cmds)
 		if c == nil {
 			t.Fatalf("command %q not found", name)
