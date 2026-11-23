@@ -11,8 +11,13 @@ permissions:
   contents: write
 
 jobs:
+  # The tagged commit must pass the same checks as main, on amd64 and arm64.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Build and publish
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +53,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -eu
+          # The release body is the annotated tag's message. A lightweight tag
+          # has none, so the release falls back to GitHub's generated notes.
+          git fetch --force --no-tags origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          notes="$RUNNER_TEMP/release-notes.md"
+          git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" > "$notes"
+          if [ -s "$notes" ]; then
+            notes_args=(--notes-file "$notes")
+          else
+            notes_args=(--generate-notes)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             pbp-linux-amd64 pbp-linux-arm64 SHA256SUMS install.sh \
-            --title "$GITHUB_REF_NAME" --generate-notes
+            --title "$GITHUB_REF_NAME" "${notes_args[@]}"

@@ -4,11 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml calls this workflow, so a tag cannot publish a build that fails it.
+  workflow_call:
 
 jobs:
   go:
-    name: Go build, vet, test
-    runs-on: ubuntu-latest
+    name: Go build, vet, test (${{ matrix.runner }})
+    # v1 supports amd64 and arm64, so the tests run natively on both.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -40,8 +47,12 @@ jobs:
         working-directory: web
 
   static:
-    name: Static linux binary
+    name: Static linux binary (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -49,17 +60,18 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Build
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o pbp-linux-amd64 ./cmd/panel
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -trimpath -ldflags "-s -w" -o pbp-linux-${{ matrix.arch }} ./cmd/panel
       - name: Assert the binary is static
         run: |
           set -eu
-          file pbp-linux-amd64
-          if ! file pbp-linux-amd64 | grep -q "statically linked"; then
-            echo "::error::pbp-linux-amd64 is not statically linked"
+          bin=pbp-linux-${{ matrix.arch }}
+          file "$bin"
+          if ! file "$bin" | grep -q "statically linked"; then
+            echo "::error::$bin is not statically linked"
             exit 1
           fi
-          if readelf -l pbp-linux-amd64 | grep -q "INTERP"; then
-            echo "::error::pbp-linux-amd64 has a dynamic loader"
+          if readelf -l "$bin" | grep -q "INTERP"; then
+            echo "::error::$bin has a dynamic loader"
             exit 1
           fi
 
