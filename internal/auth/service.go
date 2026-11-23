@@ -72,6 +72,9 @@ type Service struct {
 	// 64 MiB argon2 derivation. One admin logs in rarely, so serialising
 	// logins costs nothing real.
 	loginMu sync.Mutex
+
+	// unlockSeen is the newest unlock marker already applied; guarded by loginMu.
+	unlockSeen time.Time
 }
 
 // NewService wires the package together. idle, maxAttempts and lockout are
@@ -200,6 +203,9 @@ func (s *Service) VerifyLogin(ctx context.Context, username, password, ip, userA
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 
+	if err := s.applyUnlock(ctx); err != nil {
+		return Session{}, err
+	}
 	retryAt, locked := s.throttle.Check(ip)
 	if locked {
 		return Session{}, lockoutError(retryAt)
@@ -248,6 +254,43 @@ func (s *Service) VerifyLogin(ctx context.Context, username, password, ip, userA
 	}
 	s.throttle.Reset(ip)
 	return session, nil
+}
+
+// unlockKey is the settings-table row `pbp unlock-login` writes. It is not a
+// registered setting, so the Settings page never lists it and `pbp set` cannot
+// touch it.
+const unlockKey = "login.unlocked_at"
+
+// UnlockLogin asks the running daemon to forget every failed-login counter and
+// lockout. The counters live in the daemon's memory, so the CLI, a separate
+// process, leaves a timestamp in the database and the daemon clears them at its
+// next login attempt. Only someone who can open the database, which is root on
+// the host, can write it.
+func (s *Service) UnlockLogin(ctx context.Context) error {
+	return s.st.SaveSetting(ctx, unlockKey, formatTime(s.clock.Now()))
+}
+
+// applyUnlock clears the throttle when UnlockLogin has run since the last time
+// this service looked. The caller holds loginMu.
+func (s *Service) applyUnlock(ctx context.Context) error {
+	raw, ok, err := s.st.LoadSetting(ctx, unlockKey)
+	if err != nil {
+		return fmt.Errorf("auth: read unlock marker: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	at, err := parseTime(raw)
+	if err != nil {
+		// A marker this package did not write cannot be trusted to mean anything;
+		// ignoring it fails closed, the lockout stays.
+		return nil
+	}
+	if at.After(s.unlockSeen) {
+		s.throttle.Clear()
+		s.unlockSeen = at
+	}
+	return nil
 }
 
 // admin reads the single admin row. An empty database means install has not run
