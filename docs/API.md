@@ -17,7 +17,7 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
   wired answers `503 {"error":"unavailable"}`.
 - **Live streams.** Jobs and some logs use Server-Sent Events, resumable with `Last-Event-ID`.
 
-## Routes (156 under `/api`)
+## Routes (162 under `/api`)
 
 ### Session and account
 
@@ -113,6 +113,7 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
 | `GET` | `/api/tls/providers` |
 | `PUT` | `/api/tls/providers/{name}` |
 | `DELETE` | `/api/tls/providers/{name}` |
+| `POST` | `/api/tls/providers/{name}/scan` |
 | `GET` | `/api/panel/cert` |
 | `POST` | `/api/panel/cert/upload` |
 | `POST` | `/api/panel/cert/issue` |
@@ -220,6 +221,13 @@ register both. See [design/m7-api.md](design/m7-api.md).
 | `GET` | `/api/logs` |
 | `GET` | `/api/logs/{id}/tail` |
 | `GET` | `/api/logs/{id}/search` |
+
+### SSH
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/ssh/attempts` |
+| `GET` | `/api/ssh/attempts/abuseipdb` |
 
 ### Docker
 

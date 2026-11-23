@@ -62,6 +62,7 @@ The same binary is the console tool. It works while the daemon runs (SQLite WAL)
 |------|---------|
 | Show port, URL, version, DB path | `pbp info` |
 | Reset the admin password (revokes all sessions) | `pbp reset-password` |
+| Clear failed-login lockouts on the running panel | `pbp unlock-login` |
 | Change one setting through the registry validators | `pbp set <key> <value>` |
 | Restore the saved firewall ruleset at boot | `pbp firewall restore` |
 | Unhook and flush the panel chains from a console (firewall lock-out) | `pbp firewall disable` |

@@ -36,15 +36,28 @@ All smoke scripts source `scripts/smoke/lib.sh`. Every one reads `SMOKE_HOST` an
 |----------|---------|-------------|
 | `SMOKE_HOST` | all | `user@host` of the target VM; the user must be root. |
 | `SMOKE_DRY_RUN` | all | `1` prints the plan and exits without contacting the host. |
-| `SMOKE_SSH_OPTS` | 0, 3, 4, 5, 7, 8 | Extra options passed to `ssh`. |
+| `SMOKE_SSH_OPTS` | all (via `lib.sh`) | Extra options passed to `ssh` and `scp`. |
 | `SMOKE_BINARY` | 0 | Path to the `linux/amd64` binary. Default `dist/panel`. |
 | `SMOKE_NEW_PORT` | 0 | Port the panel is moved to during the run. Default `9443`. |
-| `SMOKE_PASSWORD` | 0, 1, 2, 3 | Admin password. When unset the script runs `pbp reset-password`, which signs everyone out. |
-| `SMOKE_USER` | 1, 2, 3 | Admin username. Default `admin`. |
+| `SMOKE_PASSWORD` | 1–8 | Admin password. When unset the script runs `pbp reset-password`, which signs everyone out. |
+| `SMOKE_USER` | 1–8 | Admin username. Default `admin`. |
 | `SMOKE_REINSTALL` | 5 | `1` re-runs `pbp install` to assert it repairs an existing install. |
+| `SMOKE_SKIP_REBOOT` | 1, 2, 4 | `1` skips the reboot step. Default `0`. |
+| `SMOKE_IPV6` | 4 | `1` also checks `ip6tables`; the VM must have IPv6. Default `0`. |
+| `SMOKE_FW_PORT` | 4 | First throwaway listener port; the second is +1. Default `18080`. |
+| `SMOKE_PHP` | 2, 8 | Version the site runs on. Default `8.3`. |
+| `SMOKE_PHP_A` | 2 | Version the site starts on. Default `8.3`. |
+| `SMOKE_PHP_B` | 2 | Version the site is switched to. Default `8.4`. |
+| `SMOKE_NODE` | 5 | Node.js version to install. Default `22`. |
+| `SMOKE_NODE_PORT` | 5 | Port of the Node app. Default `18091`. |
+| `SMOKE_GO_PORT` | 5 | Port of the Go app. Default `18092`. |
+| `SMOKE_NGINX` | 7 | nginx service name; its unit is `NAME.service`. Default `panel-nginx`. |
+| `SMOKE_CRON_WAIT` | 7 | Seconds to wait for the scheduled run. Default `150`. |
+| `SMOKE_SWAP_TOLERANCE` | 8 | Failed requests allowed per swap, in percent. Default `5`. |
 | `TLS_TEST_DOMAIN` | 6 | An A record pointing at the VM. Required for smoke 6. |
 | `TLS_TEST_WILDCARD_ZONE` | 6 | A Cloudflare zone; the wildcard is `*.smoke6.<zone>`. Required for smoke 6. |
 | `TLS_TEST_WILDCARD_SUB` | 6 | Overrides the `smoke6` wildcard label. |
+| `TLS_TEST_EMAIL` | 6 | ACME account email sent with the issue calls. Optional. |
 | `TLS_ALLOW_PRODUCTION` | 6 | `1` lets smoke 6 run against production Let's Encrypt. Refused otherwise. |
 | `CF_API_TOKEN` | 6 | Cloudflare token (`Zone:DNS:Edit`). Never printed. Required for smoke 6. |
 
@@ -78,7 +91,7 @@ group:
 | TLS | `tls.acme.directory`, `tls.acme.email`, `tls.acme.eab_kid`, `tls.acme.eab_hmac_key`, `tls.renew.days_before`, `tls.panel.auto_ip` |
 | Firewall | `waf.turnstile.site_key`, `waf.turnstile.secret` |
 | Cron | `cron.allow_shell` |
-| Logs | `logs.rotate.max_bytes`, `logs.rotate.keep` |
+| Logs | `logs.rotate.max_bytes`, `logs.rotate.max_age`, `logs.rotate.keep`, `logs.rotate.retain_age` |
 | Runtimes | `runtimes.prebuilt`, `runtimes.url` |
 
 Each key's default, validation and restart flag are defined next to it in `internal/settings/keys.go`.
