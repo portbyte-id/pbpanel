@@ -120,16 +120,6 @@ type UserRow struct {
 // Attempts runs one query. Every read error is ErrUnavailable: a host without a
 // readable sshd journal is a missing feature, not a bug in the request.
 func (m *Monitor) Attempts(ctx context.Context, q Query) (Report, error) {
-	window := q.Range
-	if window <= 0 {
-		window = DefaultRange
-	}
-	if window < MinRange {
-		window = MinRange
-	}
-	if window > MaxRange {
-		window = MaxRange
-	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
@@ -138,23 +128,10 @@ func (m *Monitor) Attempts(ctx context.Context, q Query) (Report, error) {
 		limit = MaxLimit
 	}
 
-	now := m.now().UTC()
-	from := now.Add(-window)
-	raw, err := m.journal.Entries(ctx, m.units, from, now, MaxScan)
+	from, now, all, err := m.window(ctx, q.Range)
 	if err != nil {
 		return Report{}, err
 	}
-
-	var all []Attempt
-	for _, line := range splitRecords(raw) {
-		if a, ok := parseRecord(line); ok {
-			all = append(all, a)
-		}
-	}
-
-	// journalctl writes oldest first. Newest first is what the page shows, and
-	// the summary is computed over the whole window whichever order they are in.
-	sort.SliceStable(all, func(i, j int) bool { return all[i].At.After(all[j].At) })
 
 	rep := Report{
 		From: from, To: now, Outcome: string(q.Outcome), Limit: limit,
@@ -171,6 +148,56 @@ func (m *Monitor) Attempts(ctx context.Context, q Query) (Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+// Failures returns every failed attempt in the window, newest first. Unlike
+// Attempts it is not cut to a page: the AbuseIPDB export needs each address that
+// failed, and the scan cap (MaxScan) is the only bound on it.
+func (m *Monitor) Failures(ctx context.Context, span time.Duration) ([]Attempt, error) {
+	_, _, all, err := m.window(ctx, span)
+	if err != nil {
+		return nil, err
+	}
+	failed := make([]Attempt, 0, len(all))
+	for _, a := range all {
+		if a.Outcome == OutcomeFailed {
+			failed = append(failed, a)
+		}
+	}
+	return failed, nil
+}
+
+// window reads the attempts in the span ending now and returns them newest
+// first, with the bounds it read. A zero span means DefaultRange; the span is
+// clamped to [MinRange, MaxRange].
+func (m *Monitor) window(ctx context.Context, span time.Duration) (from, now time.Time, all []Attempt, err error) {
+	if span <= 0 {
+		span = DefaultRange
+	}
+	if span < MinRange {
+		span = MinRange
+	}
+	if span > MaxRange {
+		span = MaxRange
+	}
+
+	now = m.now().UTC()
+	from = now.Add(-span)
+	raw, err := m.journal.Entries(ctx, m.units, from, now, MaxScan)
+	if err != nil {
+		return from, now, nil, err
+	}
+
+	for _, line := range splitRecords(raw) {
+		if a, ok := parseRecord(line); ok {
+			all = append(all, a)
+		}
+	}
+
+	// journalctl writes oldest first. Newest first is what the page shows, and
+	// the summary is computed over the whole window whichever order they are in.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].At.After(all[j].At) })
+	return from, now, all, nil
 }
 
 // Summary returns the aggregate alone, for a page that wants the summary before

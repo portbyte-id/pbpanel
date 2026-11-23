@@ -10,7 +10,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return {
     ...actual,
-    api: { sshAttempts: vi.fn() },
+    api: {
+      sshAttempts: vi.fn(),
+      sshAbuseIPDBUrl: (range: string) => `/api/ssh/attempts/abuseipdb?range=${range}`,
+    },
   }
 })
 
@@ -63,6 +66,19 @@ function setup(result: SSHAttemptsReport | Error = report()) {
   return client
 }
 
+it("links the AbuseIPDB download for the chosen period", async () => {
+  setup()
+  const link = await screen.findByRole("link", { name: /download for abuseipdb/i })
+  expect(link).toHaveAttribute("href", "/api/ssh/attempts/abuseipdb?range=24h")
+  expect(link).toHaveAttribute("download")
+  const user = userEvent.setup()
+  await user.selectOptions(screen.getByLabelText("Period"), "168h")
+  expect(screen.getByRole("link", { name: /download for abuseipdb/i })).toHaveAttribute(
+    "href",
+    "/api/ssh/attempts/abuseipdb?range=168h",
+  )
+})
+
 /** The rows of the attempts table only: the two summary tables are separate. */
 async function attemptRows() {
   const table = await screen.findByRole("table", { name: /ssh login attempts, newest first/i })
@@ -71,7 +87,7 @@ async function attemptRows() {
 
 describe("SSHPage", () => {
   beforeEach(() => {
-    for (const fn of Object.values(api)) (fn as ReturnType<typeof vi.fn>).mockReset()
+    vi.mocked(api.sshAttempts).mockReset()
   })
 
   it("renders one row per attempt with IP, username, port and time", async () => {
