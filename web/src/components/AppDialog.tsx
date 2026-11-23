@@ -60,11 +60,26 @@ export function formatEnv(env: Record<string, string>): string {
     .join("\n")
 }
 
-/** The major versions installed, newest first: an app asks for "22", not "22.11.0". */
+/**
+ * The Node.js versions an app can pick, newest first. Installed versions are
+ * offered by major ("22", not "22.11.0"). An app's own stored value is kept as it
+ * is, even when it is a full version, so editing never silently changes what it runs.
+ */
 export function nodeMajors(installed: NodeVersion[], current = ""): string[] {
-  const majors = new Set(installed.map((n) => n.version.split(".")[0] ?? ""))
-  if (current !== "") majors.add(current)
-  return [...majors].filter((m) => m !== "").sort((a, b) => Number(b) - Number(a))
+  const versions = new Set(installed.map((n) => n.version.split(".")[0] ?? ""))
+  if (current.trim() !== "") versions.add(current.trim())
+  const parts = (v: string) => v.split(".").map((p) => Number.parseInt(p, 10) || 0)
+  return [...versions]
+    .filter((v) => v !== "")
+    .sort((a, b) => {
+      const pa = parts(a)
+      const pb = parts(b)
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pb[i] ?? 0) - (pa[i] ?? 0)
+        if (d !== 0) return d
+      }
+      return 0
+    })
 }
 
 const textarea =
@@ -105,7 +120,9 @@ export function AppForm({
   const [env, setEnv] = useState(formatEnv(app?.env ?? {}))
   const [user, setUser] = useState(app?.user ?? "www")
   const majors = nodeMajors(nodeVersions, app?.node_version ?? "")
-  const [nodeVersion, setNodeVersion] = useState(app?.node_version ?? majors[0] ?? "")
+  // An app saved without a version (e.g. a Go app switched to Node.js) starts on the
+  // first offered one, so the select never shows a value the form would not send.
+  const [nodeVersion, setNodeVersion] = useState(app?.node_version || (majors[0] ?? ""))
   const [port, setPort] = useState(app?.port == null ? "" : String(app.port))
   const [restart, setRestart] = useState<AppRestart>(app?.restart ?? "always")
   const [autostart, setAutostart] = useState(app?.autostart ?? true)
@@ -195,7 +212,13 @@ export function AppForm({
     }
     if (workdir.trim() !== "") input.workdir = workdir.trim()
     if (user.trim() !== "") input.user = user.trim()
-    if (type === "node") input.node_version = nodeVersion
+    if (type === "node") {
+      if (nodeVersion.trim() === "") {
+        setLocalError({ field: "node_version", text: "Choose the Node.js version this app runs on." })
+        return
+      }
+      input.node_version = nodeVersion.trim()
+    }
     if (app === null && domain.trim() !== "") {
       onSubmit(input, { domain: domain.trim(), aliases: parseAliases(aliases) })
     } else {

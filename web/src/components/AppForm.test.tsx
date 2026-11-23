@@ -41,6 +41,11 @@ describe("nodeMajors", () => {
     expect(nodeMajors([node("22.11.0")], "18")).toEqual(["22", "18"])
     expect(nodeMajors([])).toEqual([])
   })
+
+  it("orders by version numbers and keeps an app's full stored version as it is", () => {
+    expect(nodeMajors([node("20.18.0")], "22.11.0")).toEqual(["22.11.0", "20"])
+    expect(nodeMajors([node("9.1.0"), node("10.0.0")])).toEqual(["10", "9"])
+  })
 })
 
 describe("small helpers", () => {
@@ -253,6 +258,21 @@ describe("AppForm", () => {
         restart: "never", autostart: false, port: 8080,
       }),
     )
+  })
+
+  it("starts a Node app saved without a version on an installed one, and sends that", async () => {
+    const user = userEvent.setup()
+    const app: PanelApp = {
+      id: 2, name: "api", type: "node", command: "server.js", args: [], workdir: "/srv/api",
+      env: {}, user: "www", node_version: "", autostart: true, restart: "always", port: 3000,
+      created_at: "", state: "STOPPED", pid: 0, uptime_seconds: 0, exitstatus: 0, spawn_error: "",
+      proxy_url: "",
+    }
+    const onSubmit = renderForm({ app, nodeVersions: [node("22.11.0"), node("20.18.0")] })
+
+    expect(screen.getByLabelText("Node.js version")).toHaveValue("22")
+    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ type: "node", node_version: "22" }))
   })
 
   describe("the path browsers", () => {
