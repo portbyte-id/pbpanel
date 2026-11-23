@@ -766,6 +766,30 @@ export function useRemoveSiteCert(domain: string) {
   })
 }
 
+/** A certificate for a name that may have no site. The list is refetched when it is stored. */
+export function useUploadTLSCert() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: UploadCertInput & { domain: string }) => api.uploadTLSCert(input),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsCerts }),
+  })
+}
+
+export function useIssueTLSCert() {
+  return useMutation({
+    mutationFn: (input: IssueCertInput & { domain: string }) => api.issueTLSCert(input),
+  })
+}
+
+export function useRemoveTLSCert() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Certificate removed" },
+    mutationFn: (domain: string) => api.removeTLSCert(domain),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsCerts }),
+  })
+}
+
 export function useTLSCerts() {
   return useQuery({ queryKey: queryKeys.tlsCerts, queryFn: () => api.tlsCerts() })
 }

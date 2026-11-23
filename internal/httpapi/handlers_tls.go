@@ -251,6 +251,9 @@ func (s *server) tlsRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/sites/{domain}/tls", hs(s.tlsSiteDelete))
 
 	mux.Handle("GET /api/tls/certs", h(s.tlsCerts))
+	mux.Handle("POST /api/tls/certs/upload", h(s.tlsCertUpload))
+	mux.Handle("POST /api/tls/certs/issue", h(s.tlsCertIssue))
+	mux.Handle("DELETE /api/tls/certs/{domain}", h(s.tlsCertDelete))
 	mux.Handle("GET /api/tls/providers", h(s.tlsProvidersList))
 	mux.Handle("PUT /api/tls/providers/{name}", h(s.tlsProviderPut))
 	mux.Handle("DELETE /api/tls/providers/{name}", h(s.tlsProviderDelete))
@@ -575,7 +578,7 @@ func (s *server) tlsSiteIssue(t *TLSDeps, site sites.Site, w http.ResponseWriter
 		return
 	}
 	note(r, "method", plan.method)
-	s.startIssue(t, w, r, site.Domain, plan, false)
+	s.startIssue(t, w, r, site.Domain, plan, issueSite)
 }
 
 // reuseForSite looks for a valid certificate in the store whose names cover
@@ -655,15 +658,28 @@ func coversAll(names, want []string) bool {
 	return true
 }
 
-// startIssue runs an issuance as a job: order, then Apply. panel marks the
-// panel's own certificate, whose domain is recorded once the order succeeds.
-func (s *server) startIssue(t *TLSDeps, w http.ResponseWriter, r *http.Request, domain string, plan issuePlan, panel bool) {
+// issueTarget says what an issued certificate is for, which decides the job
+// kind, the progress lines and the closing line.
+type issueTarget int
+
+const (
+	// issueSite is a managed site's certificate: nginx is rewritten after the order.
+	issueSite issueTarget = iota
+	// issuePanel is the panel's own certificate: its hostname is recorded, then the listener is reloaded.
+	issuePanel
+	// issueStandalone is a certificate for a name that may have no site: it is stored
+	// for the name, and any site that covers the name can use it.
+	issueStandalone
+)
+
+// startIssue runs an issuance as a job: order, then Apply.
+func (s *server) startIssue(t *TLSDeps, w http.ResponseWriter, r *http.Request, domain string, plan issuePlan, target issueTarget) {
 	if !t.begin(domain) {
 		writeError(w, http.StatusConflict, errConflict, "a certificate for "+domain+" is already being issued or renewed")
 		return
 	}
 	kind := "tls.issue"
-	if panel {
+	if target == issuePanel {
 		kind = "tls.panel.issue"
 	}
 	job, err := s.deps.Jobs.Start(context.WithoutCancel(r.Context()), kind,
@@ -689,13 +705,16 @@ func (s *server) startIssue(t *TLSDeps, w http.ResponseWriter, r *http.Request, 
 				return errors.New(trimTLS(err))
 			}
 			_ = out.Printf("Issued by %s: serial %s, valid until %s", res.Issuer, res.Serial, res.NotAfter.UTC().Format(time.DateOnly))
-			if panel {
+			switch target {
+			case issuePanel:
 				if err := t.setPanelDomain(domain); err != nil {
 					return fmt.Errorf("certificate issued, but recording the panel hostname failed: %w", err)
 				}
 				_ = out.Line("Loading the certificate into the panel listener")
-			} else {
+			case issueSite:
 				_ = out.Line("Updating the site's nginx configuration")
+			case issueStandalone:
+				_ = out.Line("Storing the certificate for " + domain)
 			}
 			if err := t.Apply(ctx, domain); err != nil {
 				text, output := applyFailureText(err)
@@ -709,6 +728,10 @@ func (s *server) startIssue(t *TLSDeps, w http.ResponseWriter, r *http.Request, 
 					_ = out.Printf("Could not record the failed install: %v", merr)
 				}
 				return fmt.Errorf("the certificate was issued but is not live: %s", text)
+			}
+			if target == issueStandalone {
+				_ = out.Line("Done: the certificate for " + domain + " is stored; a site covering that name can use it")
+				return nil
 			}
 			_ = out.Line("Done: the new certificate is live")
 			return nil
@@ -1234,7 +1257,7 @@ func (s *server) panelCertIssue(t *TLSDeps, w http.ResponseWriter, r *http.Reque
 	}
 	note(r, "method", plan.method)
 	noteTarget(r, host)
-	s.startIssue(t, w, r, host, plan, true)
+	s.startIssue(t, w, r, host, plan, issuePanel)
 }
 
 // removeSiteCert deletes the certificate row and files of a site that was just

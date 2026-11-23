@@ -64,5 +64,5 @@ func (s *server) panelCertIPIssue(t *TLSDeps, w http.ResponseWriter, r *http.Req
 	}
 	note(r, "method", tlspkg.SourceHTTP01)
 	noteTarget(r, ip)
-	s.startIssue(t, w, r, ip, issuePlan{method: tlspkg.SourceHTTP01, names: []string{ip}, email: email}, true)
+	s.startIssue(t, w, r, ip, issuePlan{method: tlspkg.SourceHTTP01, names: []string{ip}, email: email}, issuePanel)
 }
