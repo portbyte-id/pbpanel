@@ -106,8 +106,8 @@ func reportable(s string) bool {
 	if ip == nil {
 		return false
 	}
-	return !(ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast())
+	return !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast()
 }
 
 // abuseIPDBComment is the plain-text note on one row. It names the usernames
