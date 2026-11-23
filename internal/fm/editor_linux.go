@@ -129,7 +129,10 @@ func (s *Service) SaveFile(ctx context.Context, raw, content string, base *Base)
 	cur, err := s.readFile(ctx, p)
 	switch {
 	case err == nil:
-		if base != nil && (cur.Hash != base.Hash || cur.MTime != base.MTime || cur.Size != base.Size) {
+		// The content hash decides. The mtime is not compared: it is a nanosecond
+		// int64, and the browser holds it as a float64 that rounds it, so an exact
+		// comparison would conflict on every save.
+		if base != nil && (cur.Hash != base.Hash || cur.Size != base.Size) {
 			return File{}, &ConflictError{Current: cur}
 		}
 		mode = cur.Mode
