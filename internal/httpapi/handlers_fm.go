@@ -36,8 +36,9 @@ type FileManager interface {
 	Chmod(ctx context.Context, clean string, mode uint32, recursive bool, confirm string, progress fm.Progress) (int, error)
 	Chown(ctx context.Context, clean string, uid, gid int, recursive bool, confirm string, progress fm.Progress) (int, error)
 
-	Trash(ctx context.Context, clean, confirm string, progress fm.Progress) (fm.TrashItem, error)
-	PreflightTrash(clean, confirm string) error
+	Trash(ctx context.Context, clean string, progress fm.Progress) (fm.TrashItem, error)
+	DeleteNow(ctx context.Context, clean string, progress fm.Progress) error
+	PreflightTrash(clean string) error
 	TrashNeedsJob(clean string) bool
 	TrashList(ctx context.Context) ([]fm.TrashItem, error)
 	Restore(ctx context.Context, id, newName string, progress fm.Progress) (string, error)
@@ -494,13 +495,14 @@ func (s *server) fmChown(f FileManager, w http.ResponseWriter, r *http.Request) 
 }
 
 type deleteItem struct {
-	Path    string `json:"path"`
-	Confirm string `json:"confirm"`
+	Path string `json:"path"`
 }
 
 func (s *server) fmDelete(f FileManager, w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Items []deleteItem `json:"items"`
+		// Permanent skips the bin: the items are removed now and cannot be restored.
+		Permanent bool `json:"permanent"`
 	}
 	if !s.fmBody(w, r, &body) {
 		return
@@ -509,7 +511,6 @@ func (s *server) fmDelete(f FileManager, w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, errInvalidInput, "nothing to delete")
 		return
 	}
-	items := make([]deleteItem, len(body.Items))
 	paths := make([]string, len(body.Items))
 	needsJob := false
 	for i, it := range body.Items {
@@ -517,23 +518,35 @@ func (s *server) fmDelete(f FileManager, w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return
 		}
-		// Refuse a protected or unconfirmed item before anything moves or a job exists.
-		if err := f.PreflightTrash(c, it.Confirm); err != nil {
+		// Refuse a protected item before anything moves or a job exists.
+		if err := f.PreflightTrash(c); err != nil {
 			s.writeFMError(w, r, fmt.Errorf("%s: %w", c, err))
 			return
 		}
-		items[i] = deleteItem{Path: c, Confirm: it.Confirm}
 		paths[i] = c
 		needsJob = needsJob || f.TrashNeedsJob(c)
 	}
 	note(r, "paths", paths)
+	note(r, "permanent", body.Permanent)
 	noteTarget(r, paths[0])
+	if body.Permanent {
+		// Removing a folder can take a while, so it runs as a job like any copy.
+		s.fmJob(w, r, "fm.delete", func(ctx context.Context, p fm.Progress) error {
+			for _, c := range paths {
+				if err := f.DeleteNow(ctx, c, p); err != nil {
+					return fmt.Errorf("%s: %w", c, err)
+				}
+			}
+			return nil
+		})
+		return
+	}
 	run := func(ctx context.Context, p fm.Progress) ([]fm.TrashItem, error) {
 		var done []fm.TrashItem
-		for _, it := range items {
-			t, err := f.Trash(ctx, it.Path, it.Confirm, p)
+		for _, c := range paths {
+			t, err := f.Trash(ctx, c, p)
 			if err != nil {
-				return done, fmt.Errorf("%s: %w", it.Path, err)
+				return done, fmt.Errorf("%s: %w", c, err)
 			}
 			done = append(done, t)
 		}

@@ -14,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ConfirmDialog, ExtractDialog, NameDialog, type PromptKind } from "@/components/fm/FMDialogs"
 import {
@@ -32,7 +32,7 @@ import { TrashPanel } from "@/components/fm/TrashPanel"
 import { JobsDrawer } from "@/components/JobsDrawer"
 import { Button } from "@/components/ui/button"
 import { Select } from "@/components/ui/select"
-import { api, ApiError, type FMEntry, type FMListing } from "@/lib/api"
+import { api, type FMEntry, type FMListing } from "@/lib/api"
 import { uploadQueue } from "@/lib/uploadQueue"
 import { cn } from "@/lib/utils"
 
@@ -47,7 +47,7 @@ import { cn } from "@/lib/utils"
  */
 export function FilesPage() {
   const [tab, setTab] = useState<"files" | "trash">("files")
-  const [path, setPath] = useState("/")
+  const [path, setPath] = useState(readLastPath)
   const [hidden, setHidden] = useState(false)
   const [sort, setSort] = useState<FMSort>("name")
   const [desc, setDesc] = useState(false)
@@ -58,9 +58,10 @@ export function FilesPage() {
   const [prompt, setPrompt] = useState<PromptKind | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<FMEntry[] | null>(null)
+  const [skipTrash, setSkipTrash] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
-  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [menu, setMenu] = useState<EntryMenuState | null>(null)
   const [extracting, setExtracting] = useState<FMEntry | null>(null)
   const [extractError, setExtractError] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -107,6 +108,7 @@ export function FilesPage() {
       .then((l) => {
         setListing(l)
         setError(null)
+        writeLastPath(l.path)
       })
       .catch((err) => {
         setError(fmErrorText(err, "The folder could not be listed."))
@@ -129,47 +131,90 @@ export function FilesPage() {
     }
   }
 
+  const askDelete = (entries: FMEntry[]) => {
+    setDeleteError(null)
+    setSkipTrash(false)
+    setDeleting(entries)
+  }
+
   const deleteSelected = async () => {
     if (deleting === null) return
     setDeleteBusy(true)
     setDeleteError(null)
     try {
-      // A folder needs its name typed; files need none. The server preflights
-      // every item before anything moves, so one bad item fails the whole call.
+      // The server preflights every item before anything moves, so one bad item
+      // fails the whole call. Skipping the bin runs as a job and reports there.
       const res = await api.fmDelete(
-        deleting.map((e) => ({
-          path: e.path,
-          confirm: e.kind === "dir" ? e.name : undefined,
-        })),
+        deleting.map((e) => ({ path: e.path })),
+        { permanent: skipTrash },
       )
       if ("job" in res) setJobId(res.job.id)
       setDeleting(null)
       selection.clear()
       reload()
     } catch (err) {
-      if (err instanceof ApiError && err.code === "confirmation_required") {
-        setDeleteError(err.detail)
-      } else {
-        setDeleteError(fmErrorText(err, "The delete failed."))
-      }
+      setDeleteError(fmErrorText(err, "The delete failed."))
     } finally {
       setDeleteBusy(false)
     }
   }
 
-  const archiveSelected = async () => {
-    if (listing === null || selection.entries.length === 0) return
+  /** Archives the given rows into one .tar.gz beside the folder being viewed. */
+  const archiveEntries = async (items: FMEntry[]) => {
+    if (listing === null || items.length === 0) return
+    const base = items.length === 1 ? items[0].name : "archive"
     try {
       const job = await api.fmArchive({
         dir: listing.path,
-        names: selection.entries.map((e) => e.name),
-        dest: `${listing.path === "/" ? "" : listing.path}/archive.tar.gz`,
+        names: items.map((e) => e.name),
+        dest: `${listing.path === "/" ? "" : listing.path}/${base}.tar.gz`,
         format: "tar.gz",
       })
       setJobId(job.id)
       selection.clear()
     } catch (err) {
       setError(fmErrorText(err, "The archive could not be started."))
+    }
+  }
+
+  /**
+   * Runs one context-menu action on a row. A row that is part of the selection
+   * acts on the whole selection; any other row acts on itself alone.
+   */
+  const runMenu = (key: EntryAction, entry: FMEntry) => {
+    setMenu(null)
+    const inSelection = selection.entries.some((e) => e.path === entry.path)
+    const targets = inSelection ? selection.entries : [entry]
+    switch (key) {
+      case "open":
+        open(entry)
+        break
+      case "edit":
+        setEditing(entry.path)
+        break
+      case "rename":
+        selection.only(entry)
+        setPrompt("rename")
+        break
+      case "archive":
+        void archiveEntries(targets)
+        break
+      case "extract":
+        setExtractError(null)
+        setExtracting(entry)
+        break
+      case "download":
+        window.open(api.fmDownloadUrl(entry.path), "_blank", "noopener")
+        break
+      case "download-folder":
+        window.open(api.fmDownloadUrl(entry.path, { format: "tar.gz" }), "_blank", "noopener")
+        break
+      case "select":
+        selection.toggle(entry, false)
+        break
+      case "delete":
+        askDelete(targets)
+        break
     }
   }
 
@@ -307,7 +352,7 @@ export function FilesPage() {
               size="sm"
               variant="outline"
               disabled={selection.entries.length === 0}
-              onClick={() => void archiveSelected()}
+              onClick={() => void archiveEntries(selection.entries)}
             >
               <Archive aria-hidden="true" />
               Archive selected
@@ -322,10 +367,7 @@ export function FilesPage() {
               size="sm"
               variant="destructive"
               disabled={selection.entries.length === 0}
-              onClick={() => {
-                setDeleteError(null)
-                setDeleting(selection.entries)
-              }}
+              onClick={() => askDelete(selection.entries)}
             >
               <Trash2 aria-hidden="true" />
               Delete
@@ -410,26 +452,8 @@ export function FilesPage() {
                         selected={selection.entries.some((e) => e.path === entry.path)}
                         onCheck={(shift) => selection.toggle(entry, shift)}
                         onOpen={() => open(entry)}
-                        onMenu={() =>
-                          setMenuFor((cur) => (cur === entry.path ? null : entry.path))
-                        }
-                        menuOpen={menuFor === entry.path}
-                        onAction={(action) => {
-                          setMenuFor(null)
-                          if (action === "edit") setEditing(entry.path)
-                          else if (action === "rename") setPrompt("rename")
-                          else if (action === "extract") {
-                            setExtractError(null)
-                            setExtracting(entry)
-                          } else if (action === "download")
-                            window.open(api.fmDownloadUrl(entry.path), "_blank", "noopener")
-                          else if (action === "download-folder")
-                            window.open(
-                              api.fmDownloadUrl(entry.path, { format: "tar.gz" }),
-                              "_blank",
-                              "noopener",
-                            )
-                        }}
+                        onMenu={(x, y) => setMenu({ entry, x, y })}
+                        menuOpen={menu?.entry.path === entry.path}
                       />
                     ))
                   )}
@@ -466,6 +490,20 @@ export function FilesPage() {
         />
       )}
 
+      {menu !== null && (
+        <EntryMenu
+          state={menu}
+          selected={selection.entries.some((e) => e.path === menu.entry.path)}
+          count={
+            selection.entries.some((e) => e.path === menu.entry.path)
+              ? selection.entries.length
+              : 1
+          }
+          onAction={(key) => runMenu(key, menu.entry)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
       {editing !== null && (
         <EditorDialog path={editing} onClose={() => setEditing(null)} onSaved={reload} />
       )}
@@ -477,16 +515,26 @@ export function FilesPage() {
               ? `Delete ${deleting[0].name}?`
               : `Delete ${deleting.length} items?`
           }
-          description="Items move to the trash and stay there for 30 days. A folder asks for its name typed."
-          confirmText={
-            deleting.length === 1 && deleting[0].kind === "dir" ? deleting[0].name : undefined
+          description={
+            skipTrash
+              ? "These are deleted now. Skipping the trash cannot be undone from the panel."
+              : "Items move to the trash and stay there for 30 days."
           }
-          actionLabel="Move to trash"
+          actionLabel={skipTrash ? "Delete permanently" : "Move to trash"}
           busy={deleteBusy}
           error={deleteError}
           onConfirm={() => void deleteSelected()}
           onOpenChange={(open) => !open && setDeleting(null)}
-        />
+        >
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={skipTrash}
+              onChange={(e) => setSkipTrash(e.target.checked)}
+            />
+            Skip the trash and delete permanently
+          </label>
+        </ConfirmDialog>
       )}
 
       {extracting !== null && (
@@ -511,12 +559,159 @@ export function FilesPage() {
   )
 }
 
-/** The row actions a context menu offers, per kind. */
-export type RowAction = "edit" | "rename" | "extract" | "download" | "download-folder"
+/** The actions a row's context menu can run. */
+export type EntryAction =
+  | "open"
+  | "edit"
+  | "rename"
+  | "archive"
+  | "extract"
+  | "download"
+  | "download-folder"
+  | "select"
+  | "delete"
+
+/** An open context menu: the row it is for, and the point it opened at. */
+export interface EntryMenuState {
+  entry: FMEntry
+  x: number
+  y: number
+}
 
 /** A file name that names an archive the server can extract. */
 export function isArchiveName(name: string): boolean {
   return /\.(zip|tar|tar\.gz|tgz)$/i.test(name)
+}
+
+const LAST_PATH_KEY = "panel.files.lastPath"
+
+/** The folder the page showed last, kept in this browser so a visit returns to it. */
+function readLastPath(): string {
+  try {
+    const raw = window.localStorage.getItem(LAST_PATH_KEY)
+    if (raw?.startsWith("/")) return raw
+  } catch {
+    // Blocked storage: start at the root.
+  }
+  return "/"
+}
+
+function writeLastPath(path: string) {
+  try {
+    window.localStorage.setItem(LAST_PATH_KEY, path)
+  } catch {
+    // Not kept; the page still works for this visit.
+  }
+}
+
+function isDirLike(entry: FMEntry): boolean {
+  return entry.kind === "dir" || (entry.kind === "symlink" && entry.target_kind === "dir")
+}
+
+interface MenuItem {
+  key: EntryAction
+  label: string
+  /** The destructive last item; a rule is drawn above it. */
+  danger?: boolean
+}
+
+/** The menu for one row: what applies to its kind, labelled with what it would touch. */
+function menuItems(entry: FMEntry, selected: boolean, count: number): MenuItem[] {
+  const dirLike = isDirLike(entry)
+  const items: MenuItem[] = []
+  if (dirLike) items.push({ key: "open", label: "Open" })
+  if (entry.kind === "file") items.push({ key: "edit", label: "Edit" })
+  items.push({ key: "rename", label: "Rename" })
+  items.push({ key: "archive", label: count > 1 ? `Archive ${count} items` : "Archive" })
+  if (entry.kind === "file" && isArchiveName(entry.name)) {
+    items.push({ key: "extract", label: "Extract…" })
+  }
+  items.push(
+    dirLike
+      ? { key: "download-folder", label: "Download as .tar.gz" }
+      : { key: "download", label: "Download" },
+  )
+  items.push({ key: "select", label: selected ? "Deselect" : "Select" })
+  items.push({ key: "delete", label: count > 1 ? `Delete ${count} items…` : "Delete…", danger: true })
+  return items
+}
+
+/**
+ * The context menu for a row, opened by a right-click or the row's ⋯ button. It is
+ * fixed to the viewport so the scrolling listing cannot clip it; a scroll, a
+ * resize, a click outside, or Escape closes it.
+ */
+function EntryMenu({
+  state,
+  selected,
+  count,
+  onAction,
+  onClose,
+}: {
+  state: EntryMenuState
+  selected: boolean
+  count: number
+  onAction: (key: EntryAction) => void
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const items = menuItems(state.entry, selected, count)
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    window.addEventListener("mousedown", onPointerDown)
+    window.addEventListener("keydown", onKey)
+    window.addEventListener("scroll", onClose, true)
+    window.addEventListener("resize", onClose)
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown)
+      window.removeEventListener("keydown", onKey)
+      window.removeEventListener("scroll", onClose, true)
+      window.removeEventListener("resize", onClose)
+    }
+  }, [onClose])
+
+  // Focus the first action once, so the keyboard can reach the menu.
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>("button")?.focus()
+  }, [])
+
+  // Keep the menu on screen: flip above the point when it would run off the bottom.
+  const height = items.length * 32 + 12
+  const left = Math.max(8, Math.min(state.x, window.innerWidth - 200))
+  const top = state.y + height > window.innerHeight ? Math.max(8, state.y - height) : state.y
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`Actions for ${state.entry.name}`}
+      style={{ left, top }}
+      className="bg-popover text-popover-foreground fixed z-50 w-48 rounded-md border p-1 shadow-lg"
+    >
+      {items.map((item) => (
+        <div key={item.key}>
+          {item.danger && <div role="separator" className="bg-border my-1 h-px" />}
+          <button
+            type="button"
+            role="menuitem"
+            className={cn(
+              "hover:bg-accent w-full rounded-sm px-2 py-1.5 text-left text-sm",
+              item.danger && "text-destructive",
+            )}
+            onClick={() => onAction(item.key)}
+          >
+            {item.label}
+          </button>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function FileRow({
@@ -526,58 +721,24 @@ function FileRow({
   onOpen,
   onMenu,
   menuOpen,
-  onAction,
 }: {
   entry: FMEntry
   selected: boolean
   onCheck: (shift: boolean) => void
   onOpen: () => void
-  onMenu: () => void
+  onMenu: (x: number, y: number) => void
   menuOpen: boolean
-  onAction: (action: RowAction) => void
 }) {
-  const dirLike = entry.kind === "dir" || (entry.kind === "symlink" && entry.target_kind === "dir")
-  const actions: { key: RowAction; label: string }[] = [
-    ...(entry.kind === "file" ? [{ key: "edit" as const, label: "Edit" }] : []),
-    { key: "rename" as const, label: "Rename" },
-    ...(entry.kind === "file" && isArchiveName(entry.name)
-      ? [{ key: "extract" as const, label: "Extract…" }]
-      : []),
-    ...(dirLike
-      ? [{ key: "download-folder" as const, label: "Download as .tar.gz" }]
-      : [{ key: "download" as const, label: "Download" }]),
-  ]
-
-  const menuButton = useRef<HTMLButtonElement>(null)
-
-  // Close the menu when anything scrolls, since a fixed menu would stay put
-  // while its row moves away.
-  useEffect(() => {
-    if (!menuOpen) return
-    const close = () => onMenu()
-    window.addEventListener("scroll", close, true)
-    window.addEventListener("resize", close)
-    return () => {
-      window.removeEventListener("scroll", close, true)
-      window.removeEventListener("resize", close)
-    }
-  }, [menuOpen, onMenu])
-
-  let menuStyle: CSSProperties | undefined
-  if (menuOpen && menuButton.current) {
-    const r = menuButton.current.getBoundingClientRect()
-    const menuHeight = actions.length * 32 + 8
-    const flip = r.bottom + menuHeight > window.innerHeight
-    menuStyle = {
-      right: Math.max(8, window.innerWidth - r.right),
-      ...(flip ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
-    }
-  }
+  const dirLike = isDirLike(entry)
 
   return (
     <tr
       className={cn("hover:bg-accent/40 transition-colors", selected && "bg-accent/50")}
       data-path={entry.path}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onMenu(e.clientX, e.clientY)
+      }}
     >
       <td className="px-3 py-1.5">
         <input
@@ -621,38 +782,18 @@ function FileRow({
       <td className="px-3 py-1.5 text-right">
         <div className="flex justify-end">
           <Button
-            ref={menuButton}
             size="icon-sm"
             variant="ghost"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-label={`Actions for ${entry.name}`}
-            onClick={onMenu}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              onMenu(r.right, r.bottom + 4)
+            }}
           >
             <MoreHorizontal aria-hidden="true" />
           </Button>
-          {menuOpen && (
-            // Fixed, not absolute: the listing scrolls and clips, and a menu
-            // under the last row must not be cut off by it.
-            <div
-              role="menu"
-              aria-label={`Actions for ${entry.name}`}
-              style={menuStyle}
-              className="bg-popover text-popover-foreground fixed z-50 w-44 rounded-md border p-1 shadow-lg"
-            >
-              {actions.map((a) => (
-                <button
-                  key={a.key}
-                  type="button"
-                  role="menuitem"
-                  className="hover:bg-accent w-full rounded-sm px-2 py-1.5 text-left text-sm"
-                  onClick={() => onAction(a.key)}
-                >
-                  {a.label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </td>
     </tr>

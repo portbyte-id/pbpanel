@@ -47,8 +47,6 @@ interface Tab {
   file: Opened | null
   loadError: string | null
   draft: string | null
-  /** The disk copy the server reported when a save was refused with edit_conflict. */
-  conflict: FMFile | null
   saveError: string | null
 }
 
@@ -133,12 +131,12 @@ function joinPath(dir: string, name: string): string {
 }
 
 function newTab(path: string): Tab {
-  return { path, name: baseName(path), file: null, loadError: null, draft: null, conflict: null, saveError: null }
+  return { path, name: baseName(path), file: null, loadError: null, draft: null, saveError: null }
 }
 
-/** What the draft is compared with: the disk copy from a refused save, or the file as opened. */
+/** What the draft is compared with: the file as it was last read or saved. */
 function baselineOf(tab: Tab): string {
-  return toLF((tab.conflict ?? tab.file)?.content ?? "")
+  return toLF(tab.file?.content ?? "")
 }
 
 function isDirty(tab: Tab): boolean {
@@ -157,10 +155,10 @@ function dirsFirst(a: FMEntry, b: FMEntry): number {
  * The text-file editor as a workspace: a directory list, a tab per open file,
  * CodeMirror with search and go-to-line, and a status line.
  *
- * A save carries the `base` the file was opened with; the server answers 409
- * `edit_conflict` when the file changed on disk since then. The draft is kept,
- * the disk copy is shown beside it, and the operator chooses: overwrite the disk
- * copy, or load it and drop the draft. Nothing is picked silently.
+ * Saving writes the draft to disk. A save carries the `base` the file was opened
+ * with; if the file changed on disk since, the server answers 409 `edit_conflict`
+ * with the disk copy, and the save is retried once against that copy, so the
+ * draft replaces it without a prompt.
  */
 export function EditorDialog({
   path,
@@ -243,9 +241,7 @@ export function EditorDialog({
   const load = (p: string) =>
     api
       .fmOpenFile(p)
-      .then((f) =>
-        patch(p, { file: f, loadError: null, draft: null, conflict: null, saveError: null }),
-      )
+      .then((f) => patch(p, { file: f, loadError: null, draft: null, saveError: null }))
       .catch((err: unknown) =>
         patch(p, { loadError: fmErrorText(err, "The file could not be opened.") }),
       )
@@ -300,41 +296,45 @@ export function EditorDialog({
     }
   }
 
-  /** Saves one tab. Returns whether it reached disk. */
-  const persist = async (tab: Tab, overwrite: boolean): Promise<boolean> => {
+  /**
+   * Saves one tab to disk. Returns whether it reached disk. A file changed since
+   * it was opened is not a question: the disk copy the server reports becomes the
+   * base and the draft is written over it, once.
+   */
+  const persist = async (tab: Tab): Promise<boolean> => {
     if (!tab.file || tab.draft === null) return false
-    const from = overwrite && tab.conflict ? tab.conflict : tab.file
-    const base: FMBase = { size: from.size, mtime: from.mtime, hash: from.hash }
-    try {
-      const saved = await api.fmSaveFile(
-        tab.path,
-        toDisk(tab.draft, isCRLF(tab.file.content)),
-        base,
-      )
-      patch(tab.path, {
-        file: { ...saved, language: tab.file.language },
-        draft: null,
-        conflict: null,
-        saveError: null,
-      })
-      onSaved()
-      return true
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "edit_conflict" && err.conflictCurrent) {
-        patch(tab.path, { conflict: err.conflictCurrent, saveError: null })
-      } else {
+    const content = toDisk(tab.draft, isCRLF(tab.file.content))
+    let from: FMFile = tab.file
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const base: FMBase = { size: from.size, mtime: from.mtime, hash: from.hash }
+      try {
+        const saved = await api.fmSaveFile(tab.path, content, base)
+        patch(tab.path, {
+          file: { ...saved, language: tab.file.language },
+          draft: null,
+          saveError: null,
+        })
+        onSaved()
+        return true
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "edit_conflict" && err.conflictCurrent) {
+          from = err.conflictCurrent
+          continue
+        }
         patch(tab.path, { saveError: fmErrorText(err, "The file could not be saved.") })
+        return false
       }
-      return false
     }
+    patch(tab.path, { saveError: "The file changed again while it was being saved. Save once more." })
+    return false
   }
 
-  const saveTab = async (p: string, overwrite = false) => {
+  const saveTab = async (p: string) => {
     const tab = tabs.find((t) => t.path === p)
     if (!tab) return
     setBusy(true)
     setNotice(null)
-    const ok = await persist(tab, overwrite)
+    const ok = await persist(tab)
     setBusy(false)
     if (ok) setNotice(`Saved ${tab.name}.`)
   }
@@ -344,21 +344,10 @@ export function EditorDialog({
     setNotice(null)
     let saved = 0
     for (const tab of dirty) {
-      if (await persist(tab, false)) saved++
+      if (await persist(tab)) saved++
     }
     setBusy(false)
     setNotice(saved === 0 ? "Nothing was saved." : `Saved ${saved} file${saved === 1 ? "" : "s"}.`)
-  }
-
-  const useDiskCopy = (p: string) => {
-    const tab = tabs.find((t) => t.path === p)
-    if (!tab?.conflict || !tab.file) return
-    patch(p, {
-      file: { ...tab.conflict, language: tab.file.language },
-      draft: null,
-      conflict: null,
-      saveError: null,
-    })
   }
 
   const requestClose = () => {
@@ -417,7 +406,7 @@ export function EditorDialog({
         <DialogHeader className="border-border gap-0.5 border-b px-4 py-3">
           <DialogTitle>Online Text Editor</DialogTitle>
           <DialogDescription>
-            Saves check the file on disk first. Nothing is overwritten without your confirmation.
+            Save writes the draft to disk, replacing the file's contents.
           </DialogDescription>
         </DialogHeader>
 
@@ -428,7 +417,7 @@ export function EditorDialog({
         >
           <Button
             size="sm"
-            disabled={!current?.file || !isDirty(current) || busy || current.conflict !== null}
+            disabled={!current?.file || !isDirty(current) || busy}
             onClick={() => current && void saveTab(current.path)}
           >
             <Save aria-hidden />
@@ -698,22 +687,6 @@ export function EditorDialog({
               })}
             </div>
 
-            {current?.conflict && (
-              <div role="alert" className="border-warning/50 bg-warning/10 flex flex-col gap-2 border-b px-3 py-2 text-sm">
-                <p>
-                  The file changed on disk since it was opened. Your draft is on the left; the version
-                  now on disk is on the right.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => useDiskCopy(current.path)}>
-                    Load disk copy
-                  </Button>
-                  <Button size="sm" disabled={busy} onClick={() => void saveTab(current.path, true)}>
-                    {busy ? "Saving…" : "Overwrite disk copy with my draft"}
-                  </Button>
-                </div>
-              </div>
-            )}
             {current?.saveError && (
               <p role="alert" className="text-destructive border-border border-b px-3 py-2 text-sm">
                 {current.saveError}
@@ -725,7 +698,7 @@ export function EditorDialog({
               </p>
             )}
 
-            <div className={`flex min-h-0 flex-1 gap-2 p-2 ${current?.conflict ? "flex-col md:flex-row" : "flex-col"}`}>
+            <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
               {tabs.map((t) =>
                 t.file ? (
                   <TextEditor
@@ -749,22 +722,6 @@ export function EditorDialog({
                     }}
                   />
                 ) : null,
-              )}
-              {current?.file && current.conflict && (
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-                  <p className="text-muted-foreground text-xs">On disk now (read only)</p>
-                  <TextEditor
-                    key={`disk:${current.path}`}
-                    label="The file as it is on disk now"
-                    value={toLF(current.conflict.content)}
-                    language={current.file.language}
-                    fontSize={prefs.fontSize}
-                    tabSize={prefs.tabSize}
-                    wrap={prefs.wrap}
-                    palette={prefs.palette}
-                    readOnly
-                  />
-                </div>
               )}
               {current && !current.file && !current.loadError && (
                 <SkeletonRows label="Loading the file…" />
