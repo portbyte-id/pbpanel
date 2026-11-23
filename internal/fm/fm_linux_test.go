@@ -490,6 +490,20 @@ func TestEditor(t *testing.T) {
 		t.Error("conflicting save modified the file")
 	}
 
+	// The browser holds mtime as a float64, which rounds the nanoseconds away. A
+	// base built from that rounded value must still save: the content hash decides.
+	cur, err := e.svc.OpenFile(bg, full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounded := &Base{Size: cur.Size, MTime: int64(float64(cur.MTime)), Hash: cur.Hash}
+	if _, err := e.svc.SaveFile(bg, full, "after\n", rounded); err != nil {
+		t.Fatalf("save with a rounded mtime = %v", err)
+	}
+	if e.read(full) != "after\n" {
+		t.Error("save with a rounded mtime did not write")
+	}
+
 	// Binary and oversized files are refused.
 	bin := e.p("bin")
 	_ = os.WriteFile(bin, []byte("ab\x00cd"), 0o644)
