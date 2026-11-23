@@ -996,6 +996,15 @@ export class ApiClient {
     return this.request<SSHAttemptsReport>(`/api/ssh/attempts${queryString({ ...query })}`)
   }
 
+  /**
+   * The failed attempts of a window as an AbuseIPDB bulk-report CSV, one row per
+   * address. A link, not a request: the browser saves it as an attachment.
+   */
+  sshAbuseIPDBUrl(range: string): string {
+    const q = new URLSearchParams({ range })
+    return `${this.#baseUrl}/api/ssh/attempts/abuseipdb?${q.toString()}`
+  }
+
   /** GET /api/sites/{domain}/tls. Null while the site has no certificate. */
   async siteTLS(domain: string): Promise<CertView | null> {
     const res = await this.request<{ cert: CertView | null }>(tlsPath(domain))

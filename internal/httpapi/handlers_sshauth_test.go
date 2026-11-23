@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,11 +17,20 @@ type fakeSSHAuth struct {
 	report sshauth.Report
 	err    error
 	avail  error
+
+	failures []sshauth.Attempt
+	failErr  error
+	gotSpan  time.Duration
 }
 
 func (f *fakeSSHAuth) Attempts(_ context.Context, q sshauth.Query) (sshauth.Report, error) {
 	f.got = q
 	return f.report, f.err
+}
+
+func (f *fakeSSHAuth) Failures(_ context.Context, span time.Duration) ([]sshauth.Attempt, error) {
+	f.gotSpan = span
+	return f.failures, f.failErr
 }
 
 func (f *fakeSSHAuth) Available(context.Context) error { return f.avail }
@@ -67,6 +77,45 @@ func TestSSHAuthRequiresAuthAndAnswers503WithoutAMonitor(t *testing.T) {
 	s := h.login()
 	if rec := h.do(http.MethodGet, "/api/ssh/attempts", s.cookie, s.csrf, nil); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("without a monitor: %d", rec.Code)
+	}
+}
+
+func TestSSHAbuseIPDBDownloadIsACSVAttachment(t *testing.T) {
+	h, fake, s := newSSHHarness(t)
+	fake.failures = []sshauth.Attempt{
+		{At: time.Date(2026, 11, 21, 11, 58, 0, 0, time.UTC), IP: "203.0.113.7", User: "root",
+			Port: 4001, Outcome: sshauth.OutcomeFailed, Method: sshauth.MethodPassword},
+		{At: time.Date(2026, 11, 21, 11, 59, 0, 0, time.UTC), IP: "203.0.113.7", User: "admin",
+			Port: 4002, Outcome: sshauth.OutcomeFailed, Method: sshauth.MethodPassword},
+	}
+	rec := h.do(http.MethodGet, "/api/ssh/attempts/abuseipdb?range=168h", s.cookie, s.csrf, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if fake.gotSpan != 168*time.Hour {
+		t.Errorf("span = %v, want 168h", fake.gotSpan)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/csv") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	cd := rec.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, "attachment") || !strings.Contains(cd, "ssh-failed-logins-abuseipdb-") {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	body := rec.Body.String()
+	if !strings.HasPrefix(body, "IP,Categories,ReportDate,Comment\n") || !strings.Contains(body, "203.0.113.7,\"18,22\",2026-11-21T11:59:00Z,") {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestSSHAbuseIPDBDownloadRefusesBadRangeAndAnUnreadableJournal(t *testing.T) {
+	h, fake, s := newSSHHarness(t)
+	if rec := h.do(http.MethodGet, "/api/ssh/attempts/abuseipdb?range=soon", s.cookie, s.csrf, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad range: %d", rec.Code)
+	}
+	fake.failErr = sshauth.ErrUnavailable
+	if rec := h.do(http.MethodGet, "/api/ssh/attempts/abuseipdb", s.cookie, s.csrf, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("unreadable journal: %d", rec.Code)
 	}
 }
 

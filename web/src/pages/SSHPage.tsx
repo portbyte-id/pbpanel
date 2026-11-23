@@ -1,4 +1,4 @@
-import { Pause, Play, ShieldAlert } from "lucide-react"
+import { Download, Pause, Play, ShieldAlert } from "lucide-react"
 import { useId, useMemo, useState } from "react"
 
 import { ErrorState } from "@/components/ErrorState"
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
-import { ApiError, type SSHAttempt, type SSHSummary } from "@/lib/api"
+import { api, ApiError, type SSHAttempt, type SSHSummary } from "@/lib/api"
 import { formatWhen } from "@/lib/cron"
 import { useDebounced, useSSHAttempts } from "@/lib/queries"
 
@@ -131,6 +131,14 @@ export function SSHPage() {
           {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
           {paused ? "Resume" : "Pause"}
         </Button>
+        {!unavailable && (
+          <Button asChild variant="outline">
+            <a href={api.sshAbuseIPDBUrl(range)} download>
+              <Download aria-hidden="true" />
+              Download for AbuseIPDB
+            </a>
+          </Button>
+        )}
       </div>
 
       {query.isPending ? (

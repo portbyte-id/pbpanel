@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 // substitute a fake.
 type SSHAuthMonitor interface {
 	Attempts(ctx context.Context, q sshauth.Query) (sshauth.Report, error)
+	Failures(ctx context.Context, span time.Duration) ([]sshauth.Attempt, error)
 }
 
 // sshMaxLimit bounds the limit parameter. A request above it is refused rather
@@ -47,6 +49,40 @@ func (s *server) sshAuthRoutes(mux *http.ServeMux) {
 		}))
 	}
 	mux.Handle("GET /api/ssh/attempts", h(s.sshAttempts))
+	mux.Handle("GET /api/ssh/attempts/abuseipdb", h(s.sshAbuseIPDB))
+}
+
+// sshAbuseIPDB streams the failed attempts of the window as an AbuseIPDB
+// bulk-report CSV. It reads only `range`: the export is always the failures, and
+// it covers the whole window rather than a page of it.
+func (s *server) sshAbuseIPDB(m SSHAuthMonitor, w http.ResponseWriter, r *http.Request) {
+	q, ok := parseSSHQuery(w, r)
+	if !ok {
+		return
+	}
+	failed, err := m.Failures(r.Context(), q.Range)
+	if err != nil {
+		if errors.Is(err, sshauth.ErrUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, errUnavailable,
+				"the sshd journal cannot be read on this host")
+			return
+		}
+		s.writeInternal(w, r, err)
+		return
+	}
+	// Built in memory first: a failure while writing must not leave a 200 and a
+	// half file behind an error the browser would save as the download.
+	var buf bytes.Buffer
+	if err := sshauth.WriteAbuseIPDB(&buf, failed); err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	name := "ssh-failed-logins-abuseipdb-" + time.Now().UTC().Format("20060102") + ".csv"
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", contentDisposition(name))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *server) sshAttempts(m SSHAuthMonitor, w http.ResponseWriter, r *http.Request) {
