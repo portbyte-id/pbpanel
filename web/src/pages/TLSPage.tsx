@@ -14,6 +14,7 @@ import { describeError } from "@/lib/errors"
 import {
   useDeleteTLSProvider,
   useSaveTLSProvider,
+  useScanTLSProvider,
   useTLSCerts,
   useTLSProviders,
 } from "@/lib/queries"
@@ -144,9 +145,12 @@ function ProvidersCard() {
   const list = useTLSProviders()
   const save = useSaveTLSProvider()
   const remove = useDeleteTLSProvider()
+  const scan = useScanTLSProvider()
   const [replacing, setReplacing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
+  // True once a scan job was started, by linking or by the button.
+  const [scanStarted, setScanStarted] = useState(false)
 
   return (
     <Card>
@@ -173,7 +177,16 @@ function ProvidersCard() {
                 setSaved(null)
               }}
               onDelete={setDeleting}
+              scanning={scan.isPending ? (scan.variables ?? null) : null}
+              onScan={(name) =>
+                scan.mutate(name, { onSuccess: () => setScanStarted(true) })
+              }
             />
+            {scan.error && (
+              <p role="alert" className="text-destructive text-sm">
+                {errorText(scan.error, "The domains could not be scanned.")}
+              </p>
+            )}
             <div className="flex flex-col gap-3">
               <h3 className="text-sm font-semibold">
                 {replacing ? `Replace the token for ${replacing}` : "Add a provider"}
@@ -187,9 +200,10 @@ function ProvidersCard() {
                 onCancelReplace={() => setReplacing(null)}
                 onSubmit={(input) =>
                   save.mutate(input, {
-                    onSuccess: () => {
+                    onSuccess: (res) => {
                       setSaved(input.name)
                       setReplacing(null)
+                      setScanStarted(Boolean(res?.job_id))
                     },
                   })
                 }
@@ -198,6 +212,16 @@ function ProvidersCard() {
                 {saved ? `Saved ${saved}. The token is stored and cannot be viewed again.` : ""}
               </p>
             </div>
+            {scanStarted && (
+              <p role="status" className="text-sm">
+                Scanning the domains in this account and ordering a wildcard certificate for each.
+                Follow it on the{" "}
+                <Link to="/jobs" className="underline underline-offset-2">
+                  Jobs page
+                </Link>
+                ; finished certificates appear under Site certificates.
+              </p>
+            )}
           </>
         )}
       </CardContent>
@@ -232,10 +256,15 @@ export function ProviderList({
   providers,
   onReplace,
   onDelete,
+  onScan,
+  scanning,
 }: {
   providers: DNSProvider[]
   onReplace: (name: string) => void
   onDelete: (name: string) => void
+  /** Scan the provider's domains and issue a wildcard certificate for each. */
+  onScan?: (name: string) => void
+  scanning?: string | null
 }) {
   if (providers.length === 0) {
     return <p className="text-sm">No DNS provider is saved. DNS-01 needs one.</p>
@@ -251,6 +280,16 @@ export function ProviderList({
             </span>
           </div>
           <div className="flex gap-2">
+            {onScan && p.kind === "cloudflare" && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={scanning === p.name}
+                onClick={() => onScan(p.name)}
+              >
+                {scanning === p.name ? "Scanning…" : "Scan domains"}
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => onReplace(p.name)}>
               Replace token
             </Button>

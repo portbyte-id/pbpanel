@@ -784,6 +784,15 @@ export function useSaveTLSProvider() {
   })
 }
 
+export function useScanTLSProvider() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Scanning domains for wildcard certificates" },
+    mutationFn: (name: string) => api.scanTLSProvider(name),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.tlsCerts }),
+  })
+}
+
 export function useDeleteTLSProvider() {
   const client = useQueryClient()
   return useMutation({

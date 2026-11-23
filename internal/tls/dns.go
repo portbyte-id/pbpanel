@@ -23,6 +23,13 @@ type DNSProvider interface {
 	CleanUp(ctx context.Context, domain, fqdn, value string) error
 }
 
+// ZoneLister is implemented by a DNSProvider that can say which domains it
+// holds, so the panel can issue a wildcard certificate for each of them as soon
+// as the provider is linked.
+type ZoneLister interface {
+	Zones(ctx context.Context) ([]string, error)
+}
+
 // KindCloudflare is the provider kind of Cloudflare zones.
 const KindCloudflare = "cloudflare"
 

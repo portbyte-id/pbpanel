@@ -120,6 +120,90 @@ func (f *fakeIssuer) IssueDNS01(ctx context.Context, domain string, names []stri
 	return f.issue(ctx, domain, names, tlspkg.SourceDNS01, provider)
 }
 
+// noZones embeds only the DNSProvider interface, so a wrapped provider does not
+// satisfy tlspkg.ZoneLister.
+type noZones struct{ tlspkg.DNSProvider }
+
+// zonedDNS is a provider that holds a fixed list of zones.
+type zonedDNS struct {
+	*tlspkg.MemoryDNS
+	zones []string
+	err   error
+}
+
+func (z zonedDNS) Zones(context.Context) ([]string, error) { return z.zones, z.err }
+
+func TestLinkingAProviderIssuesAWildcardPerZone(t *testing.T) {
+	h := newTLSHarness(t)
+	// b.test already has a valid wildcard, so the scan must leave it alone.
+	c, k := goodCert(t, 5, "b.test", "*.b.test")
+	if err := tlspkg.WriteSiteFiles(h.root, "b.test", []byte(c), []byte(k)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cs.PutCert(context.Background(), tlspkg.Cert{
+		Domain: "b.test", Source: tlspkg.SourceDNS01, Names: []string{"b.test", "*.b.test"}, Provider: "cf",
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(60 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.td.Providers = func(string, []byte) (tlspkg.DNSProvider, error) {
+		return zonedDNS{MemoryDNS: tlspkg.NewMemoryDNS(), zones: []string{"a.test", "b.test", "c.test"}}, nil
+	}
+	code, out := h.call(http.MethodPut, "/api/tls/providers/cf", map[string]any{"kind": "cloudflare", "credentials": map[string]string{"api_token": "tok"}})
+	if code != http.StatusOK {
+		t.Fatalf("provider: %d %v", code, out)
+	}
+	if done := h.waitJob(out); done.State != jobs.StateSucceeded {
+		t.Fatalf("scan job = %+v", done)
+	}
+	if got := strings.Join(h.issuer.calls, ","); got != "dns01 a.test cf,dns01 c.test cf" {
+		t.Errorf("issued = %q, want a.test and c.test only", got)
+	}
+	for _, names := range h.issuer.names {
+		if len(names) != 2 || names[1] != "*."+names[0] {
+			t.Errorf("names = %v, want the zone and its wildcard", names)
+		}
+	}
+}
+
+func TestProviderScanRunsAgainAndRefusesAProviderWithoutZones(t *testing.T) {
+	h := newTLSHarness(t)
+	h.call(http.MethodPut, "/api/tls/providers/cf", map[string]any{"kind": "cloudflare", "credentials": map[string]string{"api_token": "tok"}})
+	// The harness hides zone listing, so this provider cannot be scanned.
+	if code, _ := h.call(http.MethodPost, "/api/tls/providers/cf/scan", nil); code != http.StatusConflict {
+		t.Errorf("scan without zones = %d, want 409", code)
+	}
+	if code, _ := h.call(http.MethodPost, "/api/tls/providers/nope/scan", nil); code != http.StatusNotFound {
+		t.Errorf("scan unknown provider = %d, want 404", code)
+	}
+	h.td.Providers = func(string, []byte) (tlspkg.DNSProvider, error) {
+		return zonedDNS{MemoryDNS: tlspkg.NewMemoryDNS(), zones: []string{"d.test"}}, nil
+	}
+	code, out := h.call(http.MethodPost, "/api/tls/providers/cf/scan", nil)
+	if code != http.StatusAccepted {
+		t.Fatalf("scan: %d %v", code, out)
+	}
+	if done := h.waitJob(out); done.State != jobs.StateSucceeded || len(h.issuer.calls) != 1 {
+		t.Errorf("job = %+v, issued = %v", done, h.issuer.calls)
+	}
+}
+
+func TestWildcardScanContinuesAfterOneZoneFails(t *testing.T) {
+	h := newTLSHarness(t)
+	h.issuer.err = errors.New("tls: acme: rate limited")
+	h.td.Providers = func(string, []byte) (tlspkg.DNSProvider, error) {
+		return zonedDNS{MemoryDNS: tlspkg.NewMemoryDNS(), zones: []string{"a.test", "c.test"}}, nil
+	}
+	_, out := h.call(http.MethodPut, "/api/tls/providers/cf", map[string]any{"kind": "cloudflare", "credentials": map[string]string{"api_token": "tok"}})
+	done := h.waitJob(out)
+	if done.State != jobs.StateFailed || !strings.Contains(done.Err, "2 of 2") {
+		t.Errorf("job = %+v, want a failure naming both zones", done)
+	}
+	if len(h.issuer.calls) != 2 {
+		t.Errorf("issued = %v, want both zones attempted", h.issuer.calls)
+	}
+}
+
 type fakeRenewer struct {
 	mu    sync.Mutex
 	calls []string
@@ -167,7 +251,16 @@ func newTLSHarness(t *testing.T) *tlsHarness {
 	h := &tlsHarness{nginxHarness: nh, cs: cs, root: root}
 	h.issuer = &fakeIssuer{t: t, st: cs, root: root}
 	h.renewer = &fakeRenewer{}
-	h.td = &TLSDeps{Store: cs, Issuer: h.issuer, Renewer: h.renewer, Sites: mgr, Root: root}
+	// The real factory validates credentials, but its Cloudflare provider would list
+	// zones over the network the moment a provider is linked; noZones hides that.
+	h.td = &TLSDeps{Store: cs, Issuer: h.issuer, Renewer: h.renewer, Sites: mgr, Root: root,
+		Providers: func(kind string, creds []byte) (tlspkg.DNSProvider, error) {
+			p, err := tlspkg.ProviderFactory(kind, creds)
+			if err != nil {
+				return nil, err
+			}
+			return noZones{p}, nil
+		}}
 	nh.deps.TLS = h.td
 	if nh.handler, err = New(nh.deps); err != nil {
 		t.Fatal(err)

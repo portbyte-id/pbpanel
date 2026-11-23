@@ -254,6 +254,7 @@ func (s *server) tlsRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/tls/providers", h(s.tlsProvidersList))
 	mux.Handle("PUT /api/tls/providers/{name}", h(s.tlsProviderPut))
 	mux.Handle("DELETE /api/tls/providers/{name}", h(s.tlsProviderDelete))
+	mux.Handle("POST /api/tls/providers/{name}/scan", h(s.tlsProviderScan))
 
 	mux.Handle("GET /api/panel/cert", h(s.panelCertGet))
 	mux.Handle("POST /api/panel/cert/upload", h(s.panelCertUpload))
@@ -875,6 +876,8 @@ type providerView struct {
 	Name      string    `json:"name"`
 	Kind      string    `json:"kind"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// JobID is the wildcard scan started by linking the provider, when it ran.
+	JobID string `json:"job_id,omitempty"`
 }
 
 func (s *server) tlsProvidersList(t *TLSDeps, w http.ResponseWriter, r *http.Request) {
@@ -885,7 +888,7 @@ func (s *server) tlsProvidersList(t *TLSDeps, w http.ResponseWriter, r *http.Req
 	}
 	views := make([]providerView, 0, len(list))
 	for _, p := range list {
-		views = append(views, providerView{p.Name, p.Kind, p.UpdatedAt})
+		views = append(views, providerView{Name: p.Name, Kind: p.Kind, UpdatedAt: p.UpdatedAt})
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Providers []providerView `json:"providers"`
@@ -917,7 +920,8 @@ func (s *server) tlsProviderPut(t *TLSDeps, w http.ResponseWriter, r *http.Reque
 	// Constructing the provider is the validation: the kind must exist and the
 	// credentials must have the shape that kind wants. Nothing is sent to the
 	// DNS host here; a wrong token surfaces when an order uses it.
-	if _, err := t.providers()(req.Kind, creds); err != nil {
+	prov, err := t.providers()(req.Kind, creds)
+	if err != nil {
 		msg := trimTLS(err)
 		for _, v := range req.Credentials {
 			if v != "" {
@@ -942,11 +946,136 @@ func (s *server) tlsProviderPut(t *TLSDeps, w http.ResponseWriter, r *http.Reque
 	}
 	for _, p := range list {
 		if p.Name == name {
-			writeJSON(w, http.StatusOK, providerView{p.Name, p.Kind, p.UpdatedAt})
+			view := providerView{Name: p.Name, Kind: p.Kind, UpdatedAt: p.UpdatedAt}
+			// Linking a provider that can list its zones starts the wildcard
+			// scan; the job id lets the UI follow it.
+			if zl, ok := prov.(tlspkg.ZoneLister); ok && t.Issuer != nil && s.deps.Jobs != nil {
+				if job, err := s.startWildcardScan(t, name, zl); err != nil {
+					s.logger.WarnContext(r.Context(), "starting the wildcard scan failed",
+						"provider", name, "error", err, "request_id", requestIDFrom(r.Context()))
+				} else {
+					view.JobID = job.ID
+				}
+			}
+			writeJSON(w, http.StatusOK, view)
 			return
 		}
 	}
 	s.writeInternal(w, r, errors.New("provider vanished after it was stored"))
+}
+
+// tlsProviderScan runs the wildcard scan again for a saved provider, which is how
+// a domain added to the account after linking gets its certificate.
+func (s *server) tlsProviderScan(t *TLSDeps, w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	noteTarget(r, "dns-provider:"+name)
+	if t.Issuer == nil {
+		writeError(w, http.StatusServiceUnavailable, errUnavailable, "certificate issuing is not available on this host; see the daemon log")
+		return
+	}
+	rec, err := t.Store.GetProvider(r.Context(), name)
+	if err != nil {
+		s.tlsFail(w, r, err)
+		return
+	}
+	prov, err := t.providers()(rec.Kind, rec.Credentials)
+	if err != nil {
+		s.tlsFail(w, r, err)
+		return
+	}
+	zl, ok := prov.(tlspkg.ZoneLister)
+	if !ok {
+		writeError(w, http.StatusConflict, errConflict, "this provider cannot list its domains")
+		return
+	}
+	job, err := s.startWildcardScan(t, name, zl)
+	if err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		JobID string   `json:"job_id"`
+		Job   jobs.Job `json:"job"`
+	}{job.ID, job})
+}
+
+// startWildcardScan lists the zones the provider holds and orders one wildcard
+// certificate (the zone and *.zone) per zone through DNS-01, as a job. A zone
+// that already has a valid certificate covering both names, or an uploaded one
+// of its own, is left alone, so linking again does not spend the CA's limits.
+// One failing zone does not stop the rest; the job fails at the end if any did.
+func (s *server) startWildcardScan(t *TLSDeps, provider string, zl tlspkg.ZoneLister) (jobs.Job, error) {
+	return s.deps.Jobs.Start(context.Background(), "tls.wildcard.scan",
+		func(ctx context.Context, out *jobs.Writer) error {
+			_ = out.Printf("Listing the domains in %s", provider)
+			zones, err := zl.Zones(ctx)
+			if err != nil {
+				return fmt.Errorf("listing the domains failed: %s", trimTLS(err))
+			}
+			if len(zones) == 0 {
+				_ = out.Line("No active domains are visible to this API token")
+				return nil
+			}
+			_ = out.Printf("Found %d domain(s): %s", len(zones), strings.Join(zones, ", "))
+			var failed []string
+			for _, zone := range zones {
+				if err := t.issueWildcard(ctx, provider, zone, out); err != nil {
+					_ = out.Printf("%s: %v", zone, err)
+					failed = append(failed, zone)
+				}
+			}
+			if len(failed) > 0 {
+				return fmt.Errorf("no wildcard certificate for %d of %d domains: %s", len(failed), len(zones), strings.Join(failed, ", "))
+			}
+			_ = out.Line("Done: every domain has a wildcard certificate")
+			return nil
+		})
+}
+
+// issueWildcard makes sure zone has a wildcard certificate and puts it live.
+func (t *TLSDeps) issueWildcard(ctx context.Context, provider, zone string, out *jobs.Writer) error {
+	if err := tlspkg.CheckDomain(zone); err != nil {
+		_ = out.Printf("%s: skipped, not a name a certificate can be issued for", zone)
+		return nil
+	}
+	names := []string{zone, "*." + zone}
+	now := t.now()
+	certs, err := t.Store.ListCerts(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range certs {
+		if c.Domain == zone && c.Source == tlspkg.SourceUpload {
+			_ = out.Printf("%s: skipped, an uploaded certificate is in use", zone)
+			return nil
+		}
+		if !now.Before(c.NotAfter) || now.Before(c.NotBefore) {
+			continue
+		}
+		if coversAll(c.Names, names) {
+			_ = out.Printf("%s: already covered by the certificate of %s", zone, c.Domain)
+			return nil
+		}
+	}
+	if !t.begin(zone) {
+		_ = out.Printf("%s: skipped, a certificate is already being issued or renewed", zone)
+		return nil
+	}
+	defer t.end(zone)
+	_ = out.Printf("%s: ordering %s", zone, strings.Join(names, ", "))
+	res, err := t.Issuer.IssueDNS01(ctx, zone, names, provider, "")
+	if err != nil {
+		return errors.New(trimTLS(err))
+	}
+	if err := t.Apply(ctx, zone); err != nil {
+		text, _ := applyFailureText(err)
+		if merr := tlspkg.MarkNotApplied(ctx, t.Store, zone, err, time.Now()); merr != nil {
+			_ = out.Printf("%s: could not record the failed install: %v", zone, merr)
+		}
+		return fmt.Errorf("issued but not live: %s", text)
+	}
+	_ = out.Printf("%s: issued, valid until %s", zone, res.NotAfter.UTC().Format(time.DateOnly))
+	return nil
 }
 
 func (s *server) tlsProviderDelete(t *TLSDeps, w http.ResponseWriter, r *http.Request) {
