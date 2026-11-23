@@ -354,6 +354,37 @@ describe("CronPage", () => {
     expect(await within(dialog).findByLabelText("Output of run 14")).toHaveTextContent("No output yet.")
   })
 
+  it("shows a dash for the exit code and duration of a skipped run, which never ran", async () => {
+    setup([job()])
+    const user = userEvent.setup()
+    vi.mocked(api.cronRuns).mockResolvedValue([
+      run({ id: 15, status: "skipped", exit_code: 0, finished_at: run().started_at }),
+    ])
+
+    await user.click(await screen.findByRole("button", { name: "History of backup" }))
+    const dialog = await screen.findByRole("dialog")
+    const row = (await within(dialog).findAllByTestId("run-row"))[0]!
+    const cells = within(row).getAllByRole("cell").map((c) => c.textContent)
+    expect(cells[2]).toBe("Skipped")
+    expect(cells[3]).toBe("–")
+    expect(cells[4]).toBe("–")
+  })
+
+  it("keeps the rows on screen when a background refresh fails", async () => {
+    setup([job()])
+    const user = userEvent.setup()
+    // A running run makes the list refresh every few seconds; the second read fails.
+    vi.mocked(api.cronRuns)
+      .mockResolvedValueOnce([run({ id: 14, status: "running", finished_at: undefined })])
+      .mockRejectedValue(new Error("network down"))
+
+    await user.click(await screen.findByRole("button", { name: "History of backup" }))
+    const dialog = await screen.findByRole("dialog")
+    await within(dialog).findAllByTestId("run-row")
+    expect(await within(dialog).findByRole("alert", undefined, { timeout: 6000 })).toBeInTheDocument()
+    expect(within(dialog).getAllByTestId("run-row")).toHaveLength(1)
+  })
+
   describe("built-in jobs", () => {
     const sslRenew = (over: Partial<CronJob> = {}): CronJob =>
       job({
