@@ -136,72 +136,43 @@ describe("EditorDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Saved a.conf.")
   })
 
-  it("shows the disk copy beside the draft and offers an overwrite on a 409 conflict", async () => {
+  it("overwrites the disk copy on a 409 conflict without asking", async () => {
     const onDisk: FMFile = {
       ...opened,
       content: "server { listen 8080; }\n",
       hash: "hash-c",
       mtime: opened.mtime + 5,
     }
-    vi.mocked(api.fmSaveFile).mockRejectedValue(
-      new ApiError(409, "edit_conflict", "the file changed on disk since it was opened", {
-        payload: {
-          error: "edit_conflict",
-          detail: "the file changed on disk since it was opened",
-          current: onDisk,
-        },
-      }),
-    )
+    const saved: FMFile = { ...onDisk, content: "server { }\nx", hash: "hash-d" }
+    vi.mocked(api.fmSaveFile)
+      .mockRejectedValueOnce(
+        new ApiError(409, "edit_conflict", "the file changed on disk since it was opened", {
+          payload: {
+            error: "edit_conflict",
+            detail: "the file changed on disk since it was opened",
+            current: onDisk,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(saved)
+    const onSaved = vi.fn()
     const user = userEvent.setup()
-    render(<EditorDialog path={opened.path} onClose={() => {}} onSaved={() => {}} />)
+    render(<EditorDialog path={opened.path} onClose={() => {}} onSaved={onSaved} />)
 
     await typeIn(user, opened.path, "x")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Overwrite disk copy with my draft" }),
-      ).toBeInTheDocument(),
-    )
-    expect(screen.getByRole("alert")).toHaveTextContent("changed on disk")
-    expect(screen.getByLabelText("The file as it is on disk now")).toHaveValue(
-      "server { listen 8080; }\n",
-    )
-    // The draft stays on the left while the conflict is open.
-    expect(screen.getByLabelText(`Contents of ${opened.path}`)).toHaveValue("server { }\nx")
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
-
-    // Overwriting sends the disk copy's base, which is what makes it stick.
-    vi.mocked(api.fmSaveFile).mockResolvedValue({ ...onDisk, content: "server { }\nx" })
-    await user.click(screen.getByRole("button", { name: "Overwrite disk copy with my draft" }))
-    await waitFor(() =>
-      expect(api.fmSaveFile).toHaveBeenLastCalledWith(opened.path, "server { }\nx", {
-        size: onDisk.size,
-        mtime: onDisk.mtime,
-        hash: onDisk.hash,
-      }),
-    )
-  })
-
-  it("loads the disk copy only when asked, and drops the draft", async () => {
-    const onDisk: FMFile = { ...opened, content: "server { listen 8080; }\n", hash: "hash-c" }
-    vi.mocked(api.fmSaveFile).mockRejectedValue(
-      new ApiError(409, "edit_conflict", "changed", {
-        payload: { error: "edit_conflict", detail: "changed", current: onDisk },
-      }),
-    )
-    const user = userEvent.setup()
-    render(<EditorDialog path={opened.path} onClose={() => {}} onSaved={() => {}} />)
-
-    await typeIn(user, opened.path, "x")
-    await user.click(screen.getByRole("button", { name: "Save" }))
-    await user.click(await screen.findByRole("button", { name: "Load disk copy" }))
-
+    // The retry carries the disk copy's base, so the draft replaces it.
+    await waitFor(() => expect(api.fmSaveFile).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.fmSaveFile).mock.calls[1]).toEqual([
+      opened.path,
+      "server { }\nx",
+      { size: onDisk.size, mtime: onDisk.mtime, hash: onDisk.hash },
+    ])
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved a.conf.")
+    expect(onSaved).toHaveBeenCalledOnce()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-    expect(screen.getByLabelText(`Contents of ${opened.path}`)).toHaveValue(
-      "server { listen 8080; }\n",
-    )
-    expect(screen.queryByLabelText("The file as it is on disk now")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Load disk copy" })).not.toBeInTheDocument()
   })
 
   it("shows a load failure instead of an editor", async () => {

@@ -124,6 +124,7 @@ export function ConfirmDialog({
   error,
   onConfirm,
   onOpenChange,
+  children,
 }: {
   title: string
   description: string
@@ -133,6 +134,8 @@ export function ConfirmDialog({
   error: string | null
   onConfirm: () => void
   onOpenChange: (open: boolean) => void
+  /** Extra controls under the description, such as an option checkbox. */
+  children?: React.ReactNode
 }) {
   const [typed, setTyped] = useState("")
   const locked = confirmText !== undefined && typed !== confirmText
@@ -159,6 +162,7 @@ export function ConfirmDialog({
             />
           </div>
         )}
+        {children}
         {error && (
           <p role="alert" className="text-destructive text-sm">
             {error}

@@ -331,13 +331,10 @@ func TestTrashRoundTrip(t *testing.T) {
 	_ = os.Symlink("a.txt", e.p("proj", "lnk"))
 	_ = os.Chtimes(e.p("proj", "a.txt"), time.Unix(1700000000, 0), time.Unix(1700000000, 0))
 
-	if _, err := e.svc.Trash(bg, e.p("proj"), "", nil); !errors.Is(err, ErrConfirm) {
-		t.Fatalf("trash dir without confirm = %v", err)
-	}
-	if _, err := e.svc.Trash(bg, "/etc", "etc", nil); !errors.Is(err, ErrProtected) {
+	if _, err := e.svc.Trash(bg, "/etc", nil); !errors.Is(err, ErrProtected) {
 		t.Fatalf("trash /etc = %v", err)
 	}
-	it, err := e.svc.Trash(bg, e.p("proj"), "proj", nil)
+	it, err := e.svc.Trash(bg, e.p("proj"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +383,7 @@ func TestTrashAcrossDevicesPreservesEverything(t *testing.T) {
 	if !e.svc.TrashNeedsJob(src) {
 		t.Fatal("expected a cross-device trash to need a job")
 	}
-	it, err := e.svc.Trash(bg, src, "item", nil)
+	it, err := e.svc.Trash(bg, src, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,13 +403,13 @@ func TestTrashPurgeAndLimits(t *testing.T) {
 	e.setLimits(func(l *Limits) { l.TrashRetentionDays = 7; l.TrashMaxBytes = 100 })
 	e.write("old", "12345", 0o644)
 	e.write("new", "12345", 0o644)
-	if _, err := e.svc.Trash(bg, e.p("old"), "", nil); err != nil {
+	if _, err := e.svc.Trash(bg, e.p("old"), nil); err != nil {
 		t.Fatal(err)
 	}
 	e.mu.Lock()
 	e.now = e.now.Add(5 * 24 * time.Hour)
 	e.mu.Unlock()
-	if _, err := e.svc.Trash(bg, e.p("new"), "", nil); err != nil {
+	if _, err := e.svc.Trash(bg, e.p("new"), nil); err != nil {
 		t.Fatal(err)
 	}
 	e.mu.Lock()
@@ -438,14 +435,14 @@ func TestTrashPurgeAndLimits(t *testing.T) {
 
 	// A single item over the size limit is refused with a pointer to permanent delete.
 	e.write("big", strings.Repeat("x", 200), 0o644)
-	if _, err := e.svc.Trash(bg, e.p("big"), "", nil); !errors.Is(err, ErrTooLarge) {
+	if _, err := e.svc.Trash(bg, e.p("big"), nil); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("trash over the limit = %v", err)
 	}
 	// And the oldest is evicted when the total would exceed it.
 	e.setLimits(func(l *Limits) { l.TrashMaxBytes = 12 })
 	for _, n := range []string{"p1", "p2", "p3"} {
 		e.write(n, "123456", 0o644)
-		if _, err := e.svc.Trash(bg, e.p(n), "", nil); err != nil {
+		if _, err := e.svc.Trash(bg, e.p(n), nil); err != nil {
 			t.Fatal(err)
 		}
 		e.mu.Lock()
@@ -913,7 +910,7 @@ func TestDownloadRefusesNonRegular(t *testing.T) {
 
 func TestProtectedOperationsRefused(t *testing.T) {
 	e := newEnv(t)
-	if _, err := e.svc.Trash(bg, "/", "", nil); !errors.Is(err, ErrProtected) {
+	if _, err := e.svc.Trash(bg, "/", nil); !errors.Is(err, ErrProtected) {
 		t.Errorf("trash / = %v", err)
 	}
 	if err := e.svc.Move(bg, "/etc", e.work, nil); !errors.Is(err, ErrProtected) {
@@ -930,14 +927,14 @@ func TestProtectedOperationsRefused(t *testing.T) {
 	}
 	// A link to /etc is deleted as a link; /etc is untouched.
 	_ = os.Symlink("/etc", e.p("etc-link"))
-	if _, err := e.svc.Trash(bg, e.p("etc-link"), "", nil); err != nil {
+	if _, err := e.svc.Trash(bg, e.p("etc-link"), nil); err != nil {
 		t.Errorf("trash a link to /etc: %v", err)
 	}
 	if _, err := os.Stat("/etc/hostname"); err != nil && !os.IsNotExist(err) {
 		t.Errorf("/etc damaged: %v", err)
 	}
 	// Direct access to the bin and upload areas is not allowed.
-	if _, err := e.svc.Trash(bg, e.svc.trashDir, "trash", nil); !errors.Is(err, ErrProtected) {
+	if _, err := e.svc.Trash(bg, e.svc.trashDir, nil); !errors.Is(err, ErrProtected) {
 		t.Errorf("trash the trash = %v", err)
 	}
 }

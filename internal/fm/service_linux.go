@@ -123,9 +123,9 @@ func (s *Service) TrashNeedsJob(raw string) bool {
 	return !s.SameDevice(path.Dir(clean), s.trashDir)
 }
 
-// Trash moves a path to the recycle bin. A directory needs its base name typed
-// as confirm. The hard-deny list applies to the real, resolved path.
-func (s *Service) Trash(ctx context.Context, raw, confirm string, progress Progress) (TrashItem, error) {
+// Trash moves a path to the recycle bin. The hard-deny list applies to the real,
+// resolved path.
+func (s *Service) Trash(ctx context.Context, raw string, progress Progress) (TrashItem, error) {
 	clean, err := s.pol.Clean(raw)
 	if err != nil {
 		return TrashItem{}, err
@@ -145,11 +145,6 @@ func (s *Service) Trash(ctx context.Context, raw, confirm string, progress Progr
 	st, err := lstatAt(p.fd, p.base)
 	if err != nil {
 		return TrashItem{}, err
-	}
-	if isDir(st) {
-		if err := s.pol.CheckConfirm(real, confirm); err != nil {
-			return TrashItem{}, err
-		}
 	}
 	size, err := treeSize(ctx, p.fd, p.base, st)
 	if err != nil {
@@ -415,9 +410,9 @@ func (s *Service) RunPurgeLoop(ctx context.Context, onError func(error)) {
 }
 
 // PreflightTrash runs the guardrails of Trash without moving anything, so the
-// API can refuse a protected or unconfirmed delete with a status code before it
-// has started a job.
-func (s *Service) PreflightTrash(clean, confirm string) error {
+// API can refuse a protected delete with a status code before it has started a
+// job.
+func (s *Service) PreflightTrash(clean string) error {
 	p, err := s.parentOf(clean)
 	if err != nil {
 		return err
@@ -430,12 +425,31 @@ func (s *Service) PreflightTrash(clean, confirm string) error {
 	if s.internalTree(real) {
 		return fmt.Errorf("%w: use the Trash view for %s", ErrProtected, real)
 	}
-	st, err := lstatAt(p.fd, p.base)
+	_, err = lstatAt(p.fd, p.base)
+	return err
+}
+
+// DeleteNow removes a path for good, skipping the bin. It applies the guardrails
+// of Trash; the removal is not recoverable from the panel.
+func (s *Service) DeleteNow(ctx context.Context, raw string, progress Progress) error {
+	clean, err := s.pol.Clean(raw)
 	if err != nil {
 		return err
 	}
-	if isDir(st) {
-		return s.pol.CheckConfirm(real, confirm)
+	p, err := s.parentOf(clean)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer p.close()
+	real := p.full()
+	if err := s.pol.CheckDestructive(real); err != nil {
+		return err
+	}
+	if s.internalTree(real) {
+		return fmt.Errorf("%w: use the Trash view for %s", ErrProtected, real)
+	}
+	if _, err := lstatAt(p.fd, p.base); err != nil {
+		return err
+	}
+	return s.RemoveTree(ctx, real, progress)
 }

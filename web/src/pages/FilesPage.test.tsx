@@ -59,6 +59,7 @@ describe("FilesPage", () => {
   beforeEach(() => {
     vi.mocked(api.fmList).mockReset()
     vi.mocked(api.fmDelete).mockReset()
+    window.localStorage.clear()
     vi.mocked(api.fmArchive).mockReset()
   })
 
@@ -131,10 +132,10 @@ describe("FilesPage", () => {
     await user.click(screen.getByRole("button", { name: "Move to trash" }))
 
     await waitFor(() => expect(api.fmDelete).toHaveBeenCalledOnce())
-    expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/a.txt", confirm: undefined }])
+    expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/a.txt" }], { permanent: false })
   })
 
-  it("asks for the folder's name before a folder delete goes through", async () => {
+  it("moves a folder to the trash with no name to type", async () => {
     renderPage([dir("build", "/var/www/build")])
     await screen.findByLabelText("Select all")
     const user = userEvent.setup()
@@ -142,15 +143,65 @@ describe("FilesPage", () => {
     await user.click(screen.getByLabelText("Select build"))
     await user.click(screen.getByRole("button", { name: "Delete" }))
 
-    // The dialog asks for the base name; the delete does not fire until it matches.
-    expect(api.fmDelete).not.toHaveBeenCalled()
-    await user.type(screen.getByLabelText(/to confirm/), "build")
-    await user.click(screen.getByRole("button", { name: "Move to trash" }))
+    expect(screen.queryByLabelText(/to confirm/)).not.toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Move to trash" }))
 
     await waitFor(() =>
-      expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/var/www/build", confirm: "build" }]),
+      expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/var/www/build" }], { permanent: false }),
     )
+  })
+
+  it("deletes permanently when the skip-trash box is ticked", async () => {
+    renderPage([entry({ name: "a.txt", path: "/a.txt" })])
+    await screen.findByLabelText("Select all")
+    const user = userEvent.setup()
+
+    await user.click(screen.getByLabelText("Select a.txt"))
+    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await user.click(screen.getByRole("checkbox", { name: /skip the trash/i }))
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }))
+
+    await waitFor(() =>
+      expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/a.txt" }], { permanent: true }),
+    )
+  })
+
+  it("opens a context menu on right-click, and runs Delete from it", async () => {
+    renderPage([entry({ name: "a.txt", path: "/a.txt" })])
+    await screen.findByLabelText("Select all")
+    const user = userEvent.setup()
+
+    fireEvent.contextMenu(screen.getByText("a.txt").closest("tr")!, { clientX: 40, clientY: 60 })
+    const menu = screen.getByRole("menu", { name: "Actions for a.txt" })
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeInTheDocument()
+    expect(within(menu).queryByRole("menuitem", { name: "Open" })).not.toBeInTheDocument()
+
+    await user.click(within(menu).getByRole("menuitem", { name: "Delete…" }))
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Move to trash" }))
+
+    await waitFor(() =>
+      expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/a.txt" }], { permanent: false }),
+    )
+  })
+
+  it("closes the context menu on Escape", async () => {
+    renderPage([dir("build", "/var/www/build")])
+    await screen.findByLabelText("Select all")
+    const user = userEvent.setup()
+
+    fireEvent.contextMenu(screen.getByText("build").closest("tr")!, { clientX: 40, clientY: 60 })
+    expect(screen.getByRole("menu")).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+  })
+
+  it("returns to the folder it showed last", async () => {
+    window.localStorage.setItem("panel.files.lastPath", "/var/www")
+    renderPage([entry({ name: "a.txt", path: "/var/www/a.txt" })])
+
+    await screen.findByLabelText("Select all")
+    expect(api.fmList).toHaveBeenCalledWith(expect.objectContaining({ path: "/var/www" }))
   })
 
   it("sorts by modified time when the toolbar asks for it", async () => {
@@ -184,9 +235,7 @@ describe("FilesPage", () => {
 
     // The drawer is stubbed out; the call itself is the contract here.
     await waitFor(() => expect(api.fmDelete).toHaveBeenCalledOnce())
-    expect(vi.mocked(api.fmDelete).mock.calls[0][0]).toEqual([
-      { path: "/a.txt", confirm: undefined },
-    ])
+    expect(vi.mocked(api.fmDelete).mock.calls[0][0]).toEqual([{ path: "/a.txt" }])
   })
 
   it("queues dropped files into the folder being viewed", async () => {

@@ -115,7 +115,7 @@ func TestFMBrowseAndGuardrails(t *testing.T) {
 
 	// Exit gate: deleting /etc is refused, and so is anything under /proc.
 	for _, p := range []string{"/etc", "/etc/", "//etc", "/", "/usr"} {
-		code, out = h.call(http.MethodPost, "/api/fm/delete", map[string]any{"items": []any{map[string]any{"path": p, "confirm": "etc"}}})
+		code, out = h.call(http.MethodPost, "/api/fm/delete", map[string]any{"items": []any{map[string]any{"path": p}}})
 		if code != http.StatusForbidden || out["error"] != errProtected {
 			t.Errorf("delete %q = %d %v", p, code, out)
 		}
@@ -124,16 +124,9 @@ func TestFMBrowseAndGuardrails(t *testing.T) {
 		t.Errorf("mkdir in /proc = %d %v", code, out)
 	}
 
-	// A recursive delete without the typed name is refused; with it, it works.
+	// A folder goes to the bin without a typed name.
 	_ = os.WriteFile(h.p("sub/in.txt"), []byte("x"), 0o644)
 	code, out = h.call(http.MethodPost, "/api/fm/delete", map[string]any{"items": []any{map[string]any{"path": h.p("sub")}}})
-	if code != http.StatusBadRequest || out["error"] != errConfirm {
-		t.Errorf("delete without confirm = %d %v", code, out)
-	}
-	if _, err := os.Stat(h.p("sub/in.txt")); err != nil {
-		t.Fatal("folder was deleted despite the missing confirmation")
-	}
-	code, out = h.call(http.MethodPost, "/api/fm/delete", map[string]any{"items": []any{map[string]any{"path": h.p("sub"), "confirm": "sub"}}})
 	if code != http.StatusOK {
 		t.Fatalf("delete = %d %v", code, out)
 	}
@@ -152,6 +145,20 @@ func TestFMBrowseAndGuardrails(t *testing.T) {
 	}
 	if code, out = h.call(http.MethodPost, "/api/fm/trash/"+id+"/restore", nil); code != http.StatusNotFound {
 		t.Errorf("second restore = %d %v", code, out)
+	}
+
+	// Skipping the bin removes a folder for good, as a job.
+	_ = os.MkdirAll(h.p("gone"), 0o755)
+	_ = os.WriteFile(h.p("gone/x.txt"), []byte("x"), 0o644)
+	code, out = h.call(http.MethodPost, "/api/fm/delete", map[string]any{"permanent": true, "items": []any{map[string]any{"path": h.p("gone")}}})
+	if code != http.StatusAccepted {
+		t.Fatalf("permanent delete = %d %v", code, out)
+	}
+	if job := h.waitJob(out); job.State != jobs.StateSucceeded {
+		t.Fatalf("permanent delete job = %s %s", job.State, job.Err)
+	}
+	if _, err := os.Stat(h.p("gone")); !os.IsNotExist(err) {
+		t.Errorf("folder survived a permanent delete: %v", err)
 	}
 
 	// Recursive chmod is refused until confirmed, then runs as a job.

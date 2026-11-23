@@ -58,6 +58,8 @@ export interface FMSelection {
   /** True when every visible row is selected. */
   all: boolean
   toggle(entry: FMEntry, shift: boolean): void
+  /** Selects this row alone, as a right-click does. */
+  only(entry: FMEntry): void
   toggleAll(): void
   clear(): void
 }
@@ -100,6 +102,10 @@ export function useFMSelection(listing: FMListing | undefined): FMSelection {
         else next.set(entry.path, entry)
         return next
       })
+    },
+    only(entry) {
+      setAnchor(entry.path)
+      setSelected(new Map([[entry.path, entry]]))
     },
     toggleAll() {
       setSelected(all ? new Map() : new Map(entries.map((e) => [e.path, e])))

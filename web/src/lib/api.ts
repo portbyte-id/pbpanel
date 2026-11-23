@@ -1400,11 +1400,12 @@ export class ApiClient {
    * a delete that crosses mounts answers 202 with a job instead of the items.
    */
   async fmDelete(
-    items: { path: string; confirm?: string }[],
+    items: { path: string }[],
+    opts: { permanent?: boolean } = {},
   ): Promise<{ trashed: FMTrashItem[] } | { job: JobRef }> {
     return this.request<{ trashed: FMTrashItem[] } | { job: JobRef }>("/api/fm/delete", {
       method: "POST",
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items, permanent: opts.permanent === true }),
     })
   }
 
