@@ -1052,6 +1052,30 @@ export class ApiClient {
     await this.request<void>(tlsPath(domain), { method: "DELETE" })
   }
 
+  /** Stores an uploaded certificate for a name, with or without a site serving it. */
+  async uploadTLSCert(
+    input: UploadCertInput & { domain: string },
+  ): Promise<{ cert: CertView; warnings: TLSWarning[] }> {
+    return this.request<{ cert: CertView; warnings: TLSWarning[] }>("/api/tls/certs/upload", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  /** Orders a certificate for a name as a job. Returns the job id to follow. */
+  async issueTLSCert(input: IssueCertInput & { domain: string }): Promise<string> {
+    const res = await this.request<{ job_id: string }>("/api/tls/certs/issue", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return res.job_id
+  }
+
+  /** Removes a certificate that no site serves. A site's certificate is removed through the site. */
+  async removeTLSCert(domain: string): Promise<void> {
+    await this.request<void>(`/api/tls/certs/${encodeURIComponent(domain)}`, { method: "DELETE" })
+  }
+
   async tlsCerts(): Promise<CertView[]> {
     return (await this.request<{ certs: CertView[] }>("/api/tls/certs")).certs
   }

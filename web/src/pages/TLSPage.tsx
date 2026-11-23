@@ -4,19 +4,25 @@ import { useState, type ReactNode } from "react"
 
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { ExpiryBadge } from "@/components/SiteTLS"
-import { ProviderForm } from "@/components/TLSForms"
+import { IssueCertForm, ProviderForm, UploadCertForm } from "@/components/TLSForms"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { type CertView, type DNSProvider } from "@/lib/api"
 import { describeError } from "@/lib/errors"
 import {
   useDeleteTLSProvider,
+  useIssueTLSCert,
+  useRemoveTLSCert,
   useSaveTLSProvider,
   useScanTLSProvider,
+  useSites,
   useTLSCerts,
   useTLSProviders,
+  useUploadTLSCert,
 } from "@/lib/queries"
 import { formatDate, renewalStatus, sortCertsBySoonest, sourceLabel } from "@/lib/tls"
 
@@ -24,12 +30,12 @@ import { formatDate, renewalStatus, sortCertsBySoonest, sourceLabel } from "@/li
 // exported from here for the tests that already import it.
 export { PanelCertSummary } from "@/components/PanelCert"
 
-/** Every site certificate, the one that needs attention first; DNS providers. */
+/** Every certificate, the one that needs attention first; DNS providers. */
 export function TLSPage() {
   return (
     <Tabs defaultValue="certificates">
       <TabsList>
-        <TabsTrigger value="certificates">Site certificates</TabsTrigger>
+        <TabsTrigger value="certificates">Certificates</TabsTrigger>
         <TabsTrigger value="providers">DNS providers</TabsTrigger>
       </TabsList>
       <TabsContent value="certificates">
@@ -50,45 +56,213 @@ function errorText(error: unknown, fallback: string): string {
 
 function CertificatesCard() {
   const { data, isPending, error } = useTLSCerts()
+  const sites = useSites()
+  const remove = useRemoveTLSCert()
+  const [removing, setRemoving] = useState<string | null>(null)
+  // Only a loaded site list can tell a site's certificate from a standalone one;
+  // until it loads, no certificate offers Remove.
+  const siteDomains = new Set((sites.data ?? []).map((s) => s.domain))
+  const sitesKnown = sites.isSuccess
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Certificates</CardTitle>
+          <CardDescription>
+            Soonest expiry first. Open a site to renew, replace or remove its certificate. A
+            certificate that no site uses can be removed here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isPending ? (
+            <SkeletonRows label="Loading certificates…" />
+          ) : error ? (
+            <p role="alert" className="text-destructive text-sm">
+              {errorText(error, "The certificates could not be loaded.")}
+            </p>
+          ) : (
+            <CertificateTable
+              certs={data}
+              renderDomain={(domain) =>
+                siteDomains.has(domain) ? (
+                  <Link
+                    to="/sites/$domain"
+                    params={{ domain }}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {domain}
+                  </Link>
+                ) : (
+                  <span className="font-medium">{domain}</span>
+                )
+              }
+              renderActions={(domain) =>
+                sitesKnown && !siteDomains.has(domain) ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      remove.reset()
+                      setRemoving(domain)
+                    }}
+                  >
+                    Remove
+                  </Button>
+                ) : null
+              }
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <AddCertificateCard />
+
+      <ConfirmDialog
+        open={removing !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoving(null)
+            remove.reset()
+          }
+        }}
+        title={`Remove the certificate for ${removing ?? "this name"}?`}
+        confirmLabel="Remove certificate"
+        pendingLabel="Removing…"
+        pending={remove.isPending}
+        destructive
+        error={remove.error ? errorText(remove.error, "The certificate could not be removed.") : null}
+        onConfirm={() =>
+          removing && remove.mutate(removing, { onSuccess: () => setRemoving(null) })
+        }
+      >
+        <p>
+          The stored certificate and its key are deleted. No site uses this name, so nothing is
+          served with it.
+        </p>
+      </ConfirmDialog>
+    </div>
+  )
+}
+
+/**
+ * Makes a certificate for a name without a site: a request (HTTP-01 is refused
+ * until a site serves the name, DNS-01 needs no site) or an upload. A site that
+ * later covers the name uses the stored certificate.
+ */
+function AddCertificateCard() {
+  const [name, setName] = useState("")
+  const [mode, setMode] = useState<"request" | "upload">("request")
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [stored, setStored] = useState<string | null>(null)
+  const providers = useTLSProviders()
+  const issue = useIssueTLSCert()
+  const upload = useUploadTLSCert()
+  const domain = name.trim().toLowerCase()
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Site certificates</CardTitle>
-        <CardDescription>Soonest expiry first. Open a site to renew, replace or remove its certificate.</CardDescription>
+        <CardTitle>Add a certificate</CardTitle>
+        <CardDescription>
+          Make a certificate for a host name without creating a site first. A site that serves the
+          name afterwards uses it.
+        </CardDescription>
       </CardHeader>
-      <CardContent>
-        {isPending ? (
-          <SkeletonRows label="Loading certificates…" />
-        ) : error ? (
-          <p role="alert" className="text-destructive text-sm">
-            {errorText(error, "The certificates could not be loaded.")}
-          </p>
-        ) : (
-          <CertificateTable
-            certs={data}
-            renderDomain={(domain) => (
-              <Link
-                to="/sites/$domain"
-                params={{ domain }}
-                className="font-medium underline-offset-2 hover:underline"
-              >
-                {domain}
-              </Link>
-            )}
+      <CardContent className="flex flex-col gap-6">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="tls-cert-name">Host name</Label>
+          <Input
+            id="tls-cert-name"
+            value={name}
+            placeholder="shop.example.com"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setName(e.target.value)
+              setJobId(null)
+              setStored(null)
+            }}
           />
+        </div>
+
+        {domain !== "" && (
+          <Tabs value={mode} onValueChange={(v) => setMode(v as "request" | "upload")}>
+            <TabsList>
+              <TabsTrigger value="request">Request one</TabsTrigger>
+              <TabsTrigger value="upload">Upload one</TabsTrigger>
+            </TabsList>
+            <TabsContent value="request">
+              <IssueCertForm
+                key={domain}
+                domain={domain}
+                defaultNames={[domain]}
+                providers={providers.data?.providers ?? []}
+                pending={issue.isPending}
+                error={issue.error}
+                onSubmit={(input) =>
+                  issue.mutate(
+                    { ...input, domain },
+                    {
+                      onSuccess: (id) => {
+                        setStored(null)
+                        setJobId(id)
+                      },
+                    },
+                  )
+                }
+              />
+            </TabsContent>
+            <TabsContent value="upload">
+              <UploadCertForm
+                key={domain}
+                submitLabel="Store certificate"
+                pending={upload.isPending}
+                error={upload.error}
+                onSubmit={(input) =>
+                  upload.mutate(
+                    { ...input, domain },
+                    {
+                      onSuccess: () => {
+                        setJobId(null)
+                        setStored(domain)
+                      },
+                    },
+                  )
+                }
+              />
+            </TabsContent>
+          </Tabs>
+        )}
+
+        {stored && (
+          <p role="status" className="text-sm">
+            Stored a certificate for {stored}. It is listed above.
+          </p>
+        )}
+        {jobId && (
+          <p role="status" className="text-sm">
+            Ordering the certificate for {domain}. Follow it on the{" "}
+            <Link to="/jobs" className="underline underline-offset-2">
+              Jobs page
+            </Link>
+            ; it appears in the list above once it is stored.
+          </p>
         )}
       </CardContent>
     </Card>
   )
 }
 
-/** The certificate list. `renderDomain` supplies the link to the site. */
+/** The certificate list. `renderDomain` supplies the name, and `renderActions` an optional last column. */
 export function CertificateTable({
   certs,
   renderDomain,
+  renderActions,
 }: {
   certs: CertView[]
   renderDomain: (domain: string) => ReactNode
+  renderActions?: (domain: string) => ReactNode
 }) {
   if (certs.length === 0) {
     return (
@@ -102,10 +276,15 @@ export function CertificateTable({
       <table className="w-full text-left text-sm">
         <thead className="text-muted-foreground text-xs">
           <tr>
-            <th scope="col" className="py-2 pr-4 font-medium">Site</th>
+            <th scope="col" className="py-2 pr-4 font-medium">Name</th>
             <th scope="col" className="py-2 pr-4 font-medium">Expires</th>
             <th scope="col" className="py-2 pr-4 font-medium">Source</th>
-            <th scope="col" className="py-2 font-medium">Renewal</th>
+            <th scope="col" className="py-2 pr-4 font-medium">Renewal</th>
+            {renderActions && (
+              <th scope="col" className="py-2 font-medium">
+                <span className="sr-only">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
@@ -121,7 +300,7 @@ export function CertificateTable({
               <td className="py-2 pr-4">
                 <Badge variant="secondary">{sourceLabel(c.source)}</Badge>
               </td>
-              <td className="py-2">
+              <td className="py-2 pr-4">
                 <span className={c.last_renewal_result === "failed" ? "text-destructive" : undefined}>
                   {renewalStatus(c)}
                 </span>
@@ -131,6 +310,7 @@ export function CertificateTable({
                   </span>
                 )}
               </td>
+              {renderActions && <td className="py-2 text-right">{renderActions(c.domain)}</td>}
             </tr>
           ))}
         </tbody>
@@ -219,7 +399,7 @@ function ProvidersCard() {
                 <Link to="/jobs" className="underline underline-offset-2">
                   Jobs page
                 </Link>
-                ; finished certificates appear under Site certificates.
+                ; finished certificates appear under Certificates.
               </p>
             )}
           </>
@@ -302,4 +482,3 @@ export function ProviderList({
     </ul>
   )
 }
-

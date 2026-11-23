@@ -107,6 +107,9 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
 | `PUT` | `/api/sites/{domain}/tls/redirect` |
 | `DELETE` | `/api/sites/{domain}/tls` |
 | `GET` | `/api/tls/certs` |
+| `POST` | `/api/tls/certs/upload` |
+| `POST` | `/api/tls/certs/issue` |
+| `DELETE` | `/api/tls/certs/{domain}` |
 | `GET` | `/api/tls/providers` |
 | `PUT` | `/api/tls/providers/{name}` |
 | `DELETE` | `/api/tls/providers/{name}` |
