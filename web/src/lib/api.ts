@@ -1052,11 +1052,23 @@ export class ApiClient {
   }
 
   /** PUT adds the provider or replaces its credentials. The token is never read back. */
-  async saveTLSProvider(name: string, kind: string, apiToken: string): Promise<void> {
-    await this.request<unknown>(`/api/tls/providers/${encodeURIComponent(name)}`, {
+  async saveTLSProvider(
+    name: string,
+    kind: string,
+    apiToken: string,
+  ): Promise<{ job_id?: string }> {
+    return this.request<{ job_id?: string }>(`/api/tls/providers/${encodeURIComponent(name)}`, {
       method: "PUT",
       body: JSON.stringify({ kind, credentials: { api_token: apiToken } }),
     })
+  }
+
+  /** Scan the provider's domains again and issue a wildcard certificate for each new one. */
+  async scanTLSProvider(name: string): Promise<{ job_id: string }> {
+    return this.request<{ job_id: string }>(
+      `/api/tls/providers/${encodeURIComponent(name)}/scan`,
+      { method: "POST" },
+    )
   }
 
   async deleteTLSProvider(name: string): Promise<void> {

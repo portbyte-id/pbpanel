@@ -98,6 +98,33 @@ describe("ProviderList", () => {
     expect(onDelete).toHaveBeenCalledWith("cf")
   })
 
+  it("offers Scan domains for a Cloudflare provider and hands over its name", async () => {
+    const user = userEvent.setup()
+    const onScan = vi.fn()
+    render(
+      <ProviderList providers={providers} onReplace={() => {}} onDelete={() => {}} onScan={onScan} />,
+    )
+    await user.click(screen.getByRole("button", { name: "Scan domains" }))
+    expect(onScan).toHaveBeenCalledWith("cf")
+  })
+
+  it("shows no scan button without a handler, and disables it while scanning", () => {
+    const { rerender } = render(
+      <ProviderList providers={providers} onReplace={() => {}} onDelete={() => {}} />,
+    )
+    expect(screen.queryByRole("button", { name: "Scan domains" })).toBeNull()
+    rerender(
+      <ProviderList
+        providers={providers}
+        onReplace={() => {}}
+        onDelete={() => {}}
+        onScan={() => {}}
+        scanning="cf"
+      />,
+    )
+    expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled()
+  })
+
   it("says DNS-01 needs a provider when there are none", () => {
     render(<ProviderList providers={[]} onReplace={() => {}} onDelete={() => {}} />)
     expect(screen.getByText(/DNS-01 needs one/)).toBeInTheDocument()

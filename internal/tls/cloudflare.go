@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -161,6 +162,39 @@ func (c *Cloudflare) zoneID(ctx context.Context, fqdn string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("cloudflare: no zone for %s is visible to this API token", strings.TrimSuffix(fqdn, "."))
+}
+
+// maxZonePages bounds the zone listing; 50 pages of 50 is 2500 zones.
+const maxZonePages = 50
+
+// Zones implements ZoneLister: the names of the active zones this token can see,
+// sorted. Pending and moved zones are left out because the CA could not validate
+// a name in a zone that is not served by Cloudflare yet.
+func (c *Cloudflare) Zones(ctx context.Context) ([]string, error) {
+	var out []string
+	for page := 1; page <= maxZonePages; page++ {
+		raw, err := c.do(ctx, http.MethodGet, "/zones",
+			url.Values{"status": {"active"}, "per_page": {"50"}, "page": {fmt.Sprint(page)}}, nil)
+		if err != nil {
+			return nil, err
+		}
+		var zones []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &zones); err != nil {
+			return nil, fmt.Errorf("cloudflare: decode zones: %w", err)
+		}
+		for _, z := range zones {
+			if n := strings.ToLower(strings.TrimSpace(z.Name)); n != "" {
+				out = append(out, n)
+			}
+		}
+		if len(zones) < 50 {
+			break
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Present implements DNSProvider.
