@@ -1,7 +1,8 @@
 # open-appsec as a second WAF engine: plan
 
 Status: **plan + step 0 spike complete (2026-11-25); D5 decided (accept, marked as tracking);
-steps 1-8 in progress.**
+step 4 complete (rendering and applying); steps 1-3, 5-8 in progress.** Step 4's host findings, which
+correct §0.5 and §6.1, are in `open-appsec-step4-findings.md` beside this file.
 
 Written after reading the current firewall (`internal/waf/*`, `internal/sites/waf.go`), the nginx
 build recipe (`internal/nginx/builder.Dockerfile`, `builder.go`, `paths.go`) and the monitor

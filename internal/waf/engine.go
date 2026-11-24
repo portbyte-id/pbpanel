@@ -261,15 +261,16 @@ func (e *Engine) All(ctx context.Context) (map[string]Config, error) {
 	return out, nil
 }
 
-// anyModSecurity reports whether some site other than except needs the module
-// loaded.
-func (e *Engine) anyModSecurity(ctx context.Context, except string) (bool, error) {
+// anyEngine reports whether some site other than except needs a module loaded.
+// Both engines keep their loader in a main-context file, and each is written
+// only while a site names it, so a host that uses neither carries neither.
+func (e *Engine) anyEngine(ctx context.Context, except string, uses func(Config) bool) (bool, error) {
 	all, err := e.All(ctx)
 	if err != nil {
 		return false, err
 	}
 	for d, c := range all {
-		if d != except && c.UsesModSecurity() {
+		if d != except && uses(c) {
 			return true, nil
 		}
 	}
@@ -338,17 +339,34 @@ func (e *Engine) RenderWith(domain string, c Config, g Global) Rendered {
 	return r
 }
 
-// SharedFiles are the files no single site owns: the one that loads the module,
-// present while a site uses ModSecurity. A site named in except is not counted,
-// which is how a site's deletion stops loading a module nothing else needs.
+// SharedFiles are the files no single site owns: the two module loaders, the
+// global firewall's variables and the block page.
+//
+// Each loader is present only while some site names its engine, and the
+// open-appsec one is meaningless without its per-server directive, so a host
+// that uses neither engine carries neither file. A site named in except is not
+// counted, which is how a site's deletion stops loading a module nothing else
+// needs.
+//
+// The open-appsec *policy* is not rendered here: it names hosts, which live in
+// the sites table, and this package cannot read it. sites.WAFSharedFiles adds it
+// to the same change, so both files always move together.
 func (e *Engine) SharedFiles(ctx context.Context, except string) ([]confedit.File, error) {
-	any, err := e.anyModSecurity(ctx, except)
+	anyModSec, err := e.anyEngine(ctx, except, Config.UsesModSecurity)
 	if err != nil {
 		return nil, err
 	}
 	module := confedit.File{Path: e.p.WAFModuleFile(), Delete: true}
-	if any {
+	if anyModSec {
 		module = confedit.File{Path: e.p.WAFModuleFile(), Content: MainInclude()}
+	}
+	anyAppsec, err := e.AnyOpenAppsec(ctx, except)
+	if err != nil {
+		return nil, err
+	}
+	appsecModule := confedit.File{Path: e.OpenAppsecModulePath(), Delete: true}
+	if anyAppsec {
+		appsecModule = confedit.File{Path: e.OpenAppsecModulePath(), Content: OpenAppsecMainInclude()}
 	}
 	g, err := e.Global(ctx)
 	if err != nil {
@@ -358,7 +376,13 @@ func (e *Engine) SharedFiles(ctx context.Context, except string) ([]confedit.Fil
 	if g.ErrorPage.Enabled {
 		page = confedit.File{Path: e.p.WAFErrorPage(), Content: []byte(g.ErrorPage.HTML)}
 	}
-	return []confedit.File{module, {Path: e.p.WAFGlobalHTTP(), Content: GlobalHTTPInclude(g)}, page}, nil
+	return []confedit.File{module, appsecModule, {Path: e.p.WAFGlobalHTTP(), Content: GlobalHTTPInclude(g)}, page}, nil
+}
+
+// AnyOpenAppsec reports whether some site other than except inspects with
+// open-appsec, which is when the module and the policy have to exist.
+func (e *Engine) AnyOpenAppsec(ctx context.Context, except string) (bool, error) {
+	return e.anyEngine(ctx, except, Config.UsesOpenAppsec)
 }
 
 // Global returns the firewall that applies to every site: the defaults until an
