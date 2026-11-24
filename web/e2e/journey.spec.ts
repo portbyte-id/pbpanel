@@ -14,9 +14,10 @@ test("login, change a setting, log out", async ({ page }) => {
   await page.goto("/")
   await expect(page).toHaveURL(/\/login/)
 
-  // 2. Log in.
+  // 2. Log in. The password field has a "Show password" button beside it whose
+  //    accessible name also contains "password", so the field is matched exactly.
   await page.getByLabel("Username").fill("admin")
-  await page.getByLabel("Password").fill(PASSWORD)
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD)
   await page.getByRole("button", { name: "Sign in" }).click()
 
   // 3. The guard let us through and the landing page is the dashboard; Settings is one click away.
@@ -26,7 +27,9 @@ test("login, change a setting, log out", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
 
   // The form is generated from the registry, so these rows exist because the
-  // server sent them, not because the page hard-coded them.
+  // server sent them, not because the page hard-coded them. Each group is a tab
+  // and the first one is shown, so the Login group is opened by name.
+  await page.getByRole("tab", { name: "Login" }).click()
   const maxAttempts = page.locator('[data-setting="login.max_attempts"] input')
   await expect(maxAttempts).toBeVisible()
 
@@ -40,7 +43,9 @@ test("login, change a setting, log out", async ({ page }) => {
   await expect(page.getByText("Saved.")).toBeVisible()
 
   // 5. The change survived a reload: it was stored, not just held in the form.
+  //    The page reopens on its first tab, so Login is selected again by name.
   await page.reload()
+  await page.getByRole("tab", { name: "Login" }).click()
   await expect(page.locator('[data-setting="login.max_attempts"] input')).toHaveValue(next)
 
   // 6. The write is in the audit trail, attributed to the admin account.
@@ -48,18 +53,21 @@ test("login, change a setting, log out", async ({ page }) => {
   await expect(page).toHaveURL(/\/audit/)
   await expect(page.getByRole("cell", { name: "PUT /api/settings" }).first()).toBeVisible()
 
-  // 7. The sidebar offers the future sections as disabled controls, so nothing
-  //    looks clickable that has no page behind it yet.
-  // Files was the example until M3, and Apps until M5; TLS is still one.
-  const tls = page.getByRole("button", { name: /TLS — not built yet/i })
-  await expect(tls).toBeDisabled()
-  // PHP was one of them until M2; it lives under Runtimes now.
+  // 7. The sidebar's last placeholder is gone: every section it lists now has a
+  //    page behind it. The Store is the newest one, and the engine picker on a
+  //    site's Firewall tab points at it, so it has to be reachable.
+  await page.getByRole("link", { name: "Store" }).click()
+  await expect(page).toHaveURL(/\/store/)
+  await expect(page.getByRole("heading", { name: "Firewall engines" })).toBeVisible()
+  // PHP was a placeholder until M2; it lives under Runtimes now.
   await page.getByRole("link", { name: "Runtimes" }).click()
   await page.getByRole("tab", { name: "PHP" }).click()
   await expect(page).toHaveURL(/\/runtimes\?tab=php/)
 
   // 8. Log out. The session is revoked server-side, so the guard sends us back
-  //    to the login page even on a fresh navigation.
+  //    to the login page even on a fresh navigation. Sign out is in the account
+  //    menu in the header, opened by the button named for the signed-in user.
+  await page.getByRole("button", { name: /^Account: / }).click()
   await page.getByRole("button", { name: "Sign out" }).click()
   await expect(page).toHaveURL(/\/login/)
 

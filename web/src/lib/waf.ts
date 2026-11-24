@@ -7,6 +7,84 @@
 export type WafMode = "off" | "detect" | "block"
 export type WafExclusionKind = "rule" | "rule_path" | "rule_arg"
 
+/**
+ * The inspection engine a site's firewall runs. A row stored before the field
+ * existed carries "", which the server reads as ModSecurity and which this
+ * client does too (`engineOf`), so an older panel's JSON still renders.
+ */
+export type WafEngine = "modsecurity" | "open-appsec"
+
+/**
+ * The engine a config or overview row runs, with the server's own reading of a
+ * missing value: "" (a row stored before the field existed) and absent (an older
+ * panel's overview row) both read as ModSecurity.
+ */
+export function engineOf(c: { engine?: WafEngine | "" }): WafEngine {
+  return c.engine === "open-appsec" ? "open-appsec" : "modsecurity"
+}
+
+export const ENGINE_LABEL: Record<WafEngine, string> = {
+  modsecurity: "ModSecurity",
+  "open-appsec": "open-appsec",
+}
+
+/**
+ * The lowest threat score that blocks, for open-appsec's prevent-learn mode. A
+ * lower level blocks more: `critical` only the certain attacks, `medium` also
+ * the doubtful ones.
+ */
+export type WafConfidence = "critical" | "high" | "medium"
+
+export const CONFIDENCE_OPTIONS: { value: WafConfidence; label: string; help: string }[] = [
+  {
+    value: "critical",
+    label: "Critical only",
+    help: "Blocks only attacks the engine is certain about. The fewest false positives.",
+  },
+  {
+    value: "high",
+    label: "High and above",
+    help: "Blocks high-confidence attacks too. The default, and the balance the vendor recommends.",
+  },
+  {
+    value: "medium",
+    label: "Medium and above",
+    help: "Also blocks the doubtful ones. Expect false positives on unusual applications.",
+  },
+]
+
+/**
+ * What an open-appsec exception narrows. `path` is deliberately absent from the
+ * controls: step 0 and step 4 both measured that a `urlPath` exception does not
+ * compile on the installed agent (docs/design/open-appsec-step4-findings.md §C),
+ * and a control that silently matches nothing is worse than none. The kind stays
+ * in the type because a stored row may carry it; the form never offers it and
+ * says why when a row has one.
+ */
+export type WafExceptionKind = "path" | "source_ip" | "param"
+
+/** The kinds the form offers, in order. */
+export const EXCEPTION_KINDS: WafExceptionKind[] = ["source_ip", "param"]
+
+export const EXCEPTION_KIND_LABEL: Record<WafExceptionKind, string> = {
+  path: "Path prefix",
+  source_ip: "Source network",
+  param: "Request parameter",
+}
+
+export interface WafOpenAppsecException {
+  kind: WafExceptionKind
+  path: string
+  source_ip: string
+  param: string
+  note: string
+}
+
+export interface WafOpenAppsec {
+  confidence: WafConfidence
+  exceptions: WafOpenAppsecException[]
+}
+
 export interface WafRateLimit {
   enabled: boolean
   requests_per_second: number
@@ -35,12 +113,19 @@ export interface WafChallenge {
 }
 
 export interface WafConfig {
+  /**
+   * The inspection engine. "" is a row stored before the field existed; the
+   * server reads it as ModSecurity and `engineOf` reads it the same way.
+   */
+  engine: WafEngine | ""
   mode: WafMode
   paranoia: 1 | 2 | 3 | 4
   rate_limit: WafRateLimit
   path_blocklist: string[]
   ip_rules: { allow: string[]; deny: string[] }
   exclusions: WafExclusion[]
+  /** open-appsec's own settings. They stay on the config whatever the engine. */
+  open_appsec: WafOpenAppsec
   challenge: WafChallenge
 }
 
@@ -59,11 +144,19 @@ export interface WafSiteStatus {
 export interface WafSiteResponse {
   config: WafConfig
   status: WafSiteStatus
+  /**
+   * The second engine's state and its tracking warning. Absent on a panel with
+   * no appsec package, which is how a client tells "no engine" from "engine,
+   * unavailable".
+   */
+  open_appsec?: import("@/lib/appsec").AppsecAvailability
   warnings?: string[]
 }
 
 export interface WafOverviewSite {
   domain: string
+  /** The inspection engine this site runs. Absent from an older panel. */
+  engine?: WafEngine | ""
   mode: WafMode
   paranoia: number
   rate_limit: boolean
@@ -79,6 +172,8 @@ export interface WafOverview {
   flavor: string
   reason: string
   sites: WafOverviewSite[]
+  /** The second engine's state, the same value the Store card carries. */
+  open_appsec?: import("@/lib/appsec").AppsecAvailability
 }
 
 export type TrafficRange = "5m" | "15m" | "1h"
@@ -166,6 +261,12 @@ export interface WafEvent {
   seq: number
   time: string | number
   site: string
+  /**
+   * The engine that produced the event. A ModSecurity event carries
+   * "modsecurity" and an open-appsec one "open-appsec"; absent from an older
+   * panel, which only had the first.
+   */
+  engine?: WafEngine | ""
   ip: string
   method: string
   uri: string
@@ -176,6 +277,17 @@ export interface WafEvent {
   message: string
   severity: string
   matches: WafMatch[]
+  /**
+   * open-appsec's own fields. A ModSecurity event leaves them empty, and an
+   * open-appsec event leaves `rule_id` 0, because the agent has no rule ids.
+   *
+   * `confidence` is the engine's own certainty ("Very High"), `attack_type`
+   * what it says fired ("SQL Injection"), and `parameter` the request field
+   * that matched with where ("id (url parameter)").
+   */
+  confidence?: string
+  attack_type?: string
+  parameter?: string
 }
 
 export interface WafEvents {
@@ -213,12 +325,14 @@ export function queryString(params: Record<string, string | number | undefined |
 }
 
 export const DEFAULT_WAF_CONFIG: WafConfig = {
+  engine: "modsecurity",
   mode: "off",
   paranoia: 1,
   rate_limit: { enabled: false, requests_per_second: 10, burst: 20 },
   path_blocklist: [],
   ip_rules: { allow: [], deny: [] },
   exclusions: [],
+  open_appsec: { confidence: "high", exceptions: [] },
   challenge: {
     enabled: false,
     provider: "pow",
@@ -299,6 +413,28 @@ export function exclusionProblem(e: WafExclusion): string | null {
   return null
 }
 
+/** Why an open-appsec exception cannot be added, or null. */
+export function exceptionProblem(e: WafOpenAppsecException): string | null {
+  switch (e.kind) {
+    case "path":
+      // Not offered, and not savable: the agent does not compile a urlPath
+      // exception, so accepting one would be a control that does nothing.
+      return "Path exceptions are not supported by the open-appsec agent and cannot be saved."
+    case "source_ip":
+      if (!isValidIPEntry(e.source_ip)) return "Not an IP address or CIDR range."
+      break
+    case "param":
+      if (!isValidArg(e.param)) {
+        return "Parameter name may use letters, digits and _ . - [ ], up to 64 characters."
+      }
+      break
+    default:
+      return "Choose a source network or a request parameter."
+  }
+  if (e.note.length > WAF_LIMITS.note) return `Note is limited to ${WAF_LIMITS.note} characters.`
+  return null
+}
+
 /** Field → message for everything the whole-config PUT would refuse, mirrored client-side. */
 export function configProblems(c: WafConfig): Record<string, string> {
   const out: Record<string, string> = {}
@@ -316,6 +452,20 @@ export function configProblems(c: WafConfig): Record<string, string> {
     if (c.ip_rules[side].length > WAF_LIMITS.ips) out[`ip_${side}`] = `At most ${WAF_LIMITS.ips} entries.`
   }
   if (c.exclusions.length > WAF_LIMITS.exclusions) out.exclusions = `At most ${WAF_LIMITS.exclusions} exclusions.`
+  const oa = c.open_appsec
+  if (!CONFIDENCE_OPTIONS.some((o) => o.value === oa.confidence)) {
+    out.open_appsec_confidence = "Choose critical, high or medium."
+  }
+  if (oa.exceptions.length > WAF_LIMITS.exclusions) {
+    out.open_appsec_exceptions = `At most ${WAF_LIMITS.exclusions} exceptions.`
+  }
+  for (const e of oa.exceptions) {
+    const bad = exceptionProblem(e)
+    if (bad) {
+      out.open_appsec_exceptions = `${e.kind === "path" ? "A path" : EXCEPTION_KIND_LABEL[e.kind]} exception: ${bad}`
+      break
+    }
+  }
   const ch = c.challenge
   if (ch.exempt_paths.length > WAF_LIMITS.paths) out.exempt_paths = `At most ${WAF_LIMITS.paths} paths.`
   if (ch.exempt_ips.length > WAF_LIMITS.ips) out.exempt_ips = `At most ${WAF_LIMITS.ips} entries.`
@@ -331,6 +481,18 @@ export const MODE_LABEL: Record<WafMode, string> = {
   off: "Off",
   detect: "Detection only",
   block: "Blocking",
+}
+
+/**
+ * What the panel's modes are called in open-appsec's own vocabulary. The mode is
+ * shared between the engines, so a site switched to open-appsec keeps its
+ * `detect`/`block` value and the panel says what the agent does with it — an
+ * operator reading the agent's logs must not have to guess.
+ */
+export const OPENAPPSEC_MODE_LABEL: Record<WafMode, string> = {
+  off: "Inactive",
+  detect: "detect-learn",
+  block: "prevent-learn",
 }
 
 export const PARANOIA_HELP: Record<1 | 2 | 3 | 4, string> = {

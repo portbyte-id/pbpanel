@@ -22,7 +22,10 @@ import { matchesQuery } from "@/lib/table"
 import { formatBytes } from "@/lib/sysinfo"
 import {
   compactCount,
+  ENGINE_LABEL,
+  engineOf,
   MODE_LABEL,
+  OPENAPPSEC_MODE_LABEL,
   statusClass,
   toMillis,
   type TrafficRange,
@@ -359,7 +362,7 @@ function Overview({
 
 const NO_WAF_MODE = "none"
 
-/** Per-site traffic with search by domain, a ModSecurity filter, and paging. */
+/** Per-site traffic with search by domain, an engine and ModSecurity filter, and paging. */
 function SitesTable({
   sites,
   modes,
@@ -371,11 +374,18 @@ function SitesTable({
 }) {
   const [search, setSearch] = useState("")
   const [mode, setMode] = useState("all")
+  const [engine, setEngine] = useState("all")
   const matching = sites.filter((s) => {
-    const current = modes.get(s.domain)?.mode ?? NO_WAF_MODE
-    return (mode === "all" || current === mode) && matchesQuery([s.domain], search)
+    const current = modes.get(s.domain)
+    const rowMode = current?.mode ?? NO_WAF_MODE
+    const rowEngine = current ? engineOf(current) : ""
+    return (
+      (mode === "all" || rowMode === mode) &&
+      (engine === "all" || rowEngine === engine) &&
+      matchesQuery([s.domain], search)
+    )
   })
-  const pager = usePagedRows(matching, `${search}|${mode}`)
+  const pager = usePagedRows(matching, `${search}|${mode}|${engine}`)
   return (
     <>
       <TableToolbar
@@ -384,6 +394,15 @@ function SitesTable({
         searchLabel="Search sites"
         placeholder="Search by domain"
       >
+        <TableFilter
+          label="Engine"
+          value={engine}
+          onChange={setEngine}
+          options={[
+            { value: "modsecurity", label: ENGINE_LABEL.modsecurity },
+            { value: "open-appsec", label: ENGINE_LABEL["open-appsec"] },
+          ]}
+        />
         <TableFilter
           label="ModSecurity"
           value={mode}
@@ -403,17 +422,19 @@ function SitesTable({
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
               <tr>
                 <th scope="col" className="px-3 py-1.5 font-medium">Site</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Engine</th>
                 <th scope="col" className="px-3 py-1.5 text-right font-medium">Requests</th>
                 <th scope="col" className="px-3 py-1.5 text-right font-medium">Errors</th>
                 <th scope="col" className="px-3 py-1.5 text-right font-medium">Error rate</th>
                 <th scope="col" className="px-3 py-1.5 text-right font-medium">WAF events</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">ModSecurity</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Mode</th>
                 <th scope="col" className="px-3 py-1.5 font-medium">Also on</th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
               {pager.rows.map((s) => {
                 const m = modes.get(s.domain)
+                const e = m ? engineOf(m) : ""
                 return (
                   <tr key={s.domain}>
                     <td className="px-3 py-1.5">
@@ -425,6 +446,13 @@ function SitesTable({
                         {s.domain}
                       </button>
                     </td>
+                    <td className="px-3 py-1.5">
+                      {e === "" ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <Badge variant={e === "open-appsec" ? "info" : "secondary"}>{ENGINE_LABEL[e]}</Badge>
+                      )}
+                    </td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString("en-US")}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString("en-US")}</td>
                     <td className="text-muted-foreground px-3 py-1.5 text-right text-xs tabular-nums">
@@ -435,7 +463,8 @@ function SitesTable({
                       {m ? (
                         <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "destructive"}>
                           {MODE_LABEL[m.mode as WafMode]}
-                          {m.mode !== "off" && ` · level ${m.paranoia}`}
+                          {m.mode !== "off" && e === "modsecurity" && ` · level ${m.paranoia}`}
+                          {m.mode !== "off" && e === "open-appsec" && ` · ${OPENAPPSEC_MODE_LABEL[m.mode as WafMode]}`}
                         </Badge>
                       ) : (
                         <span className="text-muted-foreground">—</span>

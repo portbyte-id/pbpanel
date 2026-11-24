@@ -12,6 +12,7 @@
  */
 
 import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
+import type { AppsecActionResponse, AppsecAvailability } from "@/lib/appsec"
 import type { JobRecord } from "@/lib/jobs"
 import type {
   DockerAction,
@@ -1097,6 +1098,33 @@ export class ApiClient {
 
   async wafEventSummary(site: string, range: TrafficRange): Promise<WafEventSummary> {
     return this.request<WafEventSummary>(`/api/waf/events/summary${queryString({ site, range })}`)
+  }
+
+  /* --- open-appsec (the second firewall engine) --------------------------- */
+
+  /**
+   * GET /api/appsec: the Store card's state. Answers 503 `unavailable` on a panel
+   * with no appsec package, which is a state to explain rather than retry.
+   */
+  async appsec(): Promise<AppsecAvailability> {
+    return this.request<AppsecAvailability>("/api/appsec")
+  }
+
+  /**
+   * POST /api/appsec/install. The acknowledgement is the value the server itself
+   * gave, sent back so an install is never a silent POST; without it the route
+   * answers 422 on field `acknowledge` and starts no job.
+   */
+  async installAppsec(acknowledge: string): Promise<AppsecActionResponse> {
+    return this.request<AppsecActionResponse>("/api/appsec/install", {
+      method: "POST",
+      body: JSON.stringify({ acknowledge }),
+    })
+  }
+
+  /** POST /api/appsec/uninstall. Refused while any site's firewall runs the engine. */
+  async uninstallAppsec(): Promise<AppsecActionResponse> {
+    return this.request<AppsecActionResponse>("/api/appsec/uninstall", { method: "POST" })
   }
 
   /**

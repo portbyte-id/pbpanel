@@ -10,6 +10,7 @@ import {
   Globe,
   ListChecks,
   LockKeyhole,
+  Package,
   ScrollText,
   Server,
   Settings,
@@ -79,6 +80,7 @@ export const navGroups: NavGroup[] = [
       { label: "Files", icon: FolderTree, path: "/files", description: "Browse, edit and upload files", keywords: "file manager upload" },
       { label: "TLS", icon: LockKeyhole, path: "/tls", description: "Certificates and renewals", keywords: "ssl https acme letsencrypt" },
       { label: "Runtimes", icon: Cpu, path: "/runtimes", description: "Nginx, PHP and Node.js: versions, builds and settings", keywords: "nginx php node fpm ini config reload docker image nvm" },
+      { label: "Store", icon: Package, path: "/store", description: "Engines and runtimes the panel installs for this host", keywords: "install engine appsec open-appsec agent firewall" },
     ],
   },
   {

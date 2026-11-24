@@ -22,6 +22,8 @@ export const wafKeys = {
   global: ["waf", "global"] as const,
   sources: (range: TrafficRange) => ["waf", "sources", range] as const,
   geo: ["waf", "geo"] as const,
+  /** The open-appsec agent's state: the Store card's own key, shared by the pages. */
+  appsec: ["appsec"] as const,
 }
 
 /** How often the monitor asks again, and how many feed rows it keeps. */
@@ -51,8 +53,40 @@ export function useSaveSiteWaf(domain: string) {
     mutationFn: (config: WafConfig) => api.saveSiteWaf(domain, config),
     onSuccess: (res) => {
       client.setQueryData(wafKeys.site(domain), res)
+      // A site switching to or off open-appsec changes what the agent's state
+      // means elsewhere (the overview's engine column, the Store card's "in
+      // use"), so both are asked again.
+      void client.invalidateQueries({ queryKey: wafKeys.appsec })
       return client.invalidateQueries({ queryKey: wafKeys.overview })
     },
+  })
+}
+
+/**
+ * The open-appsec agent's state. It answers 503 on a panel with no appsec
+ * package, which the caller shows as "not on this host" rather than retrying.
+ */
+export function useAppsec() {
+  return useQuery({ queryKey: wafKeys.appsec, queryFn: () => api.appsec(), retry: false })
+}
+
+/** The agent's install, as a job. The acknowledgement is required by the server. */
+export function useInstallAppsec() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "open-appsec install started" },
+    mutationFn: (acknowledge: string) => api.installAppsec(acknowledge),
+    onSuccess: () => client.invalidateQueries({ queryKey: wafKeys.appsec }),
+  })
+}
+
+/** The agent's removal, as a job. Refused while a site still runs the engine. */
+export function useUninstallAppsec() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "open-appsec uninstall started" },
+    mutationFn: () => api.uninstallAppsec(),
+    onSuccess: () => client.invalidateQueries({ queryKey: wafKeys.appsec }),
   })
 }
 
