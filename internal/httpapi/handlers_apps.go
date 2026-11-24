@@ -111,6 +111,14 @@ func (s *server) appsFail(w http.ResponseWriter, r *http.Request, err error) {
 			Detail: "that Node.js version is not installed; install it on the Runtimes page first", Field: "node_version"})
 	case errors.Is(err, apps.ErrAlreadyRunning):
 		writeError(w, http.StatusConflict, errConflict, "the app is already running")
+	case errors.Is(err, apps.ErrStartFailed):
+		// The wrapped text is supervisord's reason ("spawn error", "exited too
+		// quickly"); the program's own output is in its log.
+		detail := "the app failed to start"
+		if _, reason, ok := strings.Cut(err.Error(), "start: "); ok && reason != "" {
+			detail += ": " + reason
+		}
+		writeError(w, http.StatusBadGateway, errApplyFailed, detail+"; see the log for its output")
 	case errors.Is(err, apps.ErrNoProcess):
 		writeError(w, http.StatusConflict, errConflict, "supervisord has not loaded that app; save it again to load it")
 	case errors.As(err, &apply):

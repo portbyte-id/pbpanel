@@ -152,7 +152,13 @@ func (c *Client) RemoveGroup(ctx context.Context, name string) error {
 // Start starts a program and waits for it to stay up for its startsecs.
 func (c *Client) Start(ctx context.Context, name string) error {
 	_, err := c.call(ctx, "supervisor.startProcess", name, true)
-	return mapFault(err)
+	err = mapFault(err)
+	// Any fault left is the program failing to come up (spawn error, exited too
+	// soon, not executable): an outcome for the operator, not an internal error.
+	if f, ok := errors.AsType[*Fault](err); ok {
+		return fmt.Errorf("%w: %s", ErrStartFailed, f.String)
+	}
+	return err
 }
 
 // Stop stops a program and waits for it to exit.

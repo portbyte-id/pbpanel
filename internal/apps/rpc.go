@@ -34,6 +34,7 @@ var (
 	ErrNoProcess      = errors.New("apps: supervisord has no such program")
 	ErrAlreadyRunning = errors.New("apps: the app is already running")
 	ErrNotRunning     = errors.New("apps: the app is not running")
+	ErrStartFailed    = errors.New("apps: the app failed to start")
 )
 
 // rpcTimeout bounds one call. startProcess with wait=true holds the call open for

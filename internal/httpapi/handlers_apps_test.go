@@ -164,6 +164,7 @@ func TestAppsErrorMapping(t *testing.T) {
 		{"supervisord down", apps.ErrNoSupervisor, 503, "unavailable", ""},
 		{"supervisord down inside an apply error", &confedit.ApplyError{Stage: confedit.StageValidate, Err: apps.ErrNoSupervisor}, 503, "unavailable", ""},
 		{"already running", apps.ErrAlreadyRunning, 409, "conflict", ""},
+		{"failed to start", errors.Join(apps.ErrStartFailed, errors.New("SPAWN_ERROR")), 502, "apply_failed", ""},
 		{"rejected file", &confedit.ApplyError{Stage: confedit.StageValidate, Output: "line 3: bad", Err: errors.New("rejected")}, 422, "config_rejected", ""},
 		{"reload failed", &confedit.ApplyError{Stage: confedit.StageReload, Err: errors.New("x")}, 502, "apply_failed", ""},
 		{"rollback failed", &confedit.ApplyError{Stage: confedit.StageReload, Err: errors.New("x"), RollbackErr: errors.New("y")}, 500, "apply_failed", ""},
