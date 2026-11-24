@@ -711,6 +711,24 @@ the site that owns that `server_name`. The UI fields map cleanly: `securityActio
 numbering (`…handler.log1..4`, `…handler.dbg1..4`). Step 5 reads `…handler.log*`; the directory is
 root-only, and the panel's reader already runs as root.
 
+**Corrections found while building steps 4 and 5** (verified on the same host, 2026-11-25):
+
+- **There is no bare `cp-nano-http-transaction-handler.log`.** The bare name in the agent's config is
+  only the template each worker suffixes with its own `--id`. `open-appsec-ctl --view-logs` globs
+  `…handler.log?` — with the `?` — and `/proc/<pid>/fd` shows all four workers holding
+  `…handler.log<N>` open. A reader that opens the bare path finds nothing, forever, which is a silent
+  failure: the events page stays empty while every test passes. The panel must read **all four**
+  numbered files, one tail each, or it sees a quarter of the traffic.
+- **A lower file number is not older.** Measured spans: `log1` 17:59-18:28, `log2` 18:13-18:27,
+  `log3` 18:13-18:28:54, `log4` empty. Order merged events by each event's own `eventTime`, never by
+  file name.
+- **The live files differ from the samples above in whitespace and encoding**: there is a space after
+  every colon, and `httpUriQuery` is percent-encoded. Both forms parse; `internal/wafmon/testdata/`
+  now carries real lines of each.
+- **The zone-less `eventTime` is still unproven.** The sandbox runs UTC, where local and UTC readings
+  are indistinguishable, so whether the agent writes local time or UTC cannot be settled there and is
+  left for a non-UTC host.
+
 ### 0.7 Outbound traffic — D5
 
 **Hard stop. In hybrid "local management" mode the agent holds TLS connections to Check Point's
