@@ -89,6 +89,14 @@ func commandSet(stdout io.Writer) []*command {
 			},
 		},
 		{
+			name:    "domain-binding remove",
+			summary: "clear the panel domain binding from a console",
+			usage:   "pbp domain-binding remove",
+			run: func(ctx context.Context, _ []string) error {
+				return removeDomainBinding(ctx, stdout, databasePath())
+			},
+		},
+		{
 			name:    "version",
 			summary: "print the version and exit",
 			usage:   "pbp version",

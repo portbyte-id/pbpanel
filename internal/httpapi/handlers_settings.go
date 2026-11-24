@@ -164,6 +164,9 @@ func (s *server) writeSettingError(w http.ResponseWriter, r *http.Request, write
 // afterwards. A value the registry would reject is left for Set to report, so
 // validation messages stay in one place.
 func (s *server) applyLive(r *http.Request, write settingWrite) (undo func(), err error) {
+	if write.Name == settings.KeyPanelDomain {
+		return nil, s.checkBindingHost(r, write.Value)
+	}
 	if write.Name != "panel.port" || s.deps.Rebind == nil {
 		return nil, nil
 	}

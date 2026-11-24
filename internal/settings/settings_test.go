@@ -564,7 +564,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	}
 
 	wantKeys := map[string][]string{
-		"Panel":   {"panel.port", "panel.bind"},
+		"Panel":   {"panel.port", "panel.bind", "panel.domain"},
 		"Login":   {"login.max_attempts", "login.lockout"},
 		"Session": {"session.idle_timeout"},
 		"PHP":     {"php.versions"},

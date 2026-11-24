@@ -20,11 +20,12 @@ type server struct {
 //
 // The chain runs outermost first:
 //
-//	request ID -> recover -> security headers -> session -> CSRF -> audit -> route
+//	request ID -> recover -> security headers -> domain binding -> session -> CSRF -> audit -> route
 //
 // Request ID is first so every later line can be correlated; recover is next so
 // a panic in anything inside it still becomes a JSON 500; headers are set before
-// any body is written; session resolves the cookie for both the CSRF check and
+// any body is written; domain binding refuses a foreign Host before any session
+// or route is consulted; session resolves the cookie for both the CSRF check and
 // the handlers; CSRF guards every unsafe method; audit records the outcome last,
 // after the handler has decided it.
 func New(deps Deps) (http.Handler, error) {
@@ -115,6 +116,7 @@ func (s *server) middleware(next http.Handler) http.Handler {
 	h = s.withAudit(h)
 	h = s.withCSRF(h)
 	h = s.withSession(h)
+	h = s.withDomainBinding(h)
 	h = withSecurityHeaders(h)
 	h = s.withRecover(h)
 	h = withRequestID(h)

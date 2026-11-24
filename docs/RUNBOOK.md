@@ -66,6 +66,7 @@ The same binary is the console tool. It works while the daemon runs (SQLite WAL)
 | Change one setting through the registry validators | `pbp set <key> <value>` |
 | Restore the saved firewall ruleset at boot | `pbp firewall restore` |
 | Unhook and flush the panel chains from a console (firewall lock-out) | `pbp firewall disable` |
+| Clear the panel domain binding from a console (domain lock-out) | `pbp domain-binding remove` |
 | Print the build version | `pbp version` |
 
 ### Roll back a runtime build by hand
@@ -107,6 +108,7 @@ restart the daemon.
 |---------|----------------------|
 | Locked out of the panel port | You changed `panel.port`. The listener binds the new port before closing the old after a grace period; a bind that fails is refused and the old port keeps serving. Use `pbp info` to see the live port. |
 | Firewall locked you out | SSH/panel port rules are built in and undeletable. From a console, `pbp firewall disable`. A daemon restart before a pending apply is confirmed reverts the ruleset. |
+| Panel answers "This panel answers only at ..." (HTTP 421) | The domain binding (Settings → Panel → Panel domain) is set and the request came in on another name or an IP address. Open the panel at the bound name, or clear the binding from a console with `pbp domain-binding remove`. The change applies at once, no restart. |
 | Panel up but sites do not serve | Check `systemctl status panel-nginx` and `nginx -t`. The boot reconcile re-renders panel-owned files, ensures the container/service, and reloads once. |
 | A site feature is greyed out | The include line it owns was removed from the raw site file; the feature is "detached". Confirm "Regenerate site file" to reattach. |
 | ACME order fails | The default CA is Let's Encrypt **staging** (untrusted certs). Choose a production directory in Settings → TLS. HTTP-01 needs port 80 reachable; a pre-flight never calls the CA on failure. |

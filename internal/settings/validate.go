@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -127,6 +128,32 @@ func validateOptionalTurnstileSecret(value string) error {
 func validateAddr(value string) error {
 	if _, err := netip.ParseAddr(value); err != nil {
 		return fmt.Errorf("must be an IP address such as 0.0.0.0 or 127.0.0.1")
+	}
+	return nil
+}
+
+// bindingLabelRe is one DNS label: letters, digits and inner hyphens, at most 63
+// characters.
+var bindingLabelRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// validateBindingDomain accepts "" (no binding) or a host name with at least two
+// labels. An IP address is refused: the binding is about a name the operator
+// owns, and an address would not survive a change of network.
+func validateBindingDomain(value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := netip.ParseAddr(value); err == nil || len(value) > 253 {
+		return fmt.Errorf("must be a domain name such as panel.example.com, not an IP address")
+	}
+	labels := strings.Split(value, ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("must be a domain name with at least two parts, such as panel.example.com")
+	}
+	for _, l := range labels {
+		if !bindingLabelRe.MatchString(l) {
+			return fmt.Errorf("%q is not a valid domain name", value)
+		}
 	}
 	return nil
 }

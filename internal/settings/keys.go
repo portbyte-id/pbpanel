@@ -13,6 +13,10 @@ import (
 	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
+// KeyPanelDomain is the host name the panel is bound to. Empty means no binding.
+// The HTTP layer reads it on every request, so a change applies without a restart.
+const KeyPanelDomain = "panel.domain"
+
 // Groups shown on the Settings page, in this order.
 const (
 	groupPanel    = "Panel"
@@ -222,6 +226,19 @@ func defaultKeys() []key {
 				Group:           groupPanel,
 			},
 			check: validateAddr,
+		},
+		{
+			meta: Meta{
+				Name:     KeyPanelDomain,
+				Type:     TypeString,
+				Default:  "",
+				Optional: true,
+				Description: "Domain the panel answers on. When set, a request for any other host name, " +
+					"an IP address included, is refused. Empty turns the binding off. Open the panel at this " +
+					"domain to set it. From a console, `pbp domain-binding remove` clears it.",
+				Group: groupPanel,
+			},
+			check: validateBindingDomain,
 		},
 		{
 			meta: Meta{
