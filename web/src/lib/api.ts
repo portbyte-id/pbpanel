@@ -63,6 +63,16 @@ export interface LoginResponse {
   csrf_token: string
 }
 
+/**
+ * GET /api/login/challenge. `required` is true after a failed login from this
+ * address; the next attempt then needs the solved `challenge` as `nonce`.
+ */
+export interface LoginChallenge {
+  required: boolean
+  challenge?: string
+  difficulty?: number
+}
+
 export interface MeResponse {
   username: string
   csrf_token: string
@@ -879,14 +889,27 @@ export class ApiClient {
     this.#csrfToken = token
   }
 
-  /** POST /api/login. A 401 here is bad credentials, not a lost session. */
-  async login(username: string, password: string): Promise<LoginResponse> {
+  /**
+   * POST /api/login. A 401 here is bad credentials, not a lost session. After a
+   * failed login the server answers 403 `challenge_required` until a solved
+   * check comes with the attempt.
+   */
+  async login(
+    username: string,
+    password: string,
+    check?: { challenge: string; nonce: string },
+  ): Promise<LoginResponse> {
     const res = await this.request<LoginResponse>("/api/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, ...check }),
     })
     this.setCsrfToken(res.csrf_token)
     return res
+  }
+
+  /** GET /api/login/challenge. Public: the login page asks before anyone signs in. */
+  async loginChallenge(): Promise<LoginChallenge> {
+    return this.request<LoginChallenge>("/api/login/challenge")
   }
 
   /** POST /api/logout. The session is revoked either way, so a failure is not fatal. */
@@ -2015,7 +2038,8 @@ function tlsPath(domain: string): string {
 }
 
 function isLoginPath(path: string): boolean {
-  return path.split("?")[0] === "/api/login"
+  const bare = path.split("?")[0]
+  return bare === "/api/login" || bare === "/api/login/challenge"
 }
 
 /** The client the app uses. Tests construct their own with an injected fetch. */

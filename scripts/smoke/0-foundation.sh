@@ -108,6 +108,9 @@ assert_not_equal "reset-password printed a new password" "" "$new_pass"
 assert_not_equal "the new password differs from the old one" "$admin_pass" "$new_pass"
 assert_http "the old session is rejected" 401 "$(api_call GET "$host" "$SMOKE_NEW_PORT" /api/me)"
 assert_http "the old password no longer logs in" 401 "$(api_login "$host" "$SMOKE_NEW_PORT" "$admin_user" "$admin_pass")"
+# The failed login above puts a browser check on this address, which a plain
+# script cannot solve. The operator's unlock clears it, as it clears a lockout.
+vm "$PANEL unlock-login" >/dev/null 2>&1 || true
 assert_http "the new password logs in" 200 "$(api_login "$host" "$SMOKE_NEW_PORT" "$admin_user" "$new_pass")"
 
 # --- 7. panel info -----------------------------------------------------------

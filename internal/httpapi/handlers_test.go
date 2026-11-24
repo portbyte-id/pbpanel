@@ -95,22 +95,19 @@ func TestLoginLockoutIs429(t *testing.T) {
 	// ordinary 401s; the fifth failure is the one that opens the lockout, so it
 	// already answers 429.
 	for i := range 4 {
-		rec := h.do(http.MethodPost, "/api/login", "", "",
-			map[string]string{"username": testUser, "password": "wrong password here"})
+		rec := h.postLogin(testUser, "wrong password here")
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: status = %d, want 401", i+1, rec.Code)
 		}
 	}
 
-	fifth := h.do(http.MethodPost, "/api/login", "", "",
-		map[string]string{"username": testUser, "password": "wrong password here"})
+	fifth := h.postLogin(testUser, "wrong password here")
 	if fifth.Code != http.StatusTooManyRequests {
 		t.Fatalf("fifth attempt: status = %d, want 429", fifth.Code)
 	}
 
 	// Even the correct password is refused while the lockout is open.
-	rec := h.do(http.MethodPost, "/api/login", "", "",
-		map[string]string{"username": testUser, "password": testPassword})
+	rec := h.postLogin(testUser, testPassword)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -193,8 +190,7 @@ func TestPasswordChangeRevokesEverything(t *testing.T) {
 	}
 
 	// The new one does.
-	fresh := h.do(http.MethodPost, "/api/login", "", "",
-		map[string]string{"username": testUser, "password": newPassword})
+	fresh := h.postLogin(testUser, newPassword)
 	if fresh.Code != http.StatusOK {
 		t.Fatalf("new password: status = %d, want 200 (body %s)", fresh.Code, fresh.Body.String())
 	}
@@ -258,8 +254,7 @@ func TestUsernameChangeRenamesAndRevokes(t *testing.T) {
 		t.Errorf("old username: status = %d, want 401", old.Code)
 	}
 
-	fresh := h.do(http.MethodPost, "/api/login", "", "",
-		map[string]string{"username": newUser, "password": testPassword})
+	fresh := h.postLogin(newUser, testPassword)
 	if fresh.Code != http.StatusOK {
 		t.Fatalf("new username: status = %d, want 200 (body %s)", fresh.Code, fresh.Body.String())
 	}

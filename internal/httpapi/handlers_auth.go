@@ -14,6 +14,18 @@ import (
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// Challenge and Nonce are a solved browser check. An address with a failed
+	// login on record must send them; see handleLoginChallenge.
+	Challenge string `json:"challenge"`
+	Nonce     string `json:"nonce"`
+}
+
+// loginChallengeResponse tells the login page whether the next attempt needs a
+// browser check and, if it does, hands over a puzzle to solve.
+type loginChallengeResponse struct {
+	Required   bool   `json:"required"`
+	Challenge  string `json:"challenge,omitempty"`
+	Difficulty int    `json:"difficulty,omitempty"`
 }
 
 // loginResponse is what a successful login returns. The session itself travels
@@ -42,7 +54,26 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := s.deps.Auth.VerifyLogin(r.Context(), req.Username, req.Password, clientIP(r), r.UserAgent())
+	ip, ua := clientIP(r), r.UserAgent()
+	// After a failed login the next attempt must carry a fresh, solved check. It
+	// is spent before the password is verified, so a script that skips the page
+	// pays the proof of work and gets no argon2 work for it. A locked-out address
+	// is not asked for one: VerifyLogin answers 429 for it.
+	required, err := s.deps.Auth.LoginChallengeRequired(r.Context(), ip)
+	if err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	if required {
+		if _, locked := s.deps.Auth.Throttle().LockedUntil(ip); !locked {
+			if err := s.checks.redeem(ip, ua, req.Challenge, req.Nonce); err != nil {
+				writeError(w, http.StatusForbidden, errChallengeRequired, checkDetail)
+				return
+			}
+		}
+	}
+
+	session, err := s.deps.Auth.VerifyLogin(r.Context(), req.Username, req.Password, ip, ua)
 	if err != nil {
 		s.writeLoginError(w, r, err)
 		return
@@ -60,6 +91,30 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 	})
 	writeJSON(w, http.StatusOK, loginResponse{Username: req.Username, CSRFToken: session.CSRFToken})
+}
+
+// handleLoginChallenge says whether the next login from this address needs a
+// browser check. It is public, because the login page asks before anyone has
+// signed in. When a check is needed it also issues a puzzle; the page fetches a
+// new one each time the visitor ticks the box, so a puzzle does not go stale
+// while the page sits open.
+func (s *server) handleLoginChallenge(w http.ResponseWriter, r *http.Request) {
+	ip, ua := clientIP(r), r.UserAgent()
+	required, err := s.deps.Auth.LoginChallengeRequired(r.Context(), ip)
+	if err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	if !required {
+		writeJSON(w, http.StatusOK, loginChallengeResponse{})
+		return
+	}
+	token, err := s.checks.issue(ip, ua)
+	if err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, loginChallengeResponse{Required: true, Challenge: token, Difficulty: loginDifficulty})
 }
 
 // writeLoginError turns the auth package's failures into the responses the API

@@ -204,3 +204,56 @@ func TestThrottleGCForgetsExpiredEntries(t *testing.T) {
 		t.Fatalf("tracked %d IPs after a second GC, want 1 (the recent entry)", got)
 	}
 }
+
+// TestThrottleChallengedFromFirstFailureUntilSuccess proves the browser check is
+// required from the first failed login, stays required through a lockout and
+// after it, and is lifted only by a successful login.
+func TestThrottleChallengedFromFirstFailureUntilSuccess(t *testing.T) {
+	clock := newFakeClock()
+	th := newThrottle(t, clock)
+	const ip = "203.0.113.7"
+
+	if th.Challenged(ip) {
+		t.Fatal("a client with no failure is challenged")
+	}
+
+	th.Fail(ip)
+	if !th.Challenged(ip) {
+		t.Fatal("not challenged after the first failure")
+	}
+
+	for range testMaxAttempts - 1 {
+		th.Fail(ip)
+	}
+	if _, locked := th.Check(ip); !locked {
+		t.Fatal("expected a lockout after max attempts")
+	}
+	if !th.Challenged(ip) {
+		t.Fatal("not challenged while locked out")
+	}
+
+	clock.advance(testLockout + time.Second)
+	if !th.Challenged(ip) {
+		t.Fatal("challenge lapsed as soon as the lockout ended")
+	}
+
+	th.Reset(ip)
+	if th.Challenged(ip) {
+		t.Fatal("still challenged after a successful login")
+	}
+}
+
+// TestThrottleChallengeLapsesWhenIdle proves the record is dropped by GC once an
+// address has been quiet for the GC interval, so a single old typo does not
+// challenge a visitor forever.
+func TestThrottleChallengeLapsesWhenIdle(t *testing.T) {
+	clock := newFakeClock()
+	th := newThrottle(t, clock)
+	const ip = "203.0.113.7"
+
+	th.Fail(ip)
+	clock.advance(2 * time.Hour)
+	if th.Challenged(ip) {
+		t.Fatal("challenge still on after two idle hours")
+	}
+}

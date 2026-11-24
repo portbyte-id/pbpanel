@@ -125,6 +125,20 @@ func (t *Throttle) Reset(ip string) {
 	delete(t.perIP, ip)
 }
 
+// Challenged reports whether ip must pass the browser check before its next
+// login attempt. The first failed login from ip creates its record, and a
+// successful login removes it. A lockout keeps the record, so the check stays
+// required after the window ends too. The record is dropped by the same GC that
+// drops idle counters: no failure and no lockout for gcEvery.
+func (t *Throttle) Challenged(ip string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.gcLocked(t.clock.Now())
+	_, ok := t.perIP[ip]
+	return ok
+}
+
 // Clear forgets every counter and lockout, per address and global. It is what an
 // operator-issued unlock (`pbp unlock-login`) ends in: the lockout is a real
 // control, but the one person it can lock out must have a way back in.

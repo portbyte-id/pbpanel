@@ -1,12 +1,23 @@
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { Eye, EyeOff } from "lucide-react"
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 
+import { LoginCheck } from "@/components/LoginCheck"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ApiError } from "@/lib/api"
+import { api, ApiError } from "@/lib/api"
+import type { LoginCheckAnswer } from "@/lib/loginCheck"
 import { useLogin } from "@/lib/queries"
+
+/**
+ * A refused attempt that leaves a check on the next one: bad credentials (401),
+ * a missing or spent check (403), or a lockout (429). Each of them means the
+ * address now has a failure on record, so the check comes back.
+ */
+function refusalNeedsCheck(err: unknown): boolean {
+  return err instanceof ApiError && [401, 403, 429].includes(err.status)
+}
 
 /**
  * The login page. It is the one route outside the auth guard, and the only
@@ -19,16 +30,45 @@ export function LoginPage() {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
+  // Once a sign-in has failed from this address, every attempt carries a solved
+  // browser check. `solved` is that answer, `attempt` restarts the check unticked.
+  const [checkRequired, setCheckRequired] = useState(false)
+  const [solved, setSolved] = useState<LoginCheckAnswer | null>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  // A reload after a failure still shows the check. A failed lookup is not
+  // fatal: the server enforces the check whether or not the page knows of it.
+  useEffect(() => {
+    let live = true
+    api.loginChallenge().then(
+      (issued) => {
+        if (live && issued.required) setCheckRequired(true)
+      },
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    if (checkRequired && solved === null) return
     login.mutate(
-      { username, password },
+      { username, password, check: checkRequired ? (solved ?? undefined) : undefined },
       {
         // `redirect` is set when the guard sent the operator here from a page
         // they asked for, so they land back on it instead of the default one.
         onSuccess: () => {
           void navigate({ to: search.redirect ?? "/dashboard", replace: true })
+        },
+        onError: (err) => {
+          if (refusalNeedsCheck(err)) {
+            // The answer just used is spent, so the next attempt needs a new one.
+            setCheckRequired(true)
+            setSolved(null)
+            setAttempt((n) => n + 1)
+          }
         },
       },
     )
@@ -83,13 +123,20 @@ export function LoginPage() {
             </div>
           </div>
 
+          {checkRequired && <LoginCheck key={attempt} onSolved={setSolved} />}
+
           {error && (
             <p role="alert" className="text-destructive text-sm">
               {error}
             </p>
           )}
 
-          <Button type="submit" size="lg" className="w-full" disabled={login.isPending}>
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full"
+            disabled={login.isPending || (checkRequired && solved === null)}
+          >
             {login.isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>

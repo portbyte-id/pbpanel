@@ -179,8 +179,11 @@ export function useChangeUsername() {
 export function useLogin() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: { username: string; password: string }) =>
-      api.login(input.username, input.password),
+    mutationFn: (input: {
+      username: string
+      password: string
+      check?: { challenge: string; nonce: string }
+    }) => api.login(input.username, input.password, input.check),
     onSuccess: (res) => {
       client.setQueryData(queryKeys.me, { username: res.username, csrf_token: res.csrf_token })
     },

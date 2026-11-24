@@ -22,6 +22,7 @@ import (
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // nginx's secure_link module only speaks MD5; the secret makes it a keyed hash.
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -173,6 +174,24 @@ func checkPuzzle(key []byte, ip, ua, token, nonce string, now time.Time) error {
 		return errPuzzleWrong
 	}
 	return nil
+}
+
+// IssuePuzzle returns a fresh proof-of-work puzzle for one client. key is a
+// secret the caller keeps for the life of the process. The puzzle is valid for
+// five minutes and only for this address and user agent.
+func IssuePuzzle(key []byte, ip, ua string, difficulty int, now time.Time) (string, error) {
+	var rnd [12]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return "", fmt.Errorf("guard: random puzzle: %w", err)
+	}
+	return newPuzzle(key, ip, ua, difficulty, now, hex.EncodeToString(rnd[:])), nil
+}
+
+// CheckPuzzle reports whether nonce solves a puzzle IssuePuzzle returned for the
+// same key, address and user agent. It does not remember answers: the caller
+// decides whether a solved puzzle may be used again.
+func CheckPuzzle(key []byte, ip, ua, token, nonce string, now time.Time) error {
+	return checkPuzzle(key, ip, ua, token, nonce, now)
 }
 
 // LeadingZeroBits counts the zero bits a hash starts with.

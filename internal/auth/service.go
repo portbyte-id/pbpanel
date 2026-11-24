@@ -270,6 +270,19 @@ func (s *Service) UnlockLogin(ctx context.Context) error {
 	return s.st.SaveSetting(ctx, unlockKey, formatTime(s.clock.Now()))
 }
 
+// LoginChallengeRequired reports whether ip must solve the browser check before
+// its next login attempt. It applies a pending unlock first, as VerifyLogin does,
+// so `pbp unlock-login` lifts the check on the very next request as well.
+func (s *Service) LoginChallengeRequired(ctx context.Context, ip string) (bool, error) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+
+	if err := s.applyUnlock(ctx); err != nil {
+		return false, err
+	}
+	return s.throttle.Challenged(ip), nil
+}
+
 // applyUnlock clears the throttle when UnlockLogin has run since the last time
 // this service looked. The caller holds loginMu.
 func (s *Service) applyUnlock(ctx context.Context) error {

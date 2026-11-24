@@ -13,6 +13,8 @@ import (
 type server struct {
 	deps   Deps
 	logger *slog.Logger
+	// checks issues and redeems the browser checks a login after a failure needs.
+	checks *loginCheck
 }
 
 // New builds the HTTP handler for the panel: the middleware chain and every
@@ -32,7 +34,11 @@ func New(deps Deps) (http.Handler, error) {
 	if err := deps.validate(); err != nil {
 		return nil, err
 	}
-	s := &server{deps: deps, logger: deps.Logger}
+	checks, err := newLoginCheck()
+	if err != nil {
+		return nil, err
+	}
+	s := &server{deps: deps, logger: deps.Logger, checks: checks}
 	return s.routes(), nil
 }
 
@@ -45,6 +51,7 @@ func (s *server) routes() http.Handler {
 	// Public: login is the only endpoint reachable without a session. Every
 	// other route is wrapped in requireAuth.
 	mux.Handle("POST /api/login", http.HandlerFunc(s.handleLogin))
+	mux.Handle("GET /api/login/challenge", http.HandlerFunc(s.handleLoginChallenge))
 
 	// The health probe answers without a session. `panel upgrade` uses it to
 	// decide whether a new binary came up, and the smoke script uses it to wait

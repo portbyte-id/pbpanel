@@ -7,8 +7,13 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
 
 ## Conventions
 
-- **Auth.** Every route except `POST /api/login` and `GET /api/health` needs a session cookie.
-  An unauthenticated request answers `401`.
+- **Auth.** Every route except `POST /api/login`, `GET /api/login/challenge` and `GET /api/health`
+  needs a session cookie. An unauthenticated request answers `401`.
+- **Login check.** After a failed login from an address, its next `POST /api/login` must carry
+  `challenge` and `nonce`: a proof-of-work answer from `GET /api/login/challenge`. A login without
+  a solved check answers `403 {"error":"challenge_required"}` before the password is checked. Each
+  answer opens one attempt. The check stays on until a successful login, and a lockout (`429`)
+  still applies on top of it.
 - **CSRF.** Unsafe methods (`POST`, `PUT`, `DELETE`, `PATCH`) need the session's token in the
   `X-CSRF-Token` header. A missing or wrong token answers `403`.
 - **Audit.** Every state-changing route writes an audit entry through the audit middleware.
@@ -17,13 +22,14 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
   wired answers `503 {"error":"unavailable"}`.
 - **Live streams.** Jobs and some logs use Server-Sent Events, resumable with `Last-Event-ID`.
 
-## Routes (162 under `/api`)
+## Routes (163 under `/api`)
 
 ### Session and account
 
 | Method | Path |
 |--------|------|
 | `POST` | `/api/login` |
+| `GET` | `/api/login/challenge` (no session needed) |
 | `POST` | `/api/logout` |
 | `GET` | `/api/me` |
 | `POST` | `/api/password` |
