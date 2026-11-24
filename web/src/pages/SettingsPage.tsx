@@ -88,7 +88,7 @@ export function SettingsPage() {
   const activeTab = tab ?? data?.groups[0]?.name ?? PANEL_CERT_TAB
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
       {(
         <Tabs value={activeTab} onValueChange={setTab} className="gap-3">
           <TabsList className="flex-wrap">
@@ -144,7 +144,13 @@ export function SettingsPage() {
         </p>
       )}
 
-      <div className={activeTab === PANEL_CERT_TAB ? "hidden" : "flex items-center gap-3"}>
+      <div
+        className={
+          activeTab === PANEL_CERT_TAB
+            ? "hidden"
+            : "bg-background/95 border-border sticky bottom-0 z-10 -mx-1 flex items-center gap-3 border-t px-1 py-3 backdrop-blur"
+        }
+      >
         <Button onClick={submit} disabled={dirty.length === 0 || save.isPending}>
           {save.isPending ? "Saving…" : "Save changes"}
         </Button>

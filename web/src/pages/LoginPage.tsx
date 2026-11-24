@@ -38,7 +38,7 @@ export function LoginPage() {
 
   return (
     <main className="bg-background flex min-h-svh items-center justify-center px-4">
-      <div className="w-full max-w-sm">
+      <div className="bg-card w-full max-w-sm rounded-xl border p-8 shadow-lg">
         <div className="mb-6 flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight">Server Panel</h1>
           <p className="text-muted-foreground text-sm">Sign in to manage this server.</p>
@@ -76,7 +76,7 @@ export function LoginPage() {
                 onClick={() => setShowPassword((v) => !v)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
                 aria-pressed={showPassword}
-                className="text-muted-foreground hover:text-foreground absolute top-0 right-0 grid h-8 w-9 place-items-center rounded-md pointer-coarse:h-10"
+                className="text-muted-foreground hover:text-foreground absolute top-0 right-0 grid h-9 w-9 place-items-center rounded-md pointer-coarse:h-10"
               >
                 {showPassword ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
               </button>
@@ -89,7 +89,7 @@ export function LoginPage() {
             </p>
           )}
 
-          <Button type="submit" disabled={login.isPending}>
+          <Button type="submit" size="lg" className="w-full" disabled={login.isPending}>
             {login.isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>
