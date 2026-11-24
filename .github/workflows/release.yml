@@ -11,10 +11,8 @@ permissions:
   contents: write
 
 jobs:
-
   release:
     name: Build and publish
-    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
