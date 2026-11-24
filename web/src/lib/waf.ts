@@ -367,3 +367,104 @@ export function statusClass(status: number): "2xx" | "3xx" | "4xx" | "5xx" | "ot
   if (status >= 500 && status < 600) return "5xx"
   return "other"
 }
+
+/** The bot-blocking switches. Each preset is a list the server keeps. */
+export interface WafBotBlock {
+  enabled: boolean
+  empty_agent: boolean
+  scanners: boolean
+  ai_crawlers: boolean
+  seo_crawlers: boolean
+  custom: string[]
+}
+
+/** The page a blocked visitor sees, in place of nginx's bare 403. */
+export interface WafErrorPage {
+  enabled: boolean
+  html: string
+}
+
+/** The firewall that applies to every site, on top of each site's own settings. */
+export interface WafGlobal {
+  bot_block: WafBotBlock
+  sensitive_files: boolean
+  block_trace: boolean
+  ip_deny: string[]
+  error_page: WafErrorPage
+}
+
+export type WafPresetName = "scanners" | "ai_crawlers" | "seo_crawlers"
+
+export interface WafGlobalResponse {
+  global: WafGlobal
+  default_html: string
+  presets: Record<WafPresetName, string[]>
+  warnings?: string[]
+}
+
+/** The country database behind the map, and the credit its license asks for. */
+export interface WafGeoStatus {
+  installed: boolean
+  month: string
+  entries: number
+  attribution: string
+  attribution_url: string
+  license_url: string
+}
+
+export interface WafCountry {
+  code: string
+  requests: number
+  blocked: number
+  addresses: number
+}
+
+export interface WafSourceIP {
+  ip: string
+  country: string
+  requests: number
+  errors: number
+  blocked: number
+}
+
+/** Where the requests of a window came from. */
+export interface WafSources {
+  range: TrafficRange
+  geo: WafGeoStatus
+  requests: number
+  blocked: number
+  unlocated: number
+  untracked: number
+  countries: WafCountry[]
+  top_ips: WafSourceIP[]
+}
+
+export const GLOBAL_LIMITS = {
+  customAgents: 200,
+  agentLength: 64,
+  pageBytes: 64 * 1024,
+} as const
+
+/** A User-Agent substring the server accepts: letters, digits and . _ / + - only. */
+export function isValidAgent(a: string): boolean {
+  return /^[A-Za-z0-9._/+-]{2,64}$/.test(a)
+}
+
+/** Split a textarea into trimmed, non-empty lines. */
+export function splitLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s !== "")
+}
+
+const regionNames = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(["en"], { type: "region" }) : null
+
+/** The English name of a two-letter country code, or the code when it has none. */
+export function countryName(code: string): string {
+  try {
+    return regionNames?.of(code) ?? code
+  } catch {
+    return code
+  }
+}

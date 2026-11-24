@@ -11,7 +11,7 @@ import { UserMenu } from "@/components/layout/UserMenu"
 import { useMe } from "@/lib/queries"
 
 /** Pages that use the whole content width instead of the centred column. */
-const FULL_WIDTH_PATHS = ["/files", "/logs", "/traffic"]
+const FULL_WIDTH_PATHS = ["/files", "/logs", "/waf"]
 
 /**
  * The signed-in frame: sidebar, header and the routed page.

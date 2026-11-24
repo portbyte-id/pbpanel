@@ -173,6 +173,11 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
 | `GET` | `/api/waf/requests` |
 | `GET` | `/api/waf/events` |
 | `GET` | `/api/waf/events/summary` |
+| `GET` | `/api/waf/global` |
+| `PUT` | `/api/waf/global` |
+| `GET` | `/api/waf/sources` |
+| `GET` | `/api/waf/geo` |
+| `POST` | `/api/waf/geo/download` |
 
 ### Apps and runtimes
 

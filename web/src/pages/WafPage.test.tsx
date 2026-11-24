@@ -4,15 +4,26 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { api, ApiError } from "@/lib/api"
-import type { TrafficPoint, TrafficRequest, TrafficSummary } from "@/lib/waf"
+import type { TrafficPoint, TrafficRequest, TrafficSummary, WafGlobalResponse, WafSources } from "@/lib/waf"
 import { pollWhileVisible } from "@/lib/wafQueries"
-import { TrafficPage } from "@/pages/TrafficPage"
+import { WafPage } from "@/pages/WafPage"
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return {
     ...actual,
-    api: { sites: vi.fn(), wafOverview: vi.fn(), wafTraffic: vi.fn(), wafRequests: vi.fn(), wafEventSummary: vi.fn() },
+    api: {
+      sites: vi.fn(),
+      wafOverview: vi.fn(),
+      wafTraffic: vi.fn(),
+      wafRequests: vi.fn(),
+      wafEventSummary: vi.fn(),
+      wafSources: vi.fn(),
+      wafGlobal: vi.fn(),
+      saveWafGlobal: vi.fn(),
+      wafGeo: vi.fn(),
+      downloadWafGeo: vi.fn(),
+    },
   }
 })
 
@@ -73,11 +84,42 @@ const req = (seq: number, over: Partial<TrafficRequest> = {}): TrafficRequest =>
   ...over,
 })
 
+const sources = (over: Partial<WafSources> = {}): WafSources => ({
+  range: "15m",
+  geo: {
+    installed: false,
+    month: "",
+    entries: 0,
+    attribution: "IP Geolocation by DB-IP",
+    attribution_url: "https://db-ip.com",
+    license_url: "https://creativecommons.org/licenses/by/4.0/",
+  },
+  requests: 12,
+  blocked: 2,
+  unlocated: 3,
+  untracked: 0,
+  countries: [{ code: "US", requests: 9, blocked: 2, addresses: 1 }],
+  top_ips: [{ ip: "198.51.100.4", country: "US", requests: 9, errors: 2, blocked: 2 }],
+  ...over,
+})
+
+const globalFixture = (): WafGlobalResponse => ({
+  global: {
+    bot_block: { enabled: false, empty_agent: false, scanners: true, ai_crawlers: false, seo_crawlers: false, custom: [] },
+    sensitive_files: false,
+    block_trace: false,
+    ip_deny: [],
+    error_page: { enabled: false, html: "<p>Blocked <!--#echo var=\"request_id\" --></p>" },
+  },
+  default_html: "<p>Default <!--#echo var=\"request_id\" --></p>",
+  presets: { scanners: ["sqlmap", "nikto"], ai_crawlers: ["GPTBot"], seo_crawlers: ["AhrefsBot"] },
+})
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <TrafficPage />
+      <WafPage />
     </QueryClientProvider>,
   )
 }
@@ -102,6 +144,8 @@ beforeEach(() => {
     ],
   })
   vi.mocked(api.wafTraffic).mockResolvedValue(summary())
+  vi.mocked(api.wafSources).mockResolvedValue(sources())
+  vi.mocked(api.wafGlobal).mockResolvedValue(globalFixture())
   vi.mocked(api.wafRequests).mockResolvedValue({ requests: [req(2), req(1)], latest_seq: 2 })
   vi.mocked(api.wafEventSummary).mockResolvedValue({
     top_rules: [
@@ -115,6 +159,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.mocked(api.wafTraffic).mockReset()
+  vi.mocked(api.wafSources).mockReset()
   vi.mocked(api.wafRequests).mockReset()
   setHidden(false)
 })
@@ -128,7 +173,7 @@ describe("pollWhileVisible", () => {
   })
 })
 
-describe("TrafficPage", () => {
+describe("WafPage", () => {
   it("puts the page root in a containing block so sr-only captions cannot escape main", async () => {
     // Each table's caption is `sr-only`: absolutely positioned, so without a
     // positioned ancestor it lays out against the initial containing block,

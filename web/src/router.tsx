@@ -20,6 +20,7 @@ import { settingsRoute } from "@/routes/_app/settings"
 import { sshRoute } from "@/routes/_app/ssh"
 import { tlsRoute } from "@/routes/_app/tls"
 import { trafficRoute } from "@/routes/_app/traffic"
+import { wafRoute } from "@/routes/_app/waf"
 import { siteRoute } from "@/routes/_app/site"
 import { sitesRoute } from "@/routes/_app/sites"
 import { loginRoute } from "@/routes/login"
@@ -42,6 +43,7 @@ const routeTree = rootRoute.addChildren([
     siteRoute,
     filesRoute,
     firewallRoute,
+    wafRoute,
     trafficRoute,
     logsRoute,
     cronRoute,

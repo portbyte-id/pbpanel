@@ -35,8 +35,12 @@ import {
   type WafEventQuery,
   type WafEvents,
   type WafEventSummary,
+  type WafGeoStatus,
+  type WafGlobal,
+  type WafGlobalResponse,
   type WafOverview,
   type WafSiteResponse,
+  type WafSources,
 } from "@/lib/waf"
 
 /** The server's only error shape: a stable class plus a sentence for the operator. */
@@ -991,6 +995,34 @@ export class ApiClient {
    */
   wafEventsAbuseIPDBUrl(query: WafEventQuery): string {
     return `${this.#baseUrl}/api/waf/events/abuseipdb${queryString({ ...query })}`
+  }
+
+  /** GET /api/waf/global: the firewall that applies to every site, and its presets. */
+  async wafGlobal(): Promise<WafGlobalResponse> {
+    return this.request<WafGlobalResponse>("/api/waf/global")
+  }
+
+  /** PUT /api/waf/global. Every site is re-rendered and `nginx -t` runs before nginx reloads. */
+  async saveWafGlobal(config: WafGlobal): Promise<WafGlobalResponse> {
+    return this.request<WafGlobalResponse>("/api/waf/global", {
+      method: "PUT",
+      body: JSON.stringify(config),
+    })
+  }
+
+  /** GET /api/waf/sources: the countries and addresses that sent a window's requests. */
+  async wafSources(range: TrafficRange): Promise<WafSources> {
+    return this.request<WafSources>(`/api/waf/sources${queryString({ range })}`)
+  }
+
+  /** GET /api/waf/geo: whether the country database is installed, and its credit. */
+  async wafGeo(): Promise<WafGeoStatus> {
+    return this.request<WafGeoStatus>("/api/waf/geo")
+  }
+
+  /** POST /api/waf/geo/download: fetch this month's country database from DB-IP. */
+  async downloadWafGeo(): Promise<WafGeoStatus> {
+    return this.request<WafGeoStatus>("/api/waf/geo/download", { method: "POST" })
   }
 
   async wafEventSummary(site: string, range: TrafficRange): Promise<WafEventSummary> {

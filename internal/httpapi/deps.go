@@ -76,6 +76,10 @@ type Deps struct {
 	// /api/waf/traffic, /requests and /events answering 503.
 	WAFMon WAFMonitor
 
+	// Geo is the country database behind the world map. Nil leaves the map
+	// empty and the download answering 503.
+	Geo GeoSource
+
 	// SSHAuth is the SSH login-attempt monitor over the sshd journal. Nil leaves
 	// /api/ssh/attempts answering 503.
 	SSHAuth SSHAuthMonitor

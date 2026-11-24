@@ -20,6 +20,7 @@ type WAFMonitor interface {
 	Events(q wafmon.EventQuery) wafmon.EventPage
 	Matching(q wafmon.EventQuery) []wafmon.Event
 	Summary(site string, window time.Duration) wafmon.Summary
+	SourceCountsOver(window time.Duration) wafmon.SourceCounts
 }
 
 const (
