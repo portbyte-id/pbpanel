@@ -218,6 +218,40 @@ describe("FirewallPage", () => {
     )
   })
 
+  it("adds one rule per port when several are listed in the field", async () => {
+    setup(baseState())
+    vi.mocked(api.createFirewallRule).mockResolvedValue(rule())
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Add rule" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Port or range"), "80, 443 8000 - 8100")
+    await user.click(within(dialog).getByRole("button", { name: "Add rule" }))
+
+    await waitFor(() => expect(api.createFirewallRule).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(api.createFirewallRule).mock.calls.map(([r]) => [r.portStart, r.portEnd])).toEqual([
+      [80, 80],
+      [443, 443],
+      [8000, 8100],
+    ])
+  })
+
+  it("says how many rules were added when a later one is refused", async () => {
+    setup(baseState())
+    vi.mocked(api.createFirewallRule)
+      .mockResolvedValueOnce(rule())
+      .mockRejectedValueOnce(new ApiError(409, "conflict", "port 443 is already open"))
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Add rule" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Port or range"), "80 443")
+    await user.click(within(dialog).getByRole("button", { name: "Add rule" }))
+
+    expect(await within(dialog).findByText(/Added 1 of 2 rules/)).toBeInTheDocument()
+    expect(api.createFirewallRule).toHaveBeenCalledTimes(2)
+  })
+
   it("shows a server validation error under the field", async () => {
     setup(baseState())
     vi.mocked(api.createFirewallRule).mockRejectedValue(

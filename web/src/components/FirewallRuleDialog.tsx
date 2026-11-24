@@ -33,10 +33,30 @@ export function portLabel(rule: Pick<FirewallRule, "portStart" | "portEnd">): st
   return rule.portStart === rule.portEnd ? String(rule.portStart) : `${rule.portStart}-${rule.portEnd}`
 }
 
+/** Most rules one add creates, so a pasted list cannot flood the firewall. */
+export const maxPortsPerAdd = 50
+
+/**
+ * "443", "8000-8100", or several of them separated by commas or spaces:
+ * "80, 443 8000 - 8100". Null when any item is not a port or a range. Repeats are
+ * dropped, so "80, 80" is one rule.
+ */
+export function parsePortList(text: string): { start: number; end: number }[] | null {
+  const items = text.replace(/\s*-\s*/g, "-").split(/[\s,]+/).filter((p) => p !== "")
+  if (items.length === 0) return null
+  const out: { start: number; end: number }[] = []
+  for (const item of items) {
+    const spec = parsePortSpec(item)
+    if (spec === null) return null
+    if (!out.some((o) => o.start === spec.start && o.end === spec.end)) out.push(spec)
+  }
+  return out
+}
+
 /**
  * The rule form, without the dialog or the request around it. A rejected field
  * (`invalid_rule` with `field`) is shown under that field; anything else once
- * under the form.
+ * under the form. A new rule may list several ports: one rule is made for each.
  */
 export function FirewallRuleForm({
   rule,
@@ -46,7 +66,7 @@ export function FirewallRuleForm({
   error,
 }: {
   rule: FirewallRule | null
-  onSubmit: (input: FirewallRuleInput) => void
+  onSubmit: (inputs: FirewallRuleInput[]) => void
   onCancel: () => void
   pending: boolean
   error: unknown
@@ -73,21 +93,32 @@ export function FirewallRuleForm({
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    const parsed = parsePortSpec(ports)
+    const parsed = parsePortList(ports)
     if (!parsed) {
-      setLocalError("Enter a port such as 443, or a range such as 8000-8100.")
+      setLocalError("Enter a port such as 443, or a range such as 8000-8100. Separate several with commas.")
+      return
+    }
+    if (rule !== null && parsed.length > 1) {
+      setLocalError("Edit one port or range at a time. Add the others as new rules.")
+      return
+    }
+    if (parsed.length > maxPortsPerAdd) {
+      setLocalError(`Add at most ${maxPortsPerAdd} ports at a time.`)
       return
     }
     setLocalError(null)
-    const input: FirewallRuleInput = {
-      portStart: parsed.start,
-      portEnd: parsed.end,
-      protocol,
-      enabled,
-    }
-    if (source.trim() !== "") input.source = source.trim()
-    if (comment.trim() !== "") input.comment = comment.trim()
-    onSubmit(input)
+    const inputs = parsed.map(({ start, end }) => {
+      const input: FirewallRuleInput = {
+        portStart: start,
+        portEnd: end,
+        protocol,
+        enabled,
+      }
+      if (source.trim() !== "") input.source = source.trim()
+      if (comment.trim() !== "") input.comment = comment.trim()
+      return input
+    })
+    onSubmit(inputs)
   }
 
   return (
@@ -98,7 +129,7 @@ export function FirewallRuleForm({
           id={`${id}-ports`}
           value={ports}
           onChange={(e) => setPorts(e.target.value)}
-          placeholder="443 or 8000-8100"
+          placeholder="443, 8000-8100"
           inputMode="numeric"
           autoComplete="off"
           spellCheck={false}
@@ -201,10 +232,39 @@ export function FirewallRuleDialog({
   rule: FirewallRule | null
 }) {
   const save = useSaveFirewallRule()
+  // True while a list of new rules is being saved one by one.
+  const [adding, setAdding] = useState(false)
+  // Set when a list stopped part way: how many rules were already added.
+  const [partial, setPartial] = useState<{ added: number; total: number } | null>(null)
 
   const close = (next: boolean) => {
-    if (!next) save.reset()
+    if (!next) {
+      save.reset()
+      setPartial(null)
+    }
     onOpenChange(next)
+  }
+
+  // Rules are saved in turn, so a failure leaves the earlier ones in place and says how many.
+  const submit = async (inputs: FirewallRuleInput[]) => {
+    setPartial(null)
+    if (rule !== null) {
+      save.mutate({ id: rule.id, rule: inputs[0] }, { onSuccess: () => close(false) })
+      return
+    }
+    setAdding(true)
+    let added = 0
+    try {
+      for (const input of inputs) {
+        await save.mutateAsync({ rule: input })
+        added++
+      }
+      close(false)
+    } catch {
+      if (added > 0) setPartial({ added, total: inputs.length })
+    } finally {
+      setAdding(false)
+    }
   }
 
   return (
@@ -219,13 +279,17 @@ export function FirewallRuleDialog({
         {open && (
           <FirewallRuleForm
             rule={rule}
-            pending={save.isPending}
+            pending={save.isPending || adding}
             error={save.error}
             onCancel={() => close(false)}
-            onSubmit={(input) =>
-              save.mutate({ id: rule?.id, rule: input }, { onSuccess: () => close(false) })
-            }
+            onSubmit={(inputs) => void submit(inputs)}
           />
+        )}
+        {partial !== null && (
+          <p role="alert" className="text-destructive text-sm">
+            Added {partial.added} of {partial.total} rules before this one failed. Remove the ports
+            already added from the field, then add the rest.
+          </p>
         )}
       </DialogContent>
     </Dialog>
