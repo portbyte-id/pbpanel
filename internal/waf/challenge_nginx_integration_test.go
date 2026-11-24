@@ -71,7 +71,14 @@ func TestChallengeAgainstRealNginx(t *testing.T) {
 			}
 			c.RateLimit.Enabled = true // the challenge has to live with the other protections
 			c.IPRules.Deny = []string{"192.0.2.1/32"}
-			r := e.RenderConfig("a.test", c)
+			// A real site also carries the global firewall and its block page.
+			g := DefaultGlobal()
+			g.ErrorPage.Enabled = true
+			g, err = g.Normalize()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := e.RenderWith("a.test", c, g)
 			for _, f := range r.Files {
 				if f.Delete {
 					continue
@@ -91,6 +98,7 @@ http {
     include /etc/nginx/mime.types;
     access_log off;
     include %s;
+    include %s;
     server {
         listen 18089;
         server_name a.test;
@@ -104,7 +112,19 @@ http {
 %s
     }
 }
-`, p.WAFHTTPFile("a.test"), indent(string(r.Block)))
+`, p.WAFGlobalHTTP(), p.WAFHTTPFile("a.test"), indent(string(r.Block)))
+			if err := os.MkdirAll(filepath.Dir(p.WAFGlobalHTTP()), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.WAFGlobalHTTP(), GlobalHTTPInclude(g), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p.WAFErrorPage()), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.WAFErrorPage(), []byte(g.ErrorPage.HTML), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			confPath := filepath.Join(root, "nginx.conf")
 			if err := os.WriteFile(confPath, []byte(conf), 0o644); err != nil {
 				t.Fatal(err)
@@ -203,44 +223,60 @@ http {
 				t.Errorf("a forged cookie answered %d", resp.StatusCode)
 			}
 
-			// Pass the check the way the page does.
-			var verifyBody string
-			if provider == guard.ProviderPoW {
-				resp, body = get(http.MethodGet, guard.NewPath, "", nil)
-				if resp.StatusCode != 200 {
-					t.Fatalf("puzzle: %d %s", resp.StatusCode, body)
+			// passCheck passes the check the way the page does and returns the cookie.
+			passCheck := func() string {
+				var verifyBody string
+				if provider == guard.ProviderPoW {
+					resp, body = get(http.MethodGet, guard.NewPath, "", nil)
+					if resp.StatusCode != 200 {
+						t.Fatalf("puzzle: %d %s", resp.StatusCode, body)
+					}
+					var pz struct {
+						Challenge  string `json:"challenge"`
+						Difficulty int    `json:"difficulty"`
+					}
+					if err := json.Unmarshal([]byte(body), &pz); err != nil {
+						t.Fatal(err)
+					}
+					n := 0
+					for guard.LeadingZeroBits(sha256.Sum256([]byte(pz.Challenge+":"+strconv.Itoa(n)))) < pz.Difficulty {
+						n++
+					}
+					verifyBody = fmt.Sprintf(`{"challenge":%q,"nonce":"%d"}`, pz.Challenge, n)
+				} else {
+					if resp, _ := get(http.MethodPost, guard.VerifyPath, "", strings.NewReader(`{"token":"bad"}`)); resp.StatusCode != 403 {
+						t.Errorf("a refused Turnstile token answered %d", resp.StatusCode)
+					}
+					verifyBody = `{"token":"good"}`
 				}
-				var pz struct {
-					Challenge  string `json:"challenge"`
-					Difficulty int    `json:"difficulty"`
+				resp, body = get(http.MethodPost, guard.VerifyPath, "", strings.NewReader(verifyBody))
+				if resp.StatusCode != 204 {
+					t.Fatalf("verify: %d %s", resp.StatusCode, body)
 				}
-				if err := json.Unmarshal([]byte(body), &pz); err != nil {
-					t.Fatal(err)
+				setCookie := resp.Header.Get("Set-Cookie")
+				cookie, _, _ := strings.Cut(setCookie, ";")
+				if !strings.HasPrefix(cookie, CookieName("a.test")+"=") {
+					t.Fatalf("Set-Cookie %q", setCookie)
 				}
-				n := 0
-				for guard.LeadingZeroBits(sha256.Sum256([]byte(pz.Challenge+":"+strconv.Itoa(n)))) < pz.Difficulty {
-					n++
-				}
-				verifyBody = fmt.Sprintf(`{"challenge":%q,"nonce":"%d"}`, pz.Challenge, n)
-			} else {
-				if resp, _ := get(http.MethodPost, guard.VerifyPath, "", strings.NewReader(`{"token":"bad"}`)); resp.StatusCode != 403 {
-					t.Errorf("a refused Turnstile token answered %d", resp.StatusCode)
-				}
-				verifyBody = `{"token":"good"}`
+				return cookie
 			}
-			resp, body = get(http.MethodPost, guard.VerifyPath, "", strings.NewReader(verifyBody))
-			if resp.StatusCode != 204 {
-				t.Fatalf("verify: %d %s", resp.StatusCode, body)
-			}
-			setCookie := resp.Header.Get("Set-Cookie")
-			cookie, _, _ := strings.Cut(setCookie, ";")
-			if !strings.HasPrefix(cookie, CookieName("a.test")+"=") {
-				t.Fatalf("Set-Cookie %q", setCookie)
-			}
+			cookie := passCheck()
 
 			// With the cookie nginx lets the visitor through on its own.
 			if resp, body := get(http.MethodGet, "/some/page", cookie, nil); resp.StatusCode != 200 || body != "site ok\n" {
 				t.Fatalf("with the cookie: %d %q", resp.StatusCode, body)
+			}
+			// A correctly signed cookie whose time has passed is checked again, with
+			// the page, as a visitor with no cookie at all would be.
+			expired := CookieName("a.test") + "=" + guard.Clearance(e.keys.CookieSecret("a.test"), time.Now().Add(-time.Minute).Unix(), "127.0.0.1", ua)
+			if resp, body := get(http.MethodGet, "/some/page", expired, nil); resp.StatusCode != 403 || !strings.Contains(body, "Checking your browser") {
+				t.Fatalf("an expired cookie: %d\n%s", resp.StatusCode, body)
+			}
+			// Passing the check again brings the site back, as it does for a visitor
+			// whose clearance ran out.
+			renewed := passCheck()
+			if resp, body := get(http.MethodGet, "/some/page", renewed, nil); resp.StatusCode != 200 || body != "site ok\n" {
+				t.Fatalf("after passing the check again: %d %q", resp.StatusCode, body)
 			}
 			// The cookie is bound to the browser: another user agent is checked again.
 			req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:18089/", nil)
