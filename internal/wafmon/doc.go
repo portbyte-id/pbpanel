@@ -8,9 +8,13 @@
 // disk, so a daemon restart starts from a backfill of the log tails instead of
 // from nothing.
 //
-// It also tails the open-appsec agent's security log, which is one JSON-lines
-// file for every site. Its events name their own host, so they route to a site
-// from the event rather than from the file, and land in the same event ring with
-// the same per-site counters. A host without the agent has no log directory, and
-// that is not an error: it simply has no open-appsec events.
+// It also tails the open-appsec agent's security logs. There is one log per
+// agent worker, named `cp-nano-http-transaction-handler.log<N>`; the bare name is
+// only the template the worker suffixes, and never exists on a real host, so
+// every numbered file is read. The events are JSON Lines and name their own host,
+// so they route to a site from the event rather than from the file, are ordered
+// by their own eventTime (the numbering is a rotation scheme, not a clock), and
+// land in the same event ring with the same per-site counters. A host without the
+// agent has no log directory, and that is not an error: it simply has no
+// open-appsec events.
 package wafmon

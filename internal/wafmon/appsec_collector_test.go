@@ -26,6 +26,13 @@ func newAppsecFixture(t *testing.T) *appsecFixture {
 	return &appsecFixture{fixture: f, appsecDir: dir}
 }
 
+// workerLog is one worker's log name, as the agent actually writes it: the bare
+// name plus the worker's id. A real host has NO bare
+// `cp-nano-http-transaction-handler.log` (step 4 findings, section E), so every
+// test here writes numbered files, and TestAppsecBareNameAloneIsNotRead guards
+// against a reader that goes back to the bare path.
+func workerLog(n int) string { return appsecLogPrefix + itoa(n) }
+
 // writeEvent appends JSON lines to a file in the agent directory, creating it
 // with a modification time the test can order.
 func (f *appsecFixture) writeEvent(name string, mod time.Time, lines ...string) {
@@ -57,15 +64,86 @@ func (f *appsecFixture) event(host, path, ip, action string, at time.Time) strin
 		`"securityAction":"` + action + `","waapIncidentType":"SQL Injection","matchedParameter":"id"}}`
 }
 
-// TestAppsecEventsRouteToTheirSite proves the agent's single log feeds the same
-// per-site view the ModSecurity path feeds: a site's counter rises for the event
-// that names it, another site's does not, and an event naming no site stays on
-// the events list with no site.
+// TestAppsecBareNameAloneIsNotRead is the regression test for the defect this
+// file exists for: a real host has no bare `cp-nano-http-transaction-handler.log`
+// on disk, so a reader that opens the bare path finds nothing, forever, while
+// every other test still passes. The bare name must yield no events; the
+// numbered set must yield them.
+func TestAppsecBareNameAloneIsNotRead(t *testing.T) {
+	f := newAppsecFixture(t)
+	ev := f.event("a.test", "/x", "198.51.100.4", "Prevent", f.now)
+
+	f.writeEvent(appsecLogPrefix, f.now, ev)
+	f.c.Poll()
+	if got := f.c.Events(EventQuery{Limit: 10}); got.Total != 0 {
+		t.Fatalf("a bare-named file was read: %d events; the bare name never exists on a real host", got.Total)
+	}
+
+	// The same event under a worker's numbered name is read.
+	f.writeEvent(workerLog(1), f.now, ev)
+	f.c.Poll()
+	if got := f.c.Events(EventQuery{Limit: 10}); got.Total != 1 {
+		t.Fatalf("the numbered file was not read: %d events", got.Total)
+	}
+}
+
+// TestAppsecReadsEveryWorkerLog proves all the workers' files are read: each
+// worker writes its own log, so one file is only a fraction of the traffic.
+func TestAppsecReadsEveryWorkerLog(t *testing.T) {
+	f := newAppsecFixture(t)
+	for n := 1; n <= 4; n++ {
+		f.writeEvent(workerLog(n), f.now,
+			f.event("a.test", "/w"+itoa(n), "198.51.100."+itoa(n), "Prevent", f.now))
+	}
+	f.c.Poll()
+	got := f.c.Events(EventQuery{Limit: 10})
+	if got.Total != 4 {
+		t.Fatalf("events = %d, want one from each of the four workers", got.Total)
+	}
+	if tr := f.c.Traffic("a.test", 5*time.Minute); tr.Totals.WAFEvents != 4 {
+		t.Errorf("a.test events = %d, want 4", tr.Totals.WAFEvents)
+	}
+}
+
+// TestAppsecOrdersByEventTimeNotFileName proves the ring is ordered by each
+// event's own eventTime. The numbering is the vendor's rotation scheme, so a
+// lower-numbered file is not necessarily older; here log4 holds the oldest event
+// and log1 the newest, and the newest must still come first.
+func TestAppsecOrdersByEventTimeNotFileName(t *testing.T) {
+	f := newAppsecFixture(t)
+	f.writeEvent(workerLog(1), f.now, f.event("a.test", "/newest", "198.51.100.1", "Prevent", f.now))
+	f.writeEvent(workerLog(4), f.now, f.event("a.test", "/oldest", "198.51.100.4", "Prevent", f.now.Add(-time.Hour)))
+	f.writeEvent(workerLog(2), f.now, f.event("a.test", "/middle", "198.51.100.2", "Prevent", f.now.Add(-30*time.Minute)))
+	f.c.Poll()
+
+	got := f.c.Events(EventQuery{Limit: 10})
+	if got.Total != 3 {
+		t.Fatalf("events = %d, want 3", got.Total)
+	}
+	want := []string{"/newest", "/middle", "/oldest"}
+	for i, w := range want {
+		if got.Events[i].URI != w {
+			t.Errorf("position %d = %q, want %q (ordered by eventTime, not file name)", i, got.Events[i].URI, w)
+		}
+	}
+	// A seq must follow the same order, since paging reads it.
+	if got.Events[0].Seq <= got.Events[1].Seq || got.Events[1].Seq <= got.Events[2].Seq {
+		t.Errorf("seqs out of order: %d %d %d", got.Events[0].Seq, got.Events[1].Seq, got.Events[2].Seq)
+	}
+}
+
+// TestAppsecEventsRouteToTheirSite proves the agent's logs feed the same per-site
+// view the ModSecurity path feeds: a site's counter rises for the event that
+// names it, another site's does not, and an event naming no site stays on the
+// events list with no site.
 func TestAppsecEventsRouteToTheirSite(t *testing.T) {
 	f := newAppsecFixture(t)
-	f.writeEvent(appsecLogPrefix, f.now.Add(-time.Minute),
+	// Spread across two workers, as a real host would.
+	f.writeEvent(workerLog(1), f.now.Add(-time.Minute),
 		f.event("a.test", "/x", "198.51.100.4", "Prevent", f.now.Add(-30*time.Second)),
 		f.event("b.test", "/y", "198.51.100.5", "Detect", f.now.Add(-20*time.Second)),
+	)
+	f.writeEvent(workerLog(3), f.now.Add(-time.Minute),
 		f.event("not a host", "/z", "198.51.100.6", "Prevent", f.now.Add(-10*time.Second)),
 	)
 	f.c.Poll()
@@ -121,68 +199,114 @@ func TestAppsecMissingDirectoryIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestAppsecFollowsTheRotatedLog proves the agent's own rotation is followed
-// without counting an event twice. The vendor rotates by renumbering, so the
-// live file becomes `…handler.log1` and a fresh `…handler.log` is written: the
-// newest file is followed, and the rotated one is never read again.
-func TestAppsecFollowsTheRotatedLog(t *testing.T) {
+// TestAppsecReopensAReplacedFile proves a numbered file replaced under the
+// reader (the agent's rotation) is re-read from the top rather than from the old
+// offset, and its events are counted once.
+func TestAppsecReopensAReplacedFile(t *testing.T) {
 	f := newAppsecFixture(t)
-	f.writeEvent(appsecLogPrefix, f.now.Add(-3*time.Minute),
-		f.event("a.test", "/1", "198.51.100.4", "Prevent", f.now.Add(-2*time.Minute)))
+	name := workerLog(1)
+	f.writeEvent(name, f.now.Add(-2*time.Minute),
+		f.event("a.test", "/1", "198.51.100.4", "Prevent", f.now.Add(-time.Minute)))
 	f.c.Poll()
 	if got := f.c.Events(EventQuery{Limit: 10}); got.Total != 1 {
 		t.Fatalf("events = %d, want 1", got.Total)
 	}
 
-	// Rotate: the live file is renamed to .log1 and a new live file appears.
-	rotated := appsecLogPrefix + "1"
-	if err := os.Rename(filepath.Join(f.appsecDir, appsecLogPrefix), filepath.Join(f.appsecDir, rotated)); err != nil {
+	// Replace the file: a new inode with a shorter body, as a rotation rename or
+	// a truncate-and-rewrite leaves behind.
+	if err := os.Remove(filepath.Join(f.appsecDir, name)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(filepath.Join(f.appsecDir, rotated), f.now.Add(-time.Minute), f.now.Add(-time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	f.writeEvent(appsecLogPrefix, f.now,
-		f.event("a.test", "/2", "198.51.100.4", "Prevent", f.now))
+	f.writeEvent(name, f.now, f.event("a.test", "/2", "198.51.100.4", "Prevent", f.now))
 	f.c.Poll()
 
 	got := f.c.Events(EventQuery{Limit: 10})
 	if got.Total != 2 {
-		t.Fatalf("after rotation: %d events, want 2 (the first not counted twice)", got.Total)
+		t.Fatalf("after the file was replaced: %d events, want 2", got.Total)
 	}
 	if got.Events[0].URI != "/2" {
 		t.Errorf("newest = %q, want /2", got.Events[0].URI)
 	}
+}
 
-	// The rotated file is not re-read even though its modification time is newer
-	// than the file the tail knew, because only the newest file is followed.
-	f.writeEvent(rotated, f.now.Add(time.Minute),
-		f.event("a.test", "/stale", "198.51.100.4", "Prevent", f.now))
+// TestAppsecForgetsARetiredFile proves a worker's log that disappears is dropped,
+// so a later file reusing its name starts from the top instead of from a stale
+// offset.
+func TestAppsecForgetsARetiredFile(t *testing.T) {
+	f := newAppsecFixture(t)
+	f.writeEvent(workerLog(1), f.now, f.event("a.test", "/1", "198.51.100.4", "Prevent", f.now))
+	f.c.Poll()
+
+	if err := os.Remove(filepath.Join(f.appsecDir, workerLog(1))); err != nil {
+		t.Fatal(err)
+	}
+	f.c.Poll()
+	if len(f.c.appsecTails) != 0 {
+		t.Errorf("tails = %d, want the retired file forgotten", len(f.c.appsecTails))
+	}
+	// A fresh file with the same name is read from its start.
+	f.writeEvent(workerLog(1), f.now, f.event("a.test", "/2", "198.51.100.4", "Prevent", f.now))
 	f.c.Poll()
 	if got := f.c.Events(EventQuery{Limit: 10}); got.Total != 2 {
-		t.Errorf("a rotated sibling was read: %d events", got.Total)
+		t.Errorf("events = %d, want 2", got.Total)
 	}
 }
 
-// TestAppsecIgnoresDebugFiles proves `…handler.dbg` is not an event log: the
-// agent writes its own debug output there, and none of it is an attack.
-func TestAppsecIgnoresDebugFiles(t *testing.T) {
+// TestAppsecIgnoresNonEventFiles proves the agent's debug, error and install logs
+// are not event logs, and neither is the bare template name.
+func TestAppsecIgnoresNonEventFiles(t *testing.T) {
 	f := newAppsecFixture(t)
-	f.writeEvent(appsecLogPrefix+".dbg", f.now,
-		`{"eventTime":"2026-11-24T18:01:47.380","eventName":"Web Request","eventData":{"securityAction":"Prevent","waapIncidentType":"SQL Injection","httpHostName":"a.test"}}`)
+	line := `{"eventTime":"2026-11-24T18:01:47.380","eventName":"Web Request","eventData":{"securityAction":"Prevent","waapIncidentType":"SQL Injection","httpHostName":"a.test"}}`
+	for _, name := range []string{
+		appsecLogPrefix + ".dbg1",
+		appsecLogPrefix + ".err1",
+		appsecLogPrefix + "-install.log",
+		appsecLogPrefix,
+		appsecLogPrefix + "x",
+	} {
+		f.writeEvent(name, f.now, line)
+	}
 	f.c.Poll()
 	if got := f.c.Events(EventQuery{Limit: 10}); got.Total != 0 {
-		t.Errorf("a debug file was read: %d events", got.Total)
+		t.Errorf("a non-event file was read: %d events", got.Total)
+	}
+	if paths := f.c.appsecLogFiles(); len(paths) != 0 {
+		t.Errorf("appsecLogFiles = %v, want none", paths)
 	}
 }
 
-// TestAppsecIgnoresAgentHousekeeping proves the agent's non-event records in its
-// live log never reach the events list or the counters.
+// TestAppsecLogNumbers proves which names count as a worker's event log.
+func TestAppsecLogNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"cp-nano-http-transaction-handler.log1", 1},
+		{"cp-nano-http-transaction-handler.log4", 4},
+		{"cp-nano-http-transaction-handler.log12", 12},
+		{"cp-nano-http-transaction-handler.log", -1},
+		{"cp-nano-http-transaction-handler.log.dbg1", -1},
+		{"cp-nano-http-transaction-handler.dbg1", -1},
+		{"cp-nano-http-transaction-handler.err1", -1},
+		{"cp-nano-http-transaction-handler-install.log", -1},
+		{"cp-nano-http-transaction-handler.log1.gz", -1},
+		{"other.log1", -1},
+		{"", -1},
+	}
+	for _, tc := range tests {
+		if got := appsecLogNumber(tc.name); got != tc.want {
+			t.Errorf("appsecLogNumber(%q) = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestAppsecIgnoresAgentHousekeeping proves the agent's non-event records never
+// reach the events list or the counters.
 func TestAppsecIgnoresAgentHousekeeping(t *testing.T) {
 	f := newAppsecFixture(t)
-	f.writeEvent(appsecLogPrefix, f.now,
-		`{"eventTime":"2026-11-24T18:00:00.000","eventName":"Policy load","eventData":{"securityAction":""}}`,
-		`{"eventTime":"2026-11-24T18:00:01.000","eventName":"Service start"}`,
+	f.writeEvent(workerLog(1), f.now,
+		`{"eventTime": "2026-11-24T17:57:28.249","eventName": "Web AppSec Policy Loaded Successfully","eventSeverity": "Info","eventData": {"logIndex": 1}}`,
+		`{"eventTime": "2026-11-24T17:57:28.355","eventName": "Check Point Nano-service started","eventSeverity": "Info","eventData": {"logIndex": 2}}`,
 		"not json at all",
 	)
 	f.c.Poll()
@@ -210,7 +334,7 @@ func TestAppsecBothEnginesShareTheEventsList(t *testing.T) {
 	f := newAppsecFixture(t)
 	f.append("a.test.waf-audit.log",
 		`{"transaction":{"client_ip":"203.0.113.7","time_stamp":"Wed Nov 18 10:00:27 2026","request":{"uri":"/m"},"response":{"http_code":403},"messages":[{"message":"m","details":{"ruleId":"941100","severity":"2"}}]}}`)
-	f.writeEvent(appsecLogPrefix, f.now,
+	f.writeEvent(workerLog(1), f.now,
 		f.event("a.test", "/o", "198.51.100.4", "Prevent", f.now))
 	f.c.Poll()
 
@@ -232,7 +356,7 @@ func TestAppsecBothEnginesShareTheEventsList(t *testing.T) {
 func TestAppsecWindowedCounters(t *testing.T) {
 	f := newAppsecFixture(t)
 	old := f.now.Add(-2 * Retention)
-	f.writeEvent(appsecLogPrefix, f.now.Add(-time.Minute),
+	f.writeEvent(workerLog(1), f.now.Add(-time.Minute),
 		f.event("a.test", "/old", "198.51.100.4", "Prevent", old),
 		f.event("a.test", "/new", "198.51.100.4", "Prevent", f.now),
 	)
@@ -249,11 +373,12 @@ func TestAppsecWindowedCounters(t *testing.T) {
 // partial line waits for its newline, the way the site logs do.
 func TestAppsecLogGrows(t *testing.T) {
 	f := newAppsecFixture(t)
-	f.writeEvent(appsecLogPrefix, f.now, f.event("a.test", "/1", "198.51.100.4", "Prevent", f.now))
+	name := workerLog(1)
+	f.writeEvent(name, f.now, f.event("a.test", "/1", "198.51.100.4", "Prevent", f.now))
 	f.c.Poll()
 
 	whole := f.event("a.test", "/2", "198.51.100.4", "Prevent", f.now)
-	fh, err := os.OpenFile(filepath.Join(f.appsecDir, appsecLogPrefix), os.O_APPEND|os.O_WRONLY, 0)
+	fh, err := os.OpenFile(filepath.Join(f.appsecDir, name), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,7 +61,9 @@ type appsecEvent struct {
 // cannot be a site name, and the event then belongs to no site; it is still kept.
 //
 // eventTime carries no zone because the agent writes the host's local time, and
-// the panel runs on the same host, so it is read as local time.
+// the panel runs on the same host, so it is read as local time. The sandbox this
+// was checked on runs UTC, where local and UTC agree, so the two cannot be told
+// apart there; on a host with a non-UTC zone they would differ.
 func ParseOpenAppsec(line string) (Event, bool) {
 	var d appsecEvent
 	if err := json.Unmarshal([]byte(line), &d); err != nil || d.EventData == nil {

@@ -14,6 +14,60 @@ import (
 // (agentId, eventReferenceId, the tail of the SQL-injection sample) are the
 // elisions the plan trimmed, replaced with fixed values so the assertions are
 // stable; the event lines are otherwise what the agent wrote.
+// TestParseOpenAppsecLiveSandboxLines parses two lines copied verbatim from the
+// live files on the sandbox (`cp-nano-http-transaction-handler.log1`, taken
+// 2026-11-24). They are the shape the agent really writes, which differs from the
+// plan's §0.6 sample in two ways worth pinning: a space after every colon, and a
+// percent-encoded httpUriQuery. Both are JSON, so the parser reads them the same.
+func TestParseOpenAppsecLiveSandboxLines(t *testing.T) {
+	b, err := os.ReadFile("testdata/appsec-live-sandbox.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("fixture holds %d lines, want 2", len(lines))
+	}
+
+	sqli, ok := ParseOpenAppsec(lines[0])
+	if !ok {
+		t.Fatal("the live SQL-injection line was not parsed")
+	}
+	if sqli.Site != "up5.test" || sqli.Engine != EngineOpenAppsec || sqli.Action != ActionBlocked {
+		t.Errorf("event = %+v", sqli)
+	}
+	if sqli.IP != "127.0.0.1" || sqli.Method != "GET" || sqli.Confidence != "Very High" {
+		t.Errorf("event = %+v", sqli)
+	}
+	if sqli.AttackType != "SQL Injection" || sqli.Parameter != "id (url parameter)" {
+		t.Errorf("attack = %q, parameter = %q", sqli.AttackType, sqli.Parameter)
+	}
+	// The query arrives percent-encoded, and is kept as the agent wrote it: the
+	// events page shows what was sent, and decoding here would be a second
+	// un-escaping of a value already safe to display.
+	if want := "/?id=1%27%20OR%20%271%27%3D%271%27%20UNION%20SELECT%20username,password%20FROM%20users--"; sqli.URI != want {
+		t.Errorf("uri = %q\nwant   %q", sqli.URI, want)
+	}
+	if sqli.RequestID != "0925df21-63b2-4f09-85f3-da94153b7204" {
+		t.Errorf("request id = %q", sqli.RequestID)
+	}
+	if sqli.Time.IsZero() || sqli.Time.Year() != 2026 || sqli.Time.Hour() != 17 {
+		t.Errorf("time = %v", sqli.Time)
+	}
+
+	xss, ok := ParseOpenAppsec(lines[1])
+	if !ok {
+		t.Fatal("the live XSS line was not parsed")
+	}
+	if xss.AttackType != "Cross Site Scripting, Remote Code Execution" || xss.Parameter != "q (url parameter)" {
+		t.Errorf("event = %+v", xss)
+	}
+	if xss.RequestID != "b51aa275-39be-4772-967b-7e3e311f92dd" || xss.Site != "up5.test" {
+		t.Errorf("event = %+v", xss)
+	}
+}
+
+// TestParseOpenAppsecRealLines parses the three events the plan captured in §0.6.
 func TestParseOpenAppsecRealLines(t *testing.T) {
 	b, err := os.ReadFile("testdata/appsec-real.jsonl")
 	if err != nil {
