@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -59,6 +61,23 @@ func turnstileKeys(reg *settings.Registry) waf.TurnstileSource {
 	}
 }
 
+// wwwGroupID is the group of the account nginx's workers run as. The socket must
+// be group-owned by it so the workers can connect. The numeric WWWGID is only a
+// default for a host where that account does not exist yet: a host whose www
+// account has another gid (1000 on some VMs) would otherwise refuse the workers
+// with EACCES, and every challenge request would answer 502.
+func wwwGroupID(lookup func(string) (*user.User, error)) int {
+	u, err := lookup(nginx.WWWUser)
+	if err != nil {
+		return nginx.WWWGID
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return nginx.WWWGID
+	}
+	return gid
+}
+
 // serveGuard answers the challenge page over the unix socket nginx proxies
 // /.pb-challenge/ to. A site whose page cannot reach it shows the visitor an
 // error and a retry button; visitors with a valid cookie are not affected.
@@ -67,7 +86,7 @@ func serveGuard(ctx context.Context, sock string, h *guard.Handler, logger *slog
 		logger.Error("the challenge socket directory could not be created", "error", err)
 		return
 	}
-	ln, err := guard.Listen(filepath.FromSlash(sock), nginx.WWWGID)
+	ln, err := guard.Listen(filepath.FromSlash(sock), wwwGroupID(user.Lookup))
 	if err != nil {
 		logger.Error("the challenge page cannot be answered", "error", err)
 		return
