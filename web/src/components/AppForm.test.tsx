@@ -1,9 +1,11 @@
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   AppForm,
+  type AppFormPart,
   formatEnv,
   joinCommandLine,
   nodeMajors,
@@ -13,7 +15,15 @@ import {
 } from "@/components/AppDialog"
 import { appendLog } from "@/components/AppLogs"
 import { APPS_ROOT } from "@/components/PathPicker"
-import { ApiError, api, type FMEntry, type FMListing, type NodeVersion, type PanelApp } from "@/lib/api"
+import {
+  ApiError,
+  api,
+  type AppType,
+  type FMEntry,
+  type FMListing,
+  type NodeVersion,
+  type PanelApp,
+} from "@/lib/api"
 import { domainsOf, formatUptime, isRunning, typeLabel } from "@/pages/AppsPage"
 import { validNodeRequest } from "@/pages/RuntimesPage"
 
@@ -135,19 +145,47 @@ describe("AppForm", () => {
     [bin]: [entry(bin, "web-binary", "file"), entry(bin, "notes.txt", "file")],
   }
 
-  const renderForm = (props: Partial<React.ComponentProps<typeof AppForm>> = {}) => {
-    const onSubmit = vi.fn()
-    render(
-      <AppForm
-        app={null}
-        nodeVersions={[]}
-        onSubmit={onSubmit}
-        onCancel={() => {}}
-        pending={false}
-        error={null}
-        {...props}
-      />,
+  // Plays the dialog's part: it owns the kind and the part on show, so the "Show domain"
+  // button here stands in for the sidebar's Domain entry.
+  function FormHost({
+    app = null,
+    initialType = "go",
+    nodeVersions = [],
+    error = null,
+    onSubmit,
+  }: {
+    app?: PanelApp | null
+    initialType?: AppType
+    nodeVersions?: NodeVersion[]
+    error?: unknown
+    onSubmit: React.ComponentProps<typeof AppForm>["onSubmit"]
+  }) {
+    const [type, setType] = useState<AppType>(app?.type ?? initialType)
+    const [part, setPart] = useState<AppFormPart>("settings")
+    return (
+      <>
+        <button type="button" onClick={() => setPart("domain")}>
+          Show domain
+        </button>
+        <AppForm
+          app={app}
+          type={type}
+          onTypeChange={setType}
+          part={part}
+          onPartChange={setPart}
+          nodeVersions={nodeVersions}
+          onSubmit={onSubmit}
+          onCancel={() => {}}
+          pending={false}
+          error={error}
+        />
+      </>
     )
+  }
+
+  const renderForm = (props: Partial<Omit<React.ComponentProps<typeof FormHost>, "onSubmit">> = {}) => {
+    const onSubmit = vi.fn()
+    render(<FormHost onSubmit={onSubmit} {...props} />)
     return onSubmit
   }
 
@@ -182,6 +220,7 @@ describe("AppForm", () => {
     await user.type(screen.getByLabelText("Name"), "web")
     await user.type(screen.getByLabelText("Execution command"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Port"), "3000")
+    await user.click(screen.getByRole("button", { name: "Show domain" }))
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.type(screen.getByLabelText("Other domains"), "www.web.test, b.test")
     await user.click(screen.getByRole("button", { name: "Create app" }))
@@ -198,6 +237,7 @@ describe("AppForm", () => {
 
     await user.type(screen.getByLabelText("Name"), "web")
     await user.type(screen.getByLabelText("Execution command"), "/www/services/sites/web/bin/web")
+    await user.click(screen.getByRole("button", { name: "Show domain" }))
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.click(screen.getByRole("button", { name: "Create app" }))
 
@@ -207,9 +247,8 @@ describe("AppForm", () => {
 
   it("asks for a Node version and an entry script, and sends the version", async () => {
     const user = userEvent.setup()
-    const onSubmit = renderForm({ nodeVersions: [node("22.11.0"), node("20.18.0")] })
+    const onSubmit = renderForm({ initialType: "node", nodeVersions: [node("22.11.0"), node("20.18.0")] })
 
-    await user.selectOptions(screen.getByLabelText("Kind"), "node")
     expect(screen.queryByLabelText("Execution command")).not.toBeInTheDocument()
     await user.type(screen.getByLabelText("Name"), "api")
     await user.type(screen.getByLabelText("Entry script"), "server.js")
@@ -220,10 +259,8 @@ describe("AppForm", () => {
     )
   })
 
-  it("cannot create a Node app while no version is installed", async () => {
-    const user = userEvent.setup()
-    renderForm()
-    await user.selectOptions(screen.getByLabelText("Kind"), "node")
+  it("cannot create a Node app while no version is installed", () => {
+    renderForm({ initialType: "node" })
     expect(screen.getByText(/Install one on the Runtimes page first/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Create app" })).toBeDisabled()
   })

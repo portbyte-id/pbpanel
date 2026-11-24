@@ -34,6 +34,15 @@ export interface AppDomain {
   aliases: string[]
 }
 
+/**
+ * The part of a new app's form on show. Settings is the program (its kind and
+ * how it runs); Domain is the site in front of it. The dialog's sidebar picks it.
+ */
+export type AppFormPart = "settings" | "domain"
+
+/** The fields that belong to the Domain part. Everything else is Settings. */
+const domainFields = ["domain", "aliases"]
+
 /** One argument per line. Inner spaces are kept: an argument may contain them. */
 export function parseLines(text: string): string[] {
   return text
@@ -141,13 +150,18 @@ const textarea =
   "outline-none focus-visible:ring-[3px]"
 
 /**
- * The app form, without the dialog or the request around it. A rejected field
- * (`invalid_input` or `conflict` with `field`) is shown under that field; anything
- * else, including supervisord refusing the generated file, once under the form.
+ * The app form, without the dialog or the request around it. The kind and the
+ * part on show are owned by the dialog (its sidebar picks them), so the form only
+ * draws them. A rejected field (`invalid_input` or `conflict` with `field`) is
+ * shown under that field; anything else, including supervisord refusing the
+ * generated file, once under the form.
  */
 export function AppForm({
   app,
-  defaultType = "go",
+  type,
+  onTypeChange,
+  part,
+  onPartChange,
   nodeVersions,
   onSubmit,
   onCancel,
@@ -156,8 +170,12 @@ export function AppForm({
 }: {
   /** Set when editing: the name is then fixed. */
   app: PanelApp | null
-  /** The type a new app starts on. Ignored when editing. */
-  defaultType?: AppType
+  /** The kind: a new app's comes from the sidebar; an existing app's from the Kind box. */
+  type: AppType
+  onTypeChange: (type: AppType) => void
+  /** A new app shows one part at a time. An existing app always shows Settings. */
+  part: AppFormPart
+  onPartChange: (part: AppFormPart) => void
   nodeVersions: NodeVersion[]
   /** `bind` is set only when the operator asked for a domain: the app is then put behind a proxy site. */
   onSubmit: (input: AppInput, bind?: AppDomain) => void
@@ -169,7 +187,7 @@ export function AppForm({
   const [domain, setDomain] = useState("")
   const [aliases, setAliases] = useState("")
   const [name, setName] = useState(app?.name ?? "")
-  const [type, setType] = useState<AppType>(app?.type ?? defaultType)
+  const [shownType, setShownType] = useState(type)
   const [command, setCommand] = useState(app?.command ?? "")
   const [args, setArgs] = useState((app?.args ?? []).join("\n"))
   // Go and binary apps show program and arguments as one execution command line.
@@ -190,12 +208,28 @@ export function AppForm({
   const [envFrom, setEnvFrom] = useState<string | null>(null)
   const [envLoading, setEnvLoading] = useState(false)
 
+  // The kind changed from outside (the sidebar or the Kind box): carry the text over.
+  // Done while rendering, the way React expects a state to follow a prop.
+  if (type !== shownType) {
+    setShownType(type)
+    if (shownType === "node") {
+      setLine(joinCommandLine([...(command.trim() ? [command.trim()] : []), ...parseLines(args)]))
+    } else if (type === "node") {
+      const { argv, error: splitError } = splitCommandLine(line)
+      if (!splitError) {
+        setCommand(argv[0] ?? "")
+        setArgs(argv.slice(1).join("\n"))
+      }
+    }
+  }
+
   const loadEnvFile = async (path: string) => {
     setEnvLoading(true)
     try {
       const file = await api.fmOpenFile(path)
       const parsed = parseEnv(file.content)
       if (parsed.error) {
+        onPartChange("settings")
         setLocalError({ field: "env", text: `${path}: ${parsed.error}` })
         return
       }
@@ -204,6 +238,7 @@ export function AppForm({
       setEnvFrom(path)
       setLocalError(null)
     } catch (err) {
+      onPartChange("settings")
       setLocalError({
         field: "env",
         text: err instanceof ApiError ? `${path}: ${err.detail}` : `The file ${path} could not be read.`,
@@ -240,22 +275,29 @@ export function AppForm({
   // A field error is shown once, under its field; the rest go under the form.
   const generalError = fieldName === null ? error : null
 
+  // A settings field's error is shown on Settings, so the form moves there first.
+  const failSettings = (field: string, text: string) => {
+    onPartChange("settings")
+    setLocalError({ field, text })
+  }
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     const parsed = parseEnv(env)
     if (parsed.error) {
-      setLocalError({ field: "env", text: parsed.error })
+      failSettings("env", parsed.error)
       return
     }
     let portNumber: number | null = null
     if (port.trim() !== "") {
       portNumber = Number(port)
       if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
-        setLocalError({ field: "port", text: "Enter a port between 1 and 65535, or leave it empty." })
+        failSettings("port", "Enter a port between 1 and 65535, or leave it empty.")
         return
       }
     }
     if (domain.trim() !== "" && portNumber === null) {
+      onPartChange("domain")
       setLocalError({ field: "domain", text: "Set a port first: the domain passes requests to it." })
       return
     }
@@ -264,7 +306,7 @@ export function AppForm({
     if (type !== "node") {
       const split = splitCommandLine(line)
       if (split.error) {
-        setLocalError({ field: "command", text: split.error })
+        failSettings("command", split.error)
         return
       }
       programPath = split.argv[0] ?? ""
@@ -285,7 +327,7 @@ export function AppForm({
     if (user.trim() !== "") input.user = user.trim()
     if (type === "node") {
       if (nodeVersion.trim() === "") {
-        setLocalError({ field: "node_version", text: "Choose the Node.js version this app runs on." })
+        failSettings("node_version", "Choose the Node.js version this app runs on.")
         return
       }
       input.node_version = nodeVersion.trim()
@@ -295,20 +337,6 @@ export function AppForm({
     } else {
       onSubmit(input)
     }
-  }
-
-  // Moving between Node.js (two fields) and the others (one line) carries the text over.
-  const changeType = (next: AppType) => {
-    if (type === "node" && next !== "node") {
-      setLine(joinCommandLine([...(command.trim() ? [command.trim()] : []), ...parseLines(args)]))
-    } else if (type !== "node" && next === "node") {
-      const { argv, error: splitError } = splitCommandLine(line)
-      if (!splitError) {
-        setCommand(argv[0] ?? "")
-        setArgs(argv.slice(1).join("\n"))
-      }
-    }
-    setType(next)
   }
 
   const pickProgram = (path: string) => {
@@ -331,240 +359,247 @@ export function AppForm({
     : workdir.trim().startsWith("/")
       ? workdir.trim()
       : appDir
+  const onSettings = app !== null || part === "settings"
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-name`}>Name</Label>
-        <Input
-          id={`${id}-name`}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={app !== null}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="my-app"
-          required
-          aria-invalid={invalid("name")}
-          aria-describedby={describedBy("name")}
-        />
-        {fieldError("name")}
-      </div>
+      {onSettings && (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-name`}>Name</Label>
+            <Input
+              id={`${id}-name`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={app !== null}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="my-app"
+              required
+              aria-invalid={invalid("name")}
+              aria-describedby={describedBy("name")}
+            />
+            {fieldError("name")}
+          </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-type`}>Kind</Label>
-        <Select
-          id={`${id}-type`}
-          value={type}
-          onChange={(e) => changeType(e.target.value as AppType)}
-          aria-invalid={invalid("type")}
-        >
-          <option value="go">A compiled program (Go or any binary)</option>
-          <option value="node">A Node.js app</option>
-          <option value="command">Another command</option>
-        </Select>
-        {fieldError("type")}
-      </div>
-
-      {type === "node" && (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-node`}>Node.js version</Label>
-          <Select
-            id={`${id}-node`}
-            value={nodeVersion}
-            onChange={(e) => setNodeVersion(e.target.value)}
-            disabled={noNode}
-            aria-invalid={invalid("node_version")}
-            aria-describedby={describedBy("node_version")}
-          >
-            {majors.map((m) => (
-              <option key={m} value={m}>
-                Node.js {m}
-              </option>
-            ))}
-          </Select>
-          {noNode && (
-            <p className="text-muted-foreground text-xs">
-              No version is installed yet. Install one on the Runtimes page first.
-            </p>
+          {app !== null && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${id}-type`}>Kind</Label>
+              <Select
+                id={`${id}-type`}
+                value={type}
+                onChange={(e) => onTypeChange(e.target.value as AppType)}
+                aria-invalid={invalid("type")}
+              >
+                <option value="go">A compiled program (Go or any binary)</option>
+                <option value="node">A Node.js app</option>
+                <option value="command">Another command</option>
+              </Select>
+              {fieldError("type")}
+            </div>
           )}
-          {fieldError("node_version")}
-        </div>
+
+          {type === "node" && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${id}-node`}>Node.js version</Label>
+              <Select
+                id={`${id}-node`}
+                value={nodeVersion}
+                onChange={(e) => setNodeVersion(e.target.value)}
+                disabled={noNode}
+                aria-invalid={invalid("node_version")}
+                aria-describedby={describedBy("node_version")}
+              >
+                {majors.map((m) => (
+                  <option key={m} value={m}>
+                    Node.js {m}
+                  </option>
+                ))}
+              </Select>
+              {noNode && (
+                <p className="text-muted-foreground text-xs">
+                  No version is installed yet. Install one on the Runtimes page first.
+                </p>
+              )}
+              {fieldError("node_version")}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-command`}>{type === "node" ? "Entry script" : "Execution command"}</Label>
+            <div className="flex gap-2">
+              <Input
+                id={`${id}-command`}
+                value={type === "node" ? command : line}
+                onChange={(e) => (type === "node" ? setCommand(e.target.value) : setLine(e.target.value))}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={
+                  type === "node" ? "server.js" : "/www/services/sites/my-app/bin/my-app --listen :3000"
+                }
+                required
+                aria-invalid={invalid("command")}
+                aria-describedby={describedBy("command")}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                aria-label="Browse… for the program"
+                onClick={() => setPicking("command")}
+              >
+                Browse…
+              </Button>
+            </div>
+            {type !== "node" && (
+              <p className="text-muted-foreground text-xs">
+                The program's absolute path, then its arguments. Quote an argument that contains spaces.
+              </p>
+            )}
+            {fieldError("command")}
+            <PathPicker
+              open={picking === "command"}
+              onOpenChange={(open) => !open && setPicking(null)}
+              start={commandStart}
+              mode="file"
+              title={type === "node" ? "Choose the entry script" : "Choose the program"}
+              description="Open a folder, then choose a file in it. The whole filesystem is browsable."
+              onPick={pickProgram}
+            />
+          </div>
+
+          {type === "node" && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${id}-args`}>Arguments</Label>
+              <textarea
+                id={`${id}-args`}
+                className={textarea}
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                spellCheck={false}
+                placeholder="One per line"
+                aria-invalid={invalid("args")}
+                aria-describedby={describedBy("args")}
+              />
+              {fieldError("args")}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-workdir`}>Working directory</Label>
+            <div className="flex gap-2">
+              <Input
+                id={`${id}-workdir`}
+                value={workdir}
+                onChange={(e) => setWorkdir(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={`/www/services/sites/${name.trim() || "<name>"}`}
+                aria-invalid={invalid("workdir")}
+                aria-describedby={describedBy("workdir")}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                aria-label="Browse… for the working directory"
+                onClick={() => setPicking("workdir")}
+              >
+                Browse…
+              </Button>
+            </div>
+            {fieldError("workdir")}
+            <PathPicker
+              open={picking === "workdir"}
+              onOpenChange={(open) => !open && setPicking(null)}
+              start={workdirStart}
+              mode="dir"
+              title="Choose the working directory"
+              description="The folder the app runs in. Open a folder, then choose it; the whole filesystem is browsable."
+              onPick={setWorkdir}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-env`}>Environment</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={envLoading}
+                onClick={() => setPicking("env")}
+              >
+                {envLoading ? "Reading…" : "Load .env file…"}
+              </Button>
+            </div>
+            <textarea
+              id={`${id}-env`}
+              className={textarea}
+              value={env}
+              onChange={(e) => setEnv(e.target.value)}
+              spellCheck={false}
+              placeholder="KEY=value, one per line"
+              aria-invalid={invalid("env")}
+              aria-describedby={describedBy("env")}
+            />
+            {fieldError("env")}
+            {envFrom !== null && (
+              <p className="text-muted-foreground text-xs">
+                Read from {envFrom}. Keys typed here that the file did not set were kept.
+              </p>
+            )}
+            <PathPicker
+              open={picking === "env"}
+              onOpenChange={(open) => !open && setPicking(null)}
+              start={workdirStart}
+              mode="file"
+              filter={isEnvFile}
+              title="Choose a .env file"
+              description="Its KEY=value lines are added to the box above, replacing only the keys it sets. Only .env files are listed."
+              onPick={(p) => void loadEnvFile(p)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${id}-port`}>Port</Label>
+              <Input
+                id={`${id}-port`}
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="optional"
+                aria-invalid={invalid("port")}
+                aria-describedby={describedBy("port")}
+              />
+              {fieldError("port")}
+              <p className="text-muted-foreground text-xs">
+                Passed to the app as PORT. A domain needs it.
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${id}-user`}>Runs as</Label>
+              <Input
+                id={`${id}-user`}
+                value={user}
+                onChange={(e) => setUser(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("user")}
+                aria-describedby={describedBy("user")}
+              />
+              {fieldError("user")}
+            </div>
+          </div>
+        </>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-command`}>{type === "node" ? "Entry script" : "Execution command"}</Label>
-        <div className="flex gap-2">
-          <Input
-            id={`${id}-command`}
-            value={type === "node" ? command : line}
-            onChange={(e) => (type === "node" ? setCommand(e.target.value) : setLine(e.target.value))}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={
-              type === "node" ? "server.js" : "/www/services/sites/my-app/bin/my-app --listen :3000"
-            }
-            required
-            aria-invalid={invalid("command")}
-            aria-describedby={describedBy("command")}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            aria-label="Browse… for the program"
-            onClick={() => setPicking("command")}
-          >
-            Browse…
-          </Button>
-        </div>
-        {type !== "node" && (
-          <p className="text-muted-foreground text-xs">
-            The program's absolute path, then its arguments. Quote an argument that contains spaces.
-          </p>
-        )}
-        {fieldError("command")}
-        <PathPicker
-          open={picking === "command"}
-          onOpenChange={(open) => !open && setPicking(null)}
-          start={commandStart}
-          mode="file"
-          title={type === "node" ? "Choose the entry script" : "Choose the program"}
-          description="Open a folder, then choose a file in it. The whole filesystem is browsable."
-          onPick={pickProgram}
-        />
-      </div>
-
-      {type === "node" && (
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-args`}>Arguments</Label>
-        <textarea
-          id={`${id}-args`}
-          className={textarea}
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          spellCheck={false}
-          placeholder="One per line"
-          aria-invalid={invalid("args")}
-          aria-describedby={describedBy("args")}
-        />
-        {fieldError("args")}
-      </div>
-      )}
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-workdir`}>Working directory</Label>
-        <div className="flex gap-2">
-          <Input
-            id={`${id}-workdir`}
-            value={workdir}
-            onChange={(e) => setWorkdir(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={`/www/services/sites/${name.trim() || "<name>"}`}
-            aria-invalid={invalid("workdir")}
-            aria-describedby={describedBy("workdir")}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            aria-label="Browse… for the working directory"
-            onClick={() => setPicking("workdir")}
-          >
-            Browse…
-          </Button>
-        </div>
-        {fieldError("workdir")}
-        <PathPicker
-          open={picking === "workdir"}
-          onOpenChange={(open) => !open && setPicking(null)}
-          start={workdirStart}
-          mode="dir"
-          title="Choose the working directory"
-          description="The folder the app runs in. Open a folder, then choose it; the whole filesystem is browsable."
-          onPick={setWorkdir}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <Label htmlFor={`${id}-env`}>Environment</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={envLoading}
-            onClick={() => setPicking("env")}
-          >
-            {envLoading ? "Reading…" : "Load .env file…"}
-          </Button>
-        </div>
-        <textarea
-          id={`${id}-env`}
-          className={textarea}
-          value={env}
-          onChange={(e) => setEnv(e.target.value)}
-          spellCheck={false}
-          placeholder="KEY=value, one per line"
-          aria-invalid={invalid("env")}
-          aria-describedby={describedBy("env")}
-        />
-        {fieldError("env")}
-        {envFrom !== null && (
-          <p className="text-muted-foreground text-xs">
-            Read from {envFrom}. Keys typed here that the file did not set were kept.
-          </p>
-        )}
-        <PathPicker
-          open={picking === "env"}
-          onOpenChange={(open) => !open && setPicking(null)}
-          start={workdirStart}
-          mode="file"
-          filter={isEnvFile}
-          title="Choose a .env file"
-          description="Its KEY=value lines are added to the box above, replacing only the keys it sets. Only .env files are listed."
-          onPick={(p) => void loadEnvFile(p)}
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-port`}>Port</Label>
-          <Input
-            id={`${id}-port`}
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            inputMode="numeric"
-            autoComplete="off"
-            placeholder="optional"
-            aria-invalid={invalid("port")}
-            aria-describedby={describedBy("port")}
-          />
-          {fieldError("port")}
-          <p className="text-muted-foreground text-xs">
-            Passed to the app as PORT. A domain needs it.
-          </p>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-user`}>Runs as</Label>
-          <Input
-            id={`${id}-user`}
-            value={user}
-            onChange={(e) => setUser(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={invalid("user")}
-            aria-describedby={describedBy("user")}
-          />
-          {fieldError("user")}
-        </div>
-      </div>
-
-      {app === null && (
+      {!onSettings && (
         <fieldset className="border-input flex flex-col gap-3 rounded-md border p-3">
           <legend className="px-1 text-sm font-medium">Domain</legend>
           <p className="text-muted-foreground text-xs">
-            Optional. nginx answers for the domain and passes requests to the app's port. You can
-            add or change domains later from the Sites page.
+            Optional. nginx answers for the domain and passes requests to the app's port, which is set
+            on Settings. You can add or change domains later from the Sites page.
           </p>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${id}-domain`}>Domain</Label>
@@ -595,24 +630,28 @@ export function AppForm({
         </fieldset>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-restart`}>When it exits</Label>
-        <Select
-          id={`${id}-restart`}
-          value={restart}
-          onChange={(e) => setRestart(e.target.value as AppRestart)}
-          aria-invalid={invalid("restart")}
-        >
-          <option value="always">Start it again</option>
-          <option value="on-failure">Start it again only if it failed</option>
-          <option value="never">Leave it stopped</option>
-        </Select>
-      </div>
+      {onSettings && (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-restart`}>When it exits</Label>
+            <Select
+              id={`${id}-restart`}
+              value={restart}
+              onChange={(e) => setRestart(e.target.value as AppRestart)}
+              aria-invalid={invalid("restart")}
+            >
+              <option value="always">Start it again</option>
+              <option value="on-failure">Start it again only if it failed</option>
+              <option value="never">Leave it stopped</option>
+            </Select>
+          </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />
-        Start it when supervisord starts
-      </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />
+            Start it when supervisord starts
+          </label>
+        </>
+      )}
 
       <ApplyError error={generalError} fallback="The app could not be saved." />
 
@@ -628,7 +667,7 @@ export function AppForm({
   )
 }
 
-/** The sections in the dialog's sidebar. A new app has only the settings. */
+/** The sections in the dialog's sidebar of an existing app. */
 export type AppSection = "settings" | "domains" | "logs" | "delete"
 
 const appSections: { id: AppSection; label: string }[] = [
@@ -638,10 +677,26 @@ const appSections: { id: AppSection; label: string }[] = [
   { id: "delete", label: "Delete" },
 ]
 
+/** The kinds a new app can be, in the order the sidebar lists them. */
+const newAppKinds: { type: AppType; label: string }[] = [
+  { type: "go", label: "Go or binary" },
+  { type: "node", label: "Node.js app" },
+  { type: "command", label: "Other command" },
+]
+
+interface NavItem {
+  key: string
+  label: string
+  active: boolean
+  onSelect: () => void
+}
+
 /**
- * The add and manage dialog: a sidebar of sections on the left, the section on the
- * right. Settings is the form; the other sections come from `renderSection`.
- * Closing it forgets a failed save.
+ * The add and manage dialog: a sidebar on the left, the section on the right.
+ * An existing app's sidebar lists its sections. A new app's sidebar lists its kind
+ * (Go or binary, Node.js, other command) and its Domain; the form shows the kind's
+ * program settings, or the domain. Settings is the form; the other sections come
+ * from `renderSection`. Closing it forgets a failed save.
  */
 export function AppDialog({
   open,
@@ -663,6 +718,10 @@ export function AppDialog({
   const save = useSaveApp()
   const createSite = useCreateSite()
   const runtimes = useRuntimes()
+  const startKind = app?.type ?? defaultType ?? "go"
+  // The kind and the part of the form on show. A new app's sidebar sets both.
+  const [kind, setKind] = useState<AppType>(startKind)
+  const [part, setPart] = useState<AppFormPart>("settings")
   // Set when the app was saved but its domain could not be bound.
   const [siteError, setSiteError] = useState<string | null>(null)
   // A save can succeed with a warning (the app would not stay up). It is read
@@ -675,12 +734,36 @@ export function AppDialog({
       createSite.reset()
       setWarnings(null)
       setSiteError(null)
+      setKind(startKind)
+      setPart("settings")
     }
     onOpenChange(next)
   }
 
-  const sections = app ? appSections : appSections.slice(0, 1)
-  const active = app ? section : "settings"
+  const nav: NavItem[] = app
+    ? appSections.map((s) => ({
+        key: s.id,
+        label: s.label,
+        active: section === s.id,
+        onSelect: () => onSectionChange?.(s.id),
+      }))
+    : [
+        ...newAppKinds.map((k) => ({
+          key: k.type,
+          label: k.label,
+          active: part === "settings" && kind === k.type,
+          onSelect: () => {
+            setKind(k.type)
+            setPart("settings")
+          },
+        })),
+        {
+          key: "domain",
+          label: "Domain",
+          active: part === "domain",
+          onSelect: () => setPart("domain"),
+        },
+      ]
 
   const settings = (
     <>
@@ -703,7 +786,10 @@ export function AppDialog({
             // Remounted when the runtimes arrive, so the Node picker starts on one.
             key={(runtimes.data?.node ?? []).map((n) => n.version).join(",")}
             app={app}
-            defaultType={defaultType}
+            type={kind}
+            onTypeChange={setKind}
+            part={part}
+            onPartChange={setPart}
             nodeVersions={runtimes.data?.node ?? []}
             pending={save.isPending || createSite.isPending}
             error={save.error}
@@ -712,6 +798,10 @@ export function AppDialog({
               save.mutate(
                 { name: app?.name, app: input },
                 {
+                  onError: (e) => {
+                    // A rejected field that is not on the Domain part is shown on Settings.
+                    if (e instanceof ApiError && e.field && !domainFields.includes(e.field)) setPart("settings")
+                  },
                   onSuccess: (res) => {
                     const finish = (extra: string | null) => {
                       if (extra !== null) setSiteError(extra)
@@ -752,18 +842,18 @@ export function AppDialog({
         </DialogHeader>
         <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[11.5rem_minmax(0,1fr)] sm:grid-rows-1">
           <nav
-            aria-label="App sections"
+            aria-label={app ? "App sections" : "New app"}
             className="bg-muted/30 flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
           >
-            {sections.map((s) => (
+            {nav.map((s) => (
               <button
-                key={s.id}
+                key={s.key}
                 type="button"
-                aria-current={active === s.id ? "page" : undefined}
-                onClick={() => onSectionChange?.(s.id)}
+                aria-current={s.active ? "page" : undefined}
+                onClick={s.onSelect}
                 className={cn(
                   "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
-                  active === s.id
+                  s.active
                     ? "bg-accent text-foreground font-medium"
                     : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
@@ -773,7 +863,7 @@ export function AppDialog({
             ))}
           </nav>
           <div className="min-h-0 overflow-y-auto p-4">
-            {active === "settings" ? settings : app && renderSection?.(active, app)}
+            {app === null || section === "settings" ? settings : renderSection?.(section, app)}
           </div>
         </div>
       </DialogContent>
