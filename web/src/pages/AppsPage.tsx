@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Plus } from "lucide-react"
+import { ArrowLeft, Plus } from "lucide-react"
 import { useState } from "react"
 
 import { AppDialog, type AppSection } from "@/components/AppDialog"
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { ApiError, type AppAction, type AppType, type CertView, type PanelApp, type Site } from "@/lib/api"
 import { useControlApp, useDeleteApp } from "@/lib/queries"
 import { tabForApp } from "@/lib/sitesTabs"
+import { SiteDetailBody } from "@/pages/SiteDetailPage"
 
 export function typeLabel(app: Pick<PanelApp, "type" | "node_version">): string {
   if (app.type === "node") return `Node.js ${app.node_version}`
@@ -82,9 +83,11 @@ export function AppsTable({
 }) {
   const control = useControlApp()
   const remove = useDeleteApp()
-  // `name` null is a new app. The app itself is looked up each render, so the
-  // dialog follows the list as it refreshes.
-  const [managing, setManaging] = useState<{ name: string | null; section: AppSection } | null>(null)
+  // `name` null is a new app. `site` is a domain opened from the Domains section:
+  // its configuration menu then shows inside this dialog. The app itself is looked
+  // up each render, so the dialog follows the list as it refreshes.
+  const [managing, setManaging] = useState<{ name: string | null; section: AppSection; site?: string } | null>(null)
+  const openSite = (site: string | undefined) => setManaging((m) => (m === null ? m : { ...m, site }))
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
   const [addingDomainTo, setAddingDomainTo] = useState<PanelApp | null>(null)
 
@@ -111,6 +114,24 @@ export function AppsTable({
 
   const renderSection = (section: AppSection, app: PanelApp) => {
     if (section === "domains") {
+      if (managing?.site !== undefined) {
+        // The site's own menu, in this dialog: no second dialog opens.
+        return (
+          <div className="flex flex-col gap-4">
+            <div>
+              <Button size="sm" variant="outline" onClick={() => openSite(undefined)}>
+                <ArrowLeft aria-hidden /> Back to domains
+              </Button>
+            </div>
+            <SiteDetailBody
+              key={managing.site}
+              domain={managing.site}
+              layout="tabs"
+              onGone={() => openSite(undefined)}
+            />
+          </div>
+        )
+      }
       const mine = sitesOf(app, sites)
       return (
         <div className="flex flex-col gap-4">
@@ -144,15 +165,8 @@ export function AppsTable({
                   </div>
                   <div className="flex items-center gap-2">
                     {certsPending ? <span className="text-muted-foreground">…</span> : <TLSCell cert={certs.get(s.domain)} />}
-                    <Button size="sm" variant="outline" asChild>
-                      <Link
-                        to="/sites/$domain"
-                        params={{ domain: s.domain }}
-                        search={{ tab: tabForApp(app.type) }}
-                        onClick={closeManage}
-                      >
-                        Open site
-                      </Link>
+                    <Button size="sm" variant="outline" onClick={() => openSite(s.domain)}>
+                      Configure
                     </Button>
                   </div>
                 </li>
@@ -326,7 +340,10 @@ export function AppsTable({
         app={current}
         defaultType={type}
         section={managing?.section ?? "settings"}
-        onSectionChange={(section) => setManaging((m) => (m === null ? m : { ...m, section }))}
+        // Leaving the section also leaves an open site, so Domains opens on the list.
+        onSectionChange={(section) =>
+          setManaging((m) => (m === null ? m : { ...m, section, site: undefined }))
+        }
         renderSection={renderSection}
       />
 
