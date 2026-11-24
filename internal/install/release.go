@@ -102,7 +102,7 @@ func (c *ReleaseClient) resolve(ctx context.Context) (ghRelease, error) {
 	if err != nil {
 		return ghRelease{}, fmt.Errorf("could not reach GitHub: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
@@ -196,7 +196,7 @@ func (c *ReleaseClient) download(ctx context.Context, url, dst string, limit int
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("answered %d", resp.StatusCode)
 	}

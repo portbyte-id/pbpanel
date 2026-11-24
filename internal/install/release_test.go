@@ -26,11 +26,11 @@ func releaseServer(t *testing.T, binary []byte, sum string, withSums bool) *http
 		if withSums {
 			assets += fmt.Sprintf(`,{"name":"SHA256SUMS","url":"%s/a/sums"}`, srv.URL)
 		}
-		fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[%s]}`, assets)
+		_, _ = fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[%s]}`, assets)
 	})
 	mux.HandleFunc("/a/bin", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(binary) })
 	mux.HandleFunc("/a/sums", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, "%s  pbp-linux-amd64\n", sum)
+		_, _ = fmt.Fprintf(w, "%s  pbp-linux-amd64\n", sum)
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
