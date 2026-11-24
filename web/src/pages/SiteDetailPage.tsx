@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { ApiError, type SiteDetail, type SiteRewrite } from "@/lib/api"
+import type { LogSource } from "@/lib/logs"
 import { cn } from "@/lib/utils"
 import {
   type ConfigSource,
@@ -31,6 +32,7 @@ import {
   useSiteIncludes,
   useUpdateSite,
 } from "@/lib/queries"
+import { TailViewer } from "@/pages/LogsPage"
 import { kindLabel } from "@/pages/SitesPage"
 
 type Section = "domains" | "proxy" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
@@ -114,7 +116,7 @@ export function SiteDetailBody({
     { id: "waf", label: "Firewall" },
     ...(data.php_version ? [{ id: "php" as const, label: "PHP version" }] : []),
     ...(data.php_version ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
-    { id: "logs", label: "Response log" },
+    { id: "logs", label: "Logs" },
     { id: "delete", label: "Reset or delete" },
   ]
 
@@ -157,7 +159,7 @@ export function SiteDetailBody({
       {section === "waf" && <SiteWAF domain={data.domain} prefill={wafPrefill} />}
       {section === "php" && data.php_version && <SitePHP detail={data} />}
       {section === "rewrite" && data.php_version && <SiteRewriteSection detail={data} />}
-      {section === "logs" && <Logs domain={data.domain} php={data.php_version !== null} />}
+      {section === "logs" && <SiteLogs domain={data.domain} php={data.php_version !== null} />}
       {section === "delete" && <DangerZone detail={data} onGone={onGone} />}
     </>
   )
@@ -424,15 +426,36 @@ function DangerZone({ detail, onGone }: { detail: SiteDetail; onGone: () => void
   )
 }
 
-function Logs({ domain, php }: { domain: string; php: boolean }) {
+/**
+ * The site's own logs, read through the log viewer's tail: the access log, the
+ * nginx error log and, for a PHP site, the PHP error log. Every kind of site
+ * writes the first two, so the menu is the same for a static, PHP, or proxied
+ * site (an app's domain included).
+ */
+function SiteLogs({ domain, php }: { domain: string; php: boolean }) {
+  const streams = [
+    { id: "access", label: "Access log" },
+    { id: "error", label: "Error log" },
+    ...(php ? [{ id: "php", label: "PHP error log" }] : []),
+  ]
+  const [picked, setPicked] = useState("access")
+  const current = streams.find((s) => s.id === picked) ?? streams[0]
+  const source: LogSource = {
+    id: `site:${domain}:${current.id}`,
+    label: `${domain} ${current.label.toLowerCase()}`,
+    kind: "site",
+  }
+
   return (
-    <div className="flex flex-col gap-2 text-sm">
-      <p>The panel does not show logs yet. Until it does, they are on the server at:</p>
-      <ul className="font-mono text-xs">
-        <li>/www/panel/logs/sites/{domain}.access.log</li>
-        <li>/www/panel/logs/sites/{domain}.error.log</li>
-        {php && <li>/www/panel/logs/sites/{domain}.php.log</li>}
-      </ul>
+    <div className="flex flex-col gap-4">
+      <div role="tablist" aria-label="Log files" className="flex flex-wrap gap-1">
+        {streams.map((s) => (
+          <ConfigTab key={s.id} active={current.id === s.id} onClick={() => setPicked(s.id)}>
+            {s.label}
+          </ConfigTab>
+        ))}
+      </div>
+      <TailViewer key={source.id} source={source} />
     </div>
   )
 }
