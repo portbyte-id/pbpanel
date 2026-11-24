@@ -54,8 +54,11 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   await page.getByLabel("Other domains").fill(`www.${DOMAIN}`)
   await page.getByRole("button", { name: "Create site" }).click()
 
-  // 2. The create lands on the site, with every control connected.
-  await expect(page).toHaveURL(new RegExp(`/sites/${DOMAIN}$`))
+  // 2. The create lands on the site, with every control connected. The page
+  //    carries `?tab=` because the dialog is opened from a tab of the Sites page
+  //    and the site's own page remembers which one, so the assertion matches the
+  //    path and allows the query.
+  await expect(page).toHaveURL(new RegExp(`/sites/${DOMAIN}(\\?|$)`))
   await expect(page.getByRole("heading", { name: DOMAIN })).toBeVisible()
   await expect(page.locator('[data-feature="names"]').getByText("connected")).toBeVisible()
   await expect(page.getByLabel("Other domains")).toHaveValue(`www.${DOMAIN}`)
@@ -110,9 +113,10 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   await expect(page.getByLabel("Other domains")).toBeEnabled()
 
   // 7. The nginx page shows the service and saves a setting. The site dialog is
-  //    modal, so it is closed before the rail is used.
+  //    modal, so it is closed before the rail is used. The list URL carries the
+  //    tab it was opened from (`?tab=web`), so the path is what is asserted.
   await page.keyboard.press("Escape")
-  await expect(page).toHaveURL(/\/sites$/)
+  await expect(page).toHaveURL(/\/sites(\?|$)/)
   await page.getByRole("link", { name: "Runtimes" }).click()
   await expect(page.getByText(/nginx is running/)).toBeVisible()
   await page.getByRole("tab", { name: "Settings" }).click()
@@ -129,8 +133,8 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   await expect(confirm).toBeDisabled()
   await page.getByLabel(`Type ${DOMAIN} to confirm`).fill(DOMAIN)
   await confirm.click()
-  await expect(page).toHaveURL(/\/sites$/)
-  await expect(page.getByText("No sites yet.")).toBeVisible()
+  await expect(page).toHaveURL(/\/sites(\?|$)/)
+  await expect(page.getByText("Add your first site")).toBeVisible()
 })
 
 /**
@@ -163,7 +167,7 @@ test("create a site with PHP and a /api route in the one dialog", async ({ page 
   await page.getByRole("textbox", { name: "Pass requests to" }).fill("http://127.0.0.1:8080")
 
   await page.getByRole("button", { name: "Create site" }).click()
-  await expect(page).toHaveURL(new RegExp(`/sites/${domain}$`))
+  await expect(page).toHaveURL(new RegExp(`/sites/${domain}(\\?|$)`))
 
   // Both parts are on the site: PHP in the overview, /api in the routes.
   await expect(page.getByText(/PHP 8\./)).toBeVisible()
@@ -197,6 +201,6 @@ test("create a site with PHP and a /api route in the one dialog", async ({ page 
   await page.getByRole("button", { name: "Delete site" }).first().click()
   await page.getByLabel(`Type ${domain} to confirm`).fill(domain)
   await page.getByRole("button", { name: "Delete site" }).last().click()
-  await expect(page).toHaveURL(/\/sites$/)
-  await expect(page.getByText("No sites yet.")).toBeVisible()
+  await expect(page).toHaveURL(/\/sites(\?|$)/)
+  await expect(page.getByText("Add your first site")).toBeVisible()
 })

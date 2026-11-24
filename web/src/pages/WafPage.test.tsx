@@ -174,6 +174,52 @@ describe("pollWhileVisible", () => {
 })
 
 describe("WafPage", () => {
+  it("shows which sites carry open-appsec, and filters the table by engine", async () => {
+    // The D5 requirement on the overview: an operator reading this page can see
+    // which sites run the engine that talks to Check Point's cloud.
+    const user = userEvent.setup()
+    vi.mocked(api.wafOverview).mockResolvedValue({
+      available: true,
+      flavor: "pqc",
+      reason: "",
+      sites: [
+        {
+          domain: "a.test",
+          engine: "open-appsec",
+          mode: "block",
+          paranoia: 1,
+          rate_limit: false,
+          path_blocklist: 0,
+          ip_rules: 0,
+          exclusions: 0,
+        },
+        {
+          domain: "b.test",
+          engine: "modsecurity",
+          mode: "detect",
+          paranoia: 2,
+          rate_limit: false,
+          path_blocklist: 0,
+          ip_rules: 0,
+          exclusions: 0,
+        },
+      ],
+    })
+    renderPage()
+
+    const table = await screen.findByRole("table", { name: "Traffic per site" })
+    const rowA = within(table).getByRole("row", { name: /a\.test/ })
+    const rowB = within(table).getByRole("row", { name: /b\.test/ })
+    expect(within(rowA).getByText("open-appsec")).toBeInTheDocument()
+    // An open-appsec site shows the agent's own mode name, not a paranoia level.
+    expect(within(rowA).getByText(/prevent-learn/)).toBeInTheDocument()
+    expect(within(rowB).getByText("ModSecurity")).toBeInTheDocument()
+    expect(within(rowB).getByText(/level 2/)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText("Engine"), "open-appsec")
+    expect(within(screen.getByRole("table", { name: "Traffic per site" })).queryByRole("row", { name: /b\.test/ })).toBeNull()
+  })
+
   it("puts the page root in a containing block so sr-only captions cannot escape main", async () => {
     // Each table's caption is `sr-only`: absolutely positioned, so without a
     // positioned ancestor it lays out against the initial containing block,
@@ -208,6 +254,8 @@ describe("WafPage", () => {
     expect(within(rowA).getByText(/Blocking · level 2/)).toBeInTheDocument()
     const rowB = within(sitesTable).getByRole("row", { name: /b\.test/ })
     expect(within(rowB).getByText("Off")).toBeInTheDocument()
+    // The engine column: an overview row with no engine field is ModSecurity.
+    expect(within(rowA).getByText("ModSecurity")).toBeInTheDocument()
 
     // The top lists are behind their own tab, so they are not in the Overview.
     expect(screen.queryByRole("region", { name: "Top client IPs" })).not.toBeInTheDocument()
