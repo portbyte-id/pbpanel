@@ -38,7 +38,7 @@ function setup(site: SiteDetail) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <SiteDetailBody domain={site.domain} onGone={() => {}} layout="tabs" />
+      <SiteDetailBody domain={site.domain} onGone={() => {}} />
     </QueryClientProvider>,
   )
 }

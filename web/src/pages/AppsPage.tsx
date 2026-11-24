@@ -1,20 +1,22 @@
 import { Link } from "@tanstack/react-router"
-import { ArrowLeft, Plus } from "lucide-react"
+import { Plus } from "lucide-react"
 import { useState } from "react"
 
-import { AppDialog, type AppSection } from "@/components/AppDialog"
+import { AppDialog, type AppSection, type AppSiteNav } from "@/components/AppDialog"
 import { AppLogs } from "@/components/AppLogs"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { CreateSiteDialog } from "@/components/CreateSiteDialog"
 import { TLSCell } from "@/components/TLSCell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Select } from "@/components/ui/select"
 import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { ApiError, type AppAction, type AppType, type CertView, type PanelApp, type Site } from "@/lib/api"
 import { useControlApp, useDeleteApp } from "@/lib/queries"
 import { matchesQuery } from "@/lib/table"
 import { tabForApp } from "@/lib/sitesTabs"
-import { SiteDetailBody } from "@/pages/SiteDetailPage"
+import { cn } from "@/lib/utils"
+import { SitePane, siteSectionList, type SiteSection } from "@/pages/SiteDetailPage"
 
 export function typeLabel(app: Pick<PanelApp, "type" | "node_version">): string {
   if (app.type === "node") return `Node.js ${app.node_version}`
@@ -59,8 +61,9 @@ export function isRunning(app: Pick<PanelApp, "state">): boolean {
 
 /**
  * The apps of one type and the sites in front of them, in one table: state and
- * controls, and under Domains each site with its HTTPS state. Manage opens a dialog
- * with the app's settings, domains, log and delete in a sidebar.
+ * controls, and under Domains each site with its HTTPS state. Manage opens one dialog
+ * whose sidebar holds the app's settings and log, the domain menu (manager, reverse
+ * proxy, config, SSL…) of the domains in front of it, and delete.
  */
 export function AppsTable({
   type,
@@ -85,11 +88,11 @@ export function AppsTable({
 }) {
   const control = useControlApp()
   const remove = useDeleteApp()
-  // `name` null is a new app. `site` is a domain opened from the Domains section:
-  // its configuration menu then shows inside this dialog. The app itself is looked
-  // up each render, so the dialog follows the list as it refreshes.
+  // `name` null is a new app. `site` is the domain the dialog's domain menu is on,
+  // when the app has several. The app itself is looked up each render, so the
+  // dialog follows the list as it refreshes.
   const [managing, setManaging] = useState<{ name: string | null; section: AppSection; site?: string } | null>(null)
-  const openSite = (site: string | undefined) => setManaging((m) => (m === null ? m : { ...m, site }))
+  const pickSite = (site: string) => setManaging((m) => (m === null ? m : { ...m, site }))
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
   const [addingDomainTo, setAddingDomainTo] = useState<PanelApp | null>(null)
 
@@ -110,7 +113,7 @@ export function AppsTable({
   const act = (name: string, action: AppAction) => {
     // Starting shows the app's log while supervisord works, and the dialog stays
     // open afterwards so a failed start can be read, never closed on its own.
-    if (action !== "stop") setManaging({ name, section: "logs" })
+    if (action !== "stop") setManaging((m) => ({ name, section: "logs", site: m?.name === name ? m.site : undefined }))
     control.mutate({ name, action })
   }
   const closeManage = () => {
@@ -125,66 +128,116 @@ export function AppsTable({
       : null
   const pendingHere = current !== null && control.isPending && control.variables?.name === current.name
 
+  // The domains in front of the open app. One dialog configures all of them: the
+  // domain menu is on `activeSite`, and a picker switches it, so no domain opens
+  // a dialog of its own.
+  const mine = current === null ? [] : sitesOf(current, sites)
+  const activeSite = mine.find((s) => s.domain === managing?.site) ?? mine[0]
+  const siteNav: AppSiteNav | undefined =
+    current === null
+      ? undefined
+      : activeSite === undefined
+        ? { heading: "Domains", items: [{ id: "site:domains", label: "Domains" }] }
+        : {
+            heading: mine.length > 1 ? `Domain: ${activeSite.domain}` : activeSite.domain,
+            items: siteSectionList(activeSite.php_version !== null).map((i) => ({
+              id: `site:${i.id}` as AppSection,
+              label: i.label,
+            })),
+          }
+
   const renderSection = (section: AppSection, app: PanelApp) => {
-    if (section === "domains") {
-      if (managing?.site !== undefined) {
-        // The site's own menu, in this dialog: no second dialog opens.
-        return (
-          <div className="flex flex-col gap-4">
-            <div>
-              <Button size="sm" variant="outline" onClick={() => openSite(undefined)}>
-                <ArrowLeft aria-hidden /> Back to domains
-              </Button>
-            </div>
-            <SiteDetailBody
-              key={managing.site}
-              domain={managing.site}
-              layout="tabs"
-              onGone={() => openSite(undefined)}
-            />
-          </div>
-        )
-      }
-      const mine = sitesOf(app, sites)
+    if (section.startsWith("site:")) {
+      // A section the active domain does not have (the PHP ones, after switching
+      // domains) falls back to the manager.
+      const id: SiteSection = siteNav?.items.some((i) => i.id === section)
+        ? (section.slice("site:".length) as SiteSection)
+        : "domains"
       return (
         <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-muted-foreground max-w-md text-sm">
-              Sites that pass requests to this app{app.port == null ? "" : ` on port ${app.port}`}.
-            </p>
-            <Button size="sm" disabled={app.proxy_url === ""} onClick={() => setAddingDomainTo(app)}>
-              <Plus aria-hidden /> Add domain
-            </Button>
-          </div>
-          {app.proxy_url === "" && (
-            <p className="text-muted-foreground text-sm">Set a port under Settings first: a domain passes requests to it.</p>
+          {mine.length > 1 && activeSite !== undefined && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="app-domain" className="text-muted-foreground text-sm">
+                Domain
+              </label>
+              <Select
+                id="app-domain"
+                className="w-auto min-w-48"
+                value={activeSite.domain}
+                onChange={(e) => pickSite(e.target.value)}
+              >
+                {mine.map((s) => (
+                  <option key={s.domain} value={s.domain}>
+                    {s.domain}
+                    {pathOnSite(app, s)}
+                  </option>
+                ))}
+              </Select>
+            </div>
           )}
-          {mine.length === 0 ? (
-            app.proxy_url !== "" && (
-              <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">
-                No domain points at this app yet.
-              </p>
-            )
-          ) : (
-            <ul className="divide-border border-border divide-y rounded-md border">
-              {mine.map((s) => (
-                <li key={s.domain} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-medium">
-                      {s.domain}
-                      <span className="text-muted-foreground font-mono text-xs">{pathOnSite(app, s)}</span>
-                    </span>
-                    {s.aliases.length > 0 && <span className="text-muted-foreground text-xs">{s.aliases.join(", ")}</span>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {certsPending ? <span className="text-muted-foreground">…</span> : <TLSCell cert={certs.get(s.domain)} />}
-                    <Button size="sm" variant="outline" onClick={() => openSite(s.domain)}>
-                      Configure
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+          {id === "domains" && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-muted-foreground max-w-md text-sm">
+                  Sites that pass requests to this app{app.port == null ? "" : ` on port ${app.port}`}.
+                </p>
+                <Button size="sm" disabled={app.proxy_url === ""} onClick={() => setAddingDomainTo(app)}>
+                  <Plus aria-hidden /> Add domain
+                </Button>
+              </div>
+              {app.proxy_url === "" && (
+                <p className="text-muted-foreground text-sm">
+                  Set a port under Settings first: a domain passes requests to it.
+                </p>
+              )}
+              {mine.length === 0 ? (
+                app.proxy_url !== "" && (
+                  <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">
+                    No domain points at this app yet.
+                  </p>
+                )
+              ) : (
+                <ul className="divide-border border-border divide-y rounded-md border">
+                  {mine.map((s) => (
+                    <li key={s.domain}>
+                      <button
+                        type="button"
+                        aria-current={s.domain === activeSite?.domain ? "true" : undefined}
+                        onClick={() => pickSite(s.domain)}
+                        className={cn(
+                          "focus-visible:ring-ring flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left text-sm outline-none focus-visible:ring-2",
+                          s.domain === activeSite?.domain ? "bg-accent/60" : "hover:bg-accent/30",
+                        )}
+                      >
+                        <span className="flex flex-col gap-0.5">
+                          <span className="font-medium">
+                            {s.domain}
+                            <span className="text-muted-foreground font-mono text-xs">{pathOnSite(app, s)}</span>
+                          </span>
+                          {s.aliases.length > 0 && (
+                            <span className="text-muted-foreground text-xs">{s.aliases.join(", ")}</span>
+                          )}
+                        </span>
+                        {certsPending ? (
+                          <span className="text-muted-foreground">…</span>
+                        ) : (
+                          <TLSCell cert={certs.get(s.domain)} />
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {activeSite !== undefined && (
+            <SitePane
+              domain={activeSite.domain}
+              section={id}
+              onGone={() =>
+                setManaging((m) => (m === null ? m : { ...m, section: "site:domains", site: undefined }))
+              }
+            />
           )}
         </div>
       )
@@ -373,11 +426,9 @@ export function AppsTable({
         app={current}
         defaultType={type}
         section={managing?.section ?? "settings"}
-        // Leaving the section also leaves an open site, so Domains opens on the list.
-        onSectionChange={(section) =>
-          setManaging((m) => (m === null ? m : { ...m, section, site: undefined }))
-        }
+        onSectionChange={(section) => setManaging((m) => (m === null ? m : { ...m, section }))}
         renderSection={renderSection}
+        siteNav={siteNav}
       />
 
       <CreateSiteDialog

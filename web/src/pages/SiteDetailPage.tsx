@@ -35,7 +35,7 @@ import {
 import { TailViewer } from "@/pages/LogsPage"
 import { kindLabel } from "@/pages/SitesPage"
 
-type Section = "domains" | "proxy" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
+export type SiteSection = "domains" | "proxy" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
 
 /**
  * One site, as a dialog over the sites list. `/sites/<domain>` opens it, so a link
@@ -64,17 +64,82 @@ export function SiteDetailDialog({
             {data ? `Added ${new Date(data.created_at).toLocaleString()}` : "Loading the site…"}
           </DialogDescription>
         </DialogHeader>
-        <SiteDetailBody domain={domain} onGone={onClose} wafPrefill={wafPrefill} layout="rail" />
+        <SiteDetailBody domain={domain} onGone={onClose} wafPrefill={wafPrefill} />
       </DialogContent>
     </Dialog>
   )
 }
 
+/** The sections of a site's configuration menu. PHP ones only exist for a PHP site. */
+export function siteSectionList(php: boolean): { id: SiteSection; label: string }[] {
+  return [
+    { id: "domains", label: "Domain manager" },
+    { id: "proxy", label: "Reverse proxy" },
+    { id: "config", label: "Config" },
+    { id: "ssl", label: "SSL" },
+    { id: "waf", label: "Firewall" },
+    ...(php ? [{ id: "php" as const, label: "PHP version" }] : []),
+    ...(php ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
+    { id: "logs", label: "Logs" },
+    { id: "delete", label: "Reset or delete" },
+  ]
+}
+
+/** One section of a site's menu, for a site already loaded. */
+function SiteSectionContent({
+  detail,
+  section,
+  onGone,
+  wafPrefill,
+}: {
+  detail: SiteDetail
+  section: SiteSection
+  onGone: () => void
+  wafPrefill?: WafPrefill
+}) {
+  return (
+    <>
+      {section === "domains" && <Overview detail={detail} />}
+      {section === "proxy" && <SiteProxyRoutes detail={detail} />}
+      {section === "config" && <SiteConfig detail={detail} />}
+      {section === "ssl" && <SiteTLS detail={detail} />}
+      {section === "waf" && <SiteWAF domain={detail.domain} prefill={wafPrefill} />}
+      {section === "php" && detail.php_version && <SitePHP detail={detail} />}
+      {section === "rewrite" && detail.php_version && <SiteRewriteSection detail={detail} />}
+      {section === "logs" && <SiteLogs domain={detail.domain} php={detail.php_version !== null} />}
+      {section === "delete" && <DangerZone detail={detail} onGone={onGone} />}
+    </>
+  )
+}
+
 /**
- * A site's configuration menu and the section it shows. It is the body of the site
- * dialog (`rail`: the menu down the left) and of an app's dialog when one of its
- * sites is opened there (`tabs`: the menu across the top). `onGone` runs after the
- * site is deleted.
+ * One section of one site, loaded by domain. An app's dialog puts the site's menu
+ * in its own sidebar and shows the section picked there through this.
+ */
+export function SitePane({
+  domain,
+  section,
+  onGone,
+}: {
+  domain: string
+  section: SiteSection
+  onGone: () => void
+}) {
+  const { data, isPending, error } = useSite(domain)
+  if (isPending) return <SkeletonRows label={`Loading ${domain}…`} />
+  if (error) {
+    return (
+      <p role="alert" className="text-destructive text-sm">
+        {error instanceof ApiError ? error.detail : "The site could not be loaded."}
+      </p>
+    )
+  }
+  return <SiteSectionContent key={`${domain}|${section}`} detail={data} section={section} onGone={onGone} />
+}
+
+/**
+ * A site's configuration menu down the left and the section it shows: the body of
+ * the site dialog. `onGone` runs after the site is deleted.
  *
  * `wafPrefill` is a rule handed over from the WAF audit viewer: the menu then
  * opens on the Firewall section with that rule ready to add as an exclusion.
@@ -83,15 +148,13 @@ export function SiteDetailBody({
   domain,
   onGone,
   wafPrefill,
-  layout,
 }: {
   domain: string
   onGone: () => void
   wafPrefill?: WafPrefill
-  layout: "rail" | "tabs"
 }) {
   const { data, isPending, error } = useSite(domain)
-  const [section, setSection] = useState<Section>(wafPrefill ? "waf" : "domains")
+  const [section, setSection] = useState<SiteSection>(wafPrefill ? "waf" : "domains")
 
   if (isPending) {
     return (
@@ -108,74 +171,32 @@ export function SiteDetailBody({
     )
   }
 
-  const sections: { id: Section; label: string }[] = [
-    { id: "domains", label: "Domain manager" },
-    { id: "proxy", label: "Reverse proxy" },
-    { id: "config", label: "Config" },
-    { id: "ssl", label: "SSL" },
-    { id: "waf", label: "Firewall" },
-    ...(data.php_version ? [{ id: "php" as const, label: "PHP version" }] : []),
-    ...(data.php_version ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
-    { id: "logs", label: "Logs" },
-    { id: "delete", label: "Reset or delete" },
-  ]
-
-  const nav = (
-    <nav
-      aria-label="Site sections"
-      className={cn(
-        "flex gap-1 overflow-x-auto",
-        layout === "rail"
-          ? "bg-muted/30 border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
-          : "flex-wrap",
-      )}
-    >
-      {sections.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          aria-current={section === s.id ? "page" : undefined}
-          onClick={() => setSection(s.id)}
-          className={cn(
-            "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
-            layout === "tabs" && "px-2.5 py-1.5 text-xs",
-            section === s.id
-              ? "bg-accent text-foreground font-medium"
-              : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-          )}
-        >
-          {s.label}
-        </button>
-      ))}
-    </nav>
-  )
-
-  const content = (
-    <>
-      {section === "domains" && <Overview detail={data} />}
-      {section === "proxy" && <SiteProxyRoutes detail={data} />}
-      {section === "config" && <SiteConfig detail={data} />}
-      {section === "ssl" && <SiteTLS detail={data} />}
-      {section === "waf" && <SiteWAF domain={data.domain} prefill={wafPrefill} />}
-      {section === "php" && data.php_version && <SitePHP detail={data} />}
-      {section === "rewrite" && data.php_version && <SiteRewriteSection detail={data} />}
-      {section === "logs" && <SiteLogs domain={data.domain} php={data.php_version !== null} />}
-      {section === "delete" && <DangerZone detail={data} onGone={onGone} />}
-    </>
-  )
-
-  if (layout === "tabs") {
-    return (
-      <div className="flex flex-col gap-4">
-        {nav}
-        <div>{content}</div>
-      </div>
-    )
-  }
   return (
     <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[11.5rem_minmax(0,1fr)] sm:grid-rows-1">
-      {nav}
-      <div className="min-h-0 overflow-y-auto p-4">{content}</div>
+      <nav
+        aria-label="Site sections"
+        className="bg-muted/30 flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
+      >
+        {siteSectionList(data.php_version !== null).map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            aria-current={section === s.id ? "page" : undefined}
+            onClick={() => setSection(s.id)}
+            className={cn(
+              "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
+              section === s.id
+                ? "bg-accent text-foreground font-medium"
+                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            )}
+          >
+            {s.label}
+          </button>
+        ))}
+      </nav>
+      <div className="min-h-0 overflow-y-auto p-4">
+        <SiteSectionContent detail={data} section={section} onGone={onGone} wafPrefill={wafPrefill} />
+      </div>
     </div>
   )
 }
