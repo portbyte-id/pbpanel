@@ -42,7 +42,7 @@ export function posture(sites: WafOverviewSite[]): Posture {
   return p
 }
 
-function Panel({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+export function Panel({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <section aria-label={title} className="bg-card flex min-w-0 flex-col gap-3 rounded-lg border p-3">
       <div className="flex items-baseline justify-between gap-2">

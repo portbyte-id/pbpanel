@@ -181,8 +181,8 @@ describe("WafPage", () => {
     // second scrollbar beside the app shell's. `relative` on the page root keeps
     // them inside. jsdom has no layout, so this pins the class.
     renderPage()
-    await screen.findByText("Requests per second now")
-    const root = screen.getByText("Requests per second now").closest("div.relative")
+    await screen.findByText("Requests per second")
+    const root = screen.getByText("Requests per second").closest("div.relative")
     expect(root).not.toBeNull()
     for (const table of screen.getAllByRole("table")) {
       if (table.querySelector("caption.sr-only")) expect(root!.contains(table)).toBe(true)
@@ -193,9 +193,9 @@ describe("WafPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    const label = await screen.findByText("Requests per second now")
+    const label = await screen.findByText("Requests per second")
     expect(label.closest("div")).toHaveTextContent("4.5")
-    expect(screen.getByText("12.3k")).toBeInTheDocument() // requests tile, compacted
+    expect(screen.getByText("12.3k")).toBeInTheDocument() // requests figure, compacted
     expect(screen.getByText("23 ms")).toBeInTheDocument()
     expect(screen.getByText("slowest 910 ms")).toBeInTheDocument()
 
@@ -246,7 +246,8 @@ describe("WafPage", () => {
     renderPage()
     await user.click(screen.getByRole("tab", { name: "Firewall" }))
     expect(await screen.findByText(/firewall audit is not available/)).toBeInTheDocument()
-    expect(screen.getByText("12.3k")).toBeInTheDocument()
+    // The posture banner sits above the tabs, so it stays while the firewall tab is shown.
+    expect(screen.getByRole("region", { name: "Protection" })).toBeInTheDocument()
   })
 
   it("narrows to one site from the site table and asks the server for that site", async () => {

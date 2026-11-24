@@ -4,10 +4,10 @@ import { useEffect, useId, useMemo, useState } from "react"
 import { ErrorState } from "@/components/ErrorState"
 import { Sparkline } from "@/components/Sparkline"
 import { TrafficChart } from "@/components/TrafficChart"
-import { FirewallActivity, percent, PostureBar, ResponseMix } from "@/components/TrafficPanels"
+import { FirewallActivity, Panel, percent, posture, PostureBar, ResponseMix } from "@/components/TrafficPanels"
 import { BlockPagePanel } from "@/components/WafBlockPage"
 import { ProtectionPanel } from "@/components/WafProtection"
-import { SourcesPanel } from "@/components/WafSources"
+import { CountriesTable, SourcesPanel } from "@/components/WafSources"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -85,7 +85,7 @@ export function WafPage() {
   return (
     // `relative` contains the absolutely-positioned `sr-only` table captions, so
     // they cannot escape `main`'s clip and grow the document past the viewport.
-    <div className="relative flex flex-col gap-6">
+    <div className="relative flex flex-col gap-4">
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-site`}>Site</Label>
@@ -128,9 +128,7 @@ export function WafPage() {
           fallback="The traffic monitor is not available."
           onRetry={() => void traffic.refetch()}
         />
-      ) : (
-        <Totals data={traffic.data} events={events.data} />
-      )}
+      ) : null}
 
       <Tabs defaultValue="overview">
         <TabsList aria-label="WAF views">
@@ -143,11 +141,22 @@ export function WafPage() {
         </TabsList>
         <TabsContent value="overview" className="pt-2">
           {traffic.data && !traffic.error && (
-            <Overview data={traffic.data} site={site} range={range} modes={modes} onPickSite={setSite} />
+            <Overview
+              data={traffic.data}
+              events={events.data}
+              eventsFailed={events.isError}
+              eventsPending={events.isPending}
+              site={site}
+              range={range}
+              modes={modes}
+              onPickSite={setSite}
+            />
           )}
         </TabsContent>
         <TabsContent value="top" className="pt-2">
-          {traffic.data && !traffic.error && <TopLists data={traffic.data} />}
+          {traffic.data && !traffic.error && (
+            <TopLists data={traffic.data} range={range} showCountries={site === ""} />
+          )}
         </TabsContent>
         <TabsContent value="firewall" className="pt-2">
           <FirewallActivity summary={events.data} failed={events.isError} pending={events.isPending} />
@@ -166,109 +175,167 @@ export function WafPage() {
   )
 }
 
-function Tile({
+/** One figure in a card: a label, the value, and an optional line of context. */
+function Stat({
   label,
   value,
   hint,
-  spark,
   tone,
+  small,
 }: {
   label: string
   value: string
   hint?: string
-  spark?: number[]
-  tone?: "warning" | "destructive"
+  tone?: "destructive"
+  small?: boolean
 }) {
   return (
-    <div className="bg-card flex flex-col gap-1 rounded-lg border p-3">
+    <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="flex items-end justify-between gap-2">
-        <span
-          className={
-            "text-2xl font-semibold tabular-nums " +
-            (tone === "destructive" ? "text-destructive" : tone === "warning" ? "text-warning" : "")
-          }
-        >
-          {value}
-        </span>
-        {spark && (
-          <Sparkline values={spark} label={`${label} over the period`} className="text-muted-foreground h-6 w-20" />
-        )}
+      <dd
+        className={
+          "font-semibold tabular-nums " +
+          (small ? "text-base " : "text-2xl ") +
+          (tone === "destructive" ? "text-destructive" : "")
+        }
+      >
+        {value}
       </dd>
       {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
     </div>
   )
 }
 
-/** The headline numbers, shown above the tabs for every view. */
-function Totals({ data, events }: { data: TrafficSummary; events: WafEventSummary | undefined }) {
+/** The totals of the period, and whether the sites in view are protected. */
+function SecurityCard({
+  data,
+  events,
+  sites,
+}: {
+  data: TrafficSummary
+  events: WafEventSummary | undefined
+  sites: WafOverviewSite[]
+}) {
   const t = data.totals
-  const series = data.series
   const errors = t.s4xx + t.s5xx
+  const p = posture(sites)
+  const pill =
+    p.total === 0
+      ? { text: "No sites", variant: "outline" as const }
+      : p.off > 0
+        ? { text: `${p.off} ${p.off === 1 ? "site" : "sites"} unprotected`, variant: "destructive" as const }
+        : { text: "Protection active", variant: "success" as const }
+
   return (
-    <dl className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Tile label="Requests per second now" value={data.rps_now.toFixed(1)} />
-        <Tile
-          label="Requests"
-          value={compactCount(t.requests)}
-          hint={formatBytes(t.bytes)}
-          spark={series.map((p) => p.requests)}
+    <Panel title="Security overview" aside={<Badge variant={pill.variant}>{pill.text}</Badge>}>
+      <dl className="grid grid-cols-2 gap-3">
+        <Stat label="Requests" value={compactCount(t.requests)} hint={formatBytes(t.bytes)} />
+        <Stat
+          label="Malicious requests"
+          value={compactCount(t.waf_events)}
+          hint={t.requests > 0 ? `${percent(t.waf_events, t.requests)} of requests` : undefined}
+          tone={t.waf_events > 0 ? "destructive" : undefined}
         />
-        <Tile
+      </dl>
+      <dl className="border-border grid grid-cols-3 gap-3 border-t pt-3">
+        <Stat
+          small
           label="Error rate"
           value={percent(errors, t.requests)}
           hint={`${t.s4xx.toLocaleString("en-US")} 4xx · ${t.s5xx.toLocaleString("en-US")} 5xx`}
-          tone={t.s5xx > 0 ? "destructive" : t.s4xx > 0 ? "warning" : undefined}
-          spark={series.map((p) => p.s4xx + p.s5xx)}
         />
-        <Tile
-          label="WAF events"
-          value={compactCount(t.waf_events)}
-          hint={t.requests > 0 ? `${percent(t.waf_events, t.requests)} of requests` : undefined}
-          spark={series.map((p) => p.waf_events)}
-        />
-        <Tile
-          label="Blocked by the firewall"
+        <Stat
+          small
+          label="Blocked by firewall"
           value={events ? compactCount(events.by_action.blocked) : "—"}
           hint={events ? `${events.by_action.detected.toLocaleString("en-US")} detected only` : undefined}
-          tone={events && events.by_action.blocked > 0 ? "destructive" : undefined}
         />
-        <Tile
-          label="Average latency"
-          value={`${Math.round(t.avg_ms)} ms`}
-          hint={`slowest ${Math.round(t.max_ms)} ms`}
-          spark={series.map((p) => p.avg_ms)}
-        />
-    </dl>
+        <Stat small label="Average latency" value={`${Math.round(t.avg_ms)} ms`} hint={`slowest ${Math.round(t.max_ms)} ms`} />
+      </dl>
+    </Panel>
   )
 }
 
-/** The chart, the response mix and the per-site table: how the traffic moved and where it went. */
+/** One live measure: its current value, and the recent samples as a line. */
+function Metric({ label, value, spark }: { label: string; value: string; spark: number[] }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-muted-foreground text-xs">{label}</span>
+        <span className="text-sm font-semibold tabular-nums">{value}</span>
+      </div>
+      <Sparkline values={spark} label={`${label} over the period, now ${value}`} area className="text-primary h-10 w-full" />
+    </div>
+  )
+}
+
+/** Requests per second, bytes per second and response time, over the recent buckets. */
+function RealtimeCard({ data, range }: { data: TrafficSummary; range: TrafficRange }) {
+  const step = Math.max(1, data.step_seconds)
+  const series = data.series
+  const last = series[series.length - 1]
+  const window = RANGES.find((r) => r.value === range)?.label ?? ""
+  return (
+    <Panel title="Real-time operation" aside={`${window} · ${step}-second granularity`}>
+      <Metric
+        label="Requests per second"
+        value={data.rps_now.toFixed(1)}
+        spark={series.map((p) => p.requests / step)}
+      />
+      <Metric
+        label="Traffic"
+        value={`${formatBytes((last?.bytes ?? 0) / step)}/s`}
+        spark={series.map((p) => p.bytes / step)}
+      />
+      <Metric label="Response time" value={`${Math.round(last?.avg_ms ?? 0)} ms`} spark={series.map((p) => p.avg_ms)} />
+    </Panel>
+  )
+}
+
+/**
+ * The dashboard: the security and real-time figures on the left, the request trend
+ * and the access/block map on the right, and the response mix and firewall activity
+ * below. Every card is a plain panel, so the page reads top to bottom on a phone.
+ */
 function Overview({
   data,
+  events,
+  eventsFailed,
+  eventsPending,
   site,
   range,
   modes,
   onPickSite,
 }: {
   data: TrafficSummary
+  events: WafEventSummary | undefined
+  eventsFailed: boolean
+  eventsPending: boolean
   site: string
   range: TrafficRange
   modes: Map<string, WafOverviewSite>
   onPickSite: (domain: string) => void
 }) {
-  const t = data.totals
-  const series = data.series
+  const inView = site === "" ? Array.from(modes.values()) : [modes.get(site)].filter((m): m is WafOverviewSite => !!m)
   return (
-    <div className="flex flex-col gap-6">
-      <section aria-label="Requests over time" className="bg-card rounded-lg border p-3">
-        <h2 className="mb-2 text-sm font-semibold">Requests over time</h2>
-        <TrafficChart series={series} stepSeconds={data.step_seconds} />
-      </section>
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <SecurityCard data={data} events={events} sites={inView} />
+          <RealtimeCard data={data} range={range} />
+        </div>
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel title="Request and traffic trends" aside={`${data.step_seconds}-second intervals`}>
+            <TrafficChart series={data.series} stepSeconds={data.step_seconds} />
+          </Panel>
+          {site === "" && <SourcesPanel range={range} />}
+        </div>
+      </div>
 
-      <ResponseMix totals={t} />
-
-      {site === "" && <SourcesPanel range={range} />}
+      <div className="grid gap-4 md:grid-cols-2">
+        <ResponseMix totals={data.totals} />
+        <FirewallActivity summary={events} failed={eventsFailed} pending={eventsPending} />
+      </div>
 
       {site === "" && (
         <section aria-label="Sites" className="flex flex-col gap-2">
@@ -387,10 +454,20 @@ function SitesTable({
   )
 }
 
-/** The busiest clients, paths, status codes and user agents for the period. */
-function TopLists({ data }: { data: TrafficSummary }) {
+/** The busiest clients, paths, status codes and user agents for the period, and the countries. */
+function TopLists({
+  data,
+  range,
+  showCountries,
+}: {
+  data: TrafficSummary
+  range: TrafficRange
+  showCountries: boolean
+}) {
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="flex flex-col gap-6">
+      {showCountries && <CountriesTable range={range} />}
+      <div className="grid gap-6 lg:grid-cols-2">
         <TopTable
           title="Top client IPs"
           head={["IP", "Requests", "Errors", "Sent"]}
@@ -414,6 +491,7 @@ function TopLists({ data }: { data: TrafficSummary }) {
           head={["Agent", "Requests"]}
           rows={data.top_agents.map((r) => [r.agent || "(none)", r.requests])}
         />
+      </div>
     </div>
   )
 }

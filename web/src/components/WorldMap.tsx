@@ -61,7 +61,16 @@ function frame(): Frame {
  * has a tooltip with its figures, and the table beside the map lists the same
  * numbers, so the map is never the only way to read them.
  */
-export function WorldMap({ countries, label }: { countries: MapCountry[]; label: string }) {
+export function WorldMap({
+  countries,
+  label,
+  metric = "requests",
+}: {
+  countries: MapCountry[]
+  label: string
+  /** Which count shades the countries: every request, or only the blocked ones. */
+  metric?: "requests" | "blocked"
+}) {
   const { outline, shapes } = useMemo(() => frame(), [])
 
   const byNumeric = useMemo(() => {
@@ -73,20 +82,21 @@ export function WorldMap({ countries, label }: { countries: MapCountry[]; label:
     return m
   }, [countries])
 
-  const busiest = Math.max(1, ...countries.map((c) => c.requests))
+  const value = (c: MapCountry) => (metric === "requests" ? c.requests : c.blocked)
+  const busiest = Math.max(1, ...countries.map(value))
 
   return (
     <svg
       role="img"
       aria-label={label}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="h-auto w-full"
+      className="h-52 w-full md:h-64"
       preserveAspectRatio="xMidYMid meet"
     >
       <path d={outline} fill="none" stroke="var(--border)" />
       {shapes.map((s) => {
         const c = byNumeric.get(s.id)
-        const seen = c !== undefined && c.requests > 0
+        const seen = c !== undefined && value(c) > 0
         const tip = c
           ? `${countryName(c.code)}: ${c.requests.toLocaleString()} requests, ${c.blocked.toLocaleString()} blocked`
           : s.name
@@ -97,7 +107,7 @@ export function WorldMap({ countries, label }: { countries: MapCountry[]; label:
             stroke="var(--border)"
             strokeWidth={0.4}
             fill={seen ? "var(--primary)" : "var(--muted)"}
-            fillOpacity={c && seen ? 0.2 + 0.8 * (c.requests / busiest) : 1}
+            fillOpacity={c && seen ? 0.2 + 0.8 * (value(c) / busiest) : 1}
           >
             <title>{tip}</title>
           </path>

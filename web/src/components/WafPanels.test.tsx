@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { BlockPagePanel } from "@/components/WafBlockPage"
 import { ProtectionPanel } from "@/components/WafProtection"
-import { SourcesPanel } from "@/components/WafSources"
+import { CountriesTable, SourcesPanel } from "@/components/WafSources"
 import { api } from "@/lib/api"
 import type { WafGlobalResponse, WafSources } from "@/lib/waf"
 
@@ -144,21 +144,42 @@ describe("SourcesPanel", () => {
     await waitFor(() => expect(api.downloadWafGeo).toHaveBeenCalledTimes(1))
   })
 
-  it("lists the countries and busiest addresses and credits DB-IP", async () => {
+  it("ranks the blocked addresses, credits DB-IP, and switches the map to blocks", async () => {
     vi.mocked(api.wafSources).mockResolvedValue(
       sourcesData({
         geo: { ...sourcesData().geo, installed: true, month: "2026-11", entries: 4 },
       }),
     )
     wrap(<SourcesPanel range="15m" />)
+    const user = userEvent.setup()
 
+    const ranking = await screen.findByRole("region", { name: "Blocked source ranking" })
+    expect(within(ranking).getByRole("table", { name: "Blocked client addresses" })).toBeInTheDocument()
+    expect(within(ranking).getByText("198.51.100.4")).toBeInTheDocument()
+    expect(within(ranking).getByText("United States")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "IP Geolocation by DB-IP" })).toHaveAttribute("href", "https://db-ip.com")
+    expect(screen.getByText(/3 requests came from addresses no country covers/i)).toBeInTheDocument()
+
+    const requests = screen.getByRole("button", { name: "Requests" })
+    const blocks = screen.getByRole("button", { name: "Blocks" })
+    expect(requests).toHaveAttribute("aria-pressed", "true")
+    await user.click(blocks)
+    expect(blocks).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("img", { name: /shaded by blocked requests/i })).toBeInTheDocument()
+  })
+
+  it("says there is no blocked address when nothing was blocked", async () => {
+    vi.mocked(api.wafSources).mockResolvedValue(sourcesData({ blocked: 0, top_ips: [] }))
+    wrap(<SourcesPanel range="15m" />)
+    const ranking = await screen.findByRole("region", { name: "Blocked source ranking" })
+    expect(within(ranking).getByText("No Data")).toBeInTheDocument()
+  })
+
+  it("lists the countries with their blocks and addresses", async () => {
+    wrap(<CountriesTable range="15m" />)
     const countries = await screen.findByRole("table", { name: "Requests by country" })
     expect(within(countries).getByText("United States")).toBeInTheDocument()
     expect(within(countries).getByText("9")).toBeInTheDocument()
-    const addresses = screen.getByRole("table", { name: "Busiest client addresses" })
-    expect(within(addresses).getByText("198.51.100.4")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "IP Geolocation by DB-IP" })).toHaveAttribute("href", "https://db-ip.com")
-    expect(screen.getByText(/3 requests came from addresses no country covers/i)).toBeInTheDocument()
   })
 
   it("shows the error when the sources cannot be read", async () => {
