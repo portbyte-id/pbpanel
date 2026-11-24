@@ -19,7 +19,7 @@ once running.
 | `PB_REF` | No | Branch, tag or commit built on the host with `--source`. | `main` |
 | `PB_PANEL_DATA_DIR` | No | Data directory; the install root is its parent's parent (`/www` for the default). Also read by every `pbp` command, so the recovery CLI finds the same database. | `/www/panel/data` |
 
-`install.sh` also accepts `--source`, `--ref <ref>`, `--version <tag>` and `--force` as flags.
+`install.sh` also accepts `--source`, `--clone`, `--ref <ref>`, `--version <tag>` and `--force` as flags. `--clone` builds on the host from a shallow `git fetch` (needs `git`) instead of the GitHub API tarball.
 
 ## Dev server (`web/vite.config.ts`)
 

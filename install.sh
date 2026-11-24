@@ -8,6 +8,7 @@
 #   sudo -E sh install.sh                      latest release
 #   sudo -E sh install.sh --version v0.2.0     a specific release
 #   sudo -E sh install.sh --source --ref main  build a branch, tag or commit here
+#   sudo -E sh install.sh --clone --ref main   same, fetching the source with git
 #   sudo -E sh install.sh --force              reinstall even if already current
 #
 # The repository is private, so a token with read access to it is required:
@@ -16,9 +17,14 @@
 #
 # Where the binary comes from:
 #   1. The release's pbp-linux-<arch> asset, checked against SHA256SUMS.
-#   2. If the repository has no release yet (or --source is given), the source
-#      at --ref is built on this host with a Go and a Node toolchain that are
-#      downloaded into a temp directory and removed afterwards.
+#   2. If the repository has no release yet (or --source or --clone is given),
+#      the source at --ref is built on this host with a Go and a Node toolchain
+#      that are downloaded into a temp directory and removed afterwards.
+#      --source downloads the source as a tarball from the GitHub API. --clone
+#      runs a shallow `git fetch` of --ref instead (needs git on the host); it
+#      is the one to use when the API download is slow, since git moves the
+#      same bytes over a different transfer path. The token, if any, is passed
+#      to git through its environment, not written to disk or argv.
 #
 # Environment: GITHUB_TOKEN / PB_GITHUB_TOKEN, PB_REPO (owner/name),
 #              PB_VERSION, PB_REF, PB_PANEL_DATA_DIR (non-default install root).
@@ -33,6 +39,7 @@ TOKEN=${PB_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}
 VERSION=${PB_VERSION:-latest}
 REF=${PB_REF:-main}
 SOURCE=0
+CLONE=0
 FORCE=0
 NODE_MAJOR=22 # keep in step with .github/workflows/ci.yml
 
@@ -49,6 +56,7 @@ CURLRC=
 ARCH=
 GOARCH=
 NODEARCH=
+SHA7=
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -112,6 +120,10 @@ preflight() {
 	for tool in curl tar awk sort sha256sum; do
 		command -v "$tool" >/dev/null 2>&1 || die "$tool is required (apt-get install -y curl ca-certificates)"
 	done
+	if [ "$CLONE" -eq 1 ]; then
+		command -v git >/dev/null 2>&1 || die "git is required for --clone (apt-get install -y git)"
+		command -v base64 >/dev/null 2>&1 || die "base64 is required for --clone (coreutils)"
+	fi
 
 	[ -n "$TOKEN" ] || say "note: no GITHUB_TOKEN set; this works only if $REPO is public"
 }
@@ -215,9 +227,8 @@ ensure_node() {
 	export PATH
 }
 
-# build_source: build $REF on this host into $WORK/panel.
-build_source() {
-	say "building $REPO@$REF from source"
+# tarball_source: unpack $REF from the GitHub API into $WORK/src.
+tarball_source() {
 	code=$(http_get "$API/tarball/$REF" "$WORK/src.tar.gz") || die "could not reach api.github.com"
 	case $code in
 	200) ;;
@@ -229,10 +240,50 @@ build_source() {
 	mkdir "$WORK/src"
 	# The tarball's one top-level directory is named <owner>-<repo>-<sha7>.
 	top=$(tar -tzf "$WORK/src.tar.gz" | head -n 1 | cut -d/ -f1)
-	sha7=${top##*-}
+	SHA7=${top##*-}
 	tar -xzf "$WORK/src.tar.gz" -C "$WORK/src" --strip-components=1
+}
+
+# clone_source: shallow-fetch $REF into $WORK/src. Works for a branch, a tag or
+# a commit: `git fetch <sha>` is allowed by GitHub for any reachable commit, so
+# there is no need to tell the kinds of ref apart. The token goes to git as a
+# Basic-auth header in the environment of one subshell, so it is never in argv,
+# never in .git/config, and not exported to the build that follows.
+clone_source() {
+	say "cloning $REPO@$REF (shallow)"
+	mkdir "$WORK/src"
+	git -C "$WORK/src" init -q || die "git init failed"
+	git -C "$WORK/src" remote add origin "https://github.com/$REPO.git" || die "git remote add failed"
+	(
+		if [ -n "$TOKEN" ]; then
+			auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
+			GIT_CONFIG_COUNT=1
+			GIT_CONFIG_KEY_0=http.extraHeader
+			GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+			export GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+		fi
+		GIT_TERMINAL_PROMPT=0
+		export GIT_TERMINAL_PROMPT
+		git -C "$WORK/src" fetch -q --depth 1 origin "$REF"
+	) || die "could not fetch $REF from $REPO (if it is private, set GITHUB_TOKEN)"
+	git -C "$WORK/src" -c advice.detachedHead=false checkout -q FETCH_HEAD || die "checkout of $REF failed"
+	SHA7=$(git -C "$WORK/src" rev-parse --short=7 HEAD) || die "cannot read the commit of $REF"
+	# Drop the history: the tarball path has none, and go would otherwise try to
+	# stamp VCS info from it.
+	rm -rf "$WORK/src/.git"
+}
+
+# build_source: build $REF on this host into $WORK/panel.
+build_source() {
+	if [ "$CLONE" -eq 1 ]; then
+		say "building $REPO@$REF from source (git clone)"
+		clone_source
+	else
+		say "building $REPO@$REF from source"
+		tarball_source
+	fi
 	built=$REF
-	[ -n "$sha7" ] && built=$REF-$sha7
+	[ -n "$SHA7" ] && built=$REF-$SHA7
 
 	need_go=$(awk '/^go [0-9]/ { print $2; exit }' "$WORK/src/go.mod")
 	[ -n "$need_go" ] || die "cannot read the Go version from go.mod"
@@ -279,6 +330,10 @@ main() {
 			shift
 			;;
 		--source) SOURCE=1 ;;
+		--clone)
+			CLONE=1
+			SOURCE=1
+			;;
 		--force) FORCE=1 ;;
 		-h | --help) usage ;;
 		*) die "unknown option $1 (see --help)" ;;

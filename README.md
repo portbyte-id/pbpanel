@@ -41,6 +41,7 @@ Common options:
 | `sudo -E sh install.sh` | Install or upgrade to the latest release |
 | `sudo -E sh install.sh --version v0.2.0` | Install a specific release |
 | `sudo -E sh install.sh --source --ref main` | Build a branch, tag or commit on this host |
+| `sudo -E sh install.sh --clone --ref main` | Same, but fetch the source with `git` (use when the GitHub API download is slow; needs git) |
 | `sudo -E sh install.sh --force` | Reinstall even when already current |
 
 The installer downloads the `pbp-linux-<arch>` release asset and checks it against `SHA256SUMS`. If the repository has no release yet, or you pass `--source`, it builds the source on the host. It uses a Go and a Node.js toolchain that it downloads into a temporary directory and removes afterwards.
