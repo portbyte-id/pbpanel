@@ -1794,7 +1794,9 @@ export class ApiClient {
   }
 
   async services(): Promise<ServiceRow[]> {
-    return (await this.request<{ services: ServiceRow[] }>("/api/services")).services
+    const { services } = await this.request<{ services: ServiceRow[] }>("/api/services")
+    // A unit, container or program that does not exist is not installed; listing it is noise.
+    return services.filter((s) => s.state !== "missing")
   }
 
   /** 204. The name is the row's `name` verbatim (`app:mysite` for an app). */
