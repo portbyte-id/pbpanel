@@ -148,11 +148,14 @@ type Match struct {
 	rank int
 }
 
-// Event is one ModSecurity audit-log transaction.
+// Event is one WAF incident: a ModSecurity audit-log transaction or an
+// open-appsec security event, both mapped onto the same shape so the events page,
+// the per-site counters and the top lists read either engine.
 type Event struct {
 	Seq       uint64    `json:"seq"`
 	Time      time.Time `json:"time"`
 	Site      string    `json:"site"`
+	Engine    string    `json:"engine"`
 	IP        string    `json:"ip"`
 	Method    string    `json:"method"`
 	URI       string    `json:"uri"`
@@ -163,6 +166,17 @@ type Event struct {
 	Message   string    `json:"message"`
 	Severity  string    `json:"severity"`
 	Matches   []Match   `json:"matches"`
+
+	// open-appsec's own fields. A ModSecurity event leaves them empty and a
+	// matching open-appsec event leaves RuleID empty, since the agent has no rule
+	// ids.
+	//
+	// Confidence is the engine's own certainty ("Very High"), AttackType what it
+	// says fired ("SQL Injection"), and Parameter the request field that matched
+	// with where it matched ("id (url parameter)").
+	Confidence string `json:"confidence,omitempty"`
+	AttackType string `json:"attack_type,omitempty"`
+	Parameter  string `json:"parameter,omitempty"`
 }
 
 // Event actions.
@@ -215,7 +229,7 @@ func ParseAudit(line string) (Event, bool) {
 		return Event{}, false
 	}
 	t := d.Transaction
-	e := Event{IP: t.ClientIP, Method: t.Request.Method, URI: t.Request.URI, RequestID: t.UniqueID, Matches: []Match{}}
+	e := Event{Engine: EngineModSecurity, IP: t.ClientIP, Method: t.Request.Method, URI: t.Request.URI, RequestID: t.UniqueID, Matches: []Match{}}
 	if code, ok := toInt(t.Response.HTTPCode); ok {
 		e.Status = code
 	}
