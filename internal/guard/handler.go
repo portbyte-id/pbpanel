@@ -78,6 +78,13 @@ type problem struct {
 	Detail string `json:"detail"`
 }
 
+// expiredProblem is a refusal the page can act on: Expired tells it to start
+// the check again.
+type expiredProblem struct {
+	Detail  string `json:"detail"`
+	Expired bool   `json:"expired"`
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -153,6 +160,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.verify(r.Context(), domain, s, ip, ua, body.Challenge, body.Nonce, body.Token); err != nil {
+			// An expired puzzle is not a wrong answer: the page asks for a new
+			// one and solves it, instead of waiting for the visitor to click.
+			if errors.Is(err, errPuzzleExpired) {
+				writeJSON(w, http.StatusForbidden, expiredProblem{Detail: err.Error(), Expired: true})
+				return
+			}
 			writeJSON(w, http.StatusForbidden, problem{err.Error()})
 			return
 		}

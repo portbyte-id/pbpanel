@@ -213,6 +213,44 @@ func TestHandlerProofOfWork(t *testing.T) {
 	}
 }
 
+// TestHandlerExpiredPuzzle: a correct answer given after the puzzle's lifetime
+// is refused with expired set, which is what makes the page fetch a new puzzle.
+// A wrong answer is refused without it.
+func TestHandlerExpiredPuzzle(t *testing.T) {
+	s := Settings{Provider: ProviderPoW, Difficulty: 8, Clearance: time.Hour, CookieName: "pbg_wexp"}
+	h := newTestHandler(t, s, nil)
+
+	w := do(h, http.MethodGet, NewPath, "", nil)
+	var p struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+		t.Fatalf("new body %s: %v", w.Body, err)
+	}
+	nonce := solve(t, p.Challenge, 8)
+
+	h.now = func() time.Time { return time.Unix(1_800_000_000, 0).Add(puzzleTTL + time.Second) }
+	body := fmt.Sprintf(`{"challenge":%q,"nonce":%q}`, p.Challenge, nonce)
+	w = do(h, http.MethodPost, VerifyPath, body, nil)
+	var got struct {
+		Detail  string `json:"detail"`
+		Expired bool   `json:"expired"`
+	}
+	if w.Code != http.StatusForbidden || json.Unmarshal(w.Body.Bytes(), &got) != nil || !got.Expired {
+		t.Fatalf("expired puzzle: %d %s", w.Code, w.Body)
+	}
+	if w.Header().Get("Set-Cookie") != "" {
+		t.Fatal("an expired puzzle set a clearance cookie")
+	}
+
+	h.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	w = do(h, http.MethodPost, VerifyPath, fmt.Sprintf(`{"challenge":%q,"nonce":"x"}`, p.Challenge), nil)
+	got.Expired = false
+	if w.Code != http.StatusForbidden || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Expired {
+		t.Fatalf("expired puzzle with a wrong answer: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestHandlerTurnstile(t *testing.T) {
 	s := Settings{Provider: ProviderTurnstile, Clearance: 10 * time.Minute, CookieName: "pbg_w1", TurnstileSiteKey: "0xSITE", TurnstileSecret: "0xSECRET"}
 	v := &fakeVerifier{ok: true}
