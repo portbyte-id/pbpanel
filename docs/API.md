@@ -22,7 +22,7 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
   wired answers `503 {"error":"unavailable"}`.
 - **Live streams.** Jobs and some logs use Server-Sent Events, resumable with `Last-Event-ID`.
 
-## Routes (163 under `/api`)
+## Routes (166 under `/api`)
 
 ### Session and account
 
@@ -184,6 +184,54 @@ The daemon serves a REST/JSON API under `/api` and the embedded SPA elsewhere. T
 | `GET` | `/api/waf/sources` |
 | `GET` | `/api/waf/geo` |
 | `POST` | `/api/waf/geo/download` |
+
+`GET /api/sites/{domain}/waf`, `GET /api/waf/status` and the two `PUT`s carry an
+`open_appsec` object: the same availability the Store card returns (`available`,
+`reason`, `installed`, `agent_active`, `agent_version`, `policy_load`,
+`pinned_version`, `warning`, `acknowledgement`). It is omitted on a panel with no
+appsec package, so a client can tell "no engine" from "engine, unavailable". A
+site may choose the open-appsec engine only while `available` is true.
+
+### Store: open-appsec agent
+
+The second firewall engine, Check Point's open-appsec. The agent is installed and
+removed from the Store, as jobs. Answers 503 on a panel with no appsec package.
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/appsec` |
+| `POST` | `/api/appsec/install` |
+| `POST` | `/api/appsec/uninstall` |
+
+`GET /api/appsec` returns the availability object:
+
+```json
+{
+  "available": true,
+  "reason": "",
+  "installed": true,
+  "agent_active": true,
+  "agent_version": "1.1.37-open-source",
+  "policy_load": "Success",
+  "pinned_version": "1.1.37",
+  "warning": "The open-appsec agent keeps a continuous TLS connection to Check Point's cloud …",
+  "acknowledgement": "open-appsec-cloud-connection-accepted"
+}
+```
+
+`available` means the serving nginx build has the attachment **and** the agent is
+installed and active. `warning` is the tracking statement and `acknowledgement`
+is the value to send back; both come from the server so the interface renders the
+one text the operator agreed to.
+
+`POST /api/appsec/install` requires `{"acknowledge": "<the acknowledgement value>"}`.
+Without it the route answers `422 invalid_input` on field `acknowledge` and no job
+starts. With it, a job of kind `appsec.install` runs and the response is
+`202 {"job": {…}, …availability}`.
+
+`POST /api/appsec/uninstall` starts a job of kind `appsec.uninstall`. It is
+refused — the job fails with the reason — while any site's firewall has the
+open-appsec engine.
 
 ### Apps and runtimes
 

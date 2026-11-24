@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/portbyte-id/server-panel/internal/appsec"
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
 	"github.com/portbyte-id/server-panel/internal/jobs"
@@ -75,6 +76,21 @@ type Deps struct {
 	// WAFMon is the traffic monitor and WAF event reader. Nil leaves
 	// /api/waf/traffic, /requests and /events answering 503.
 	WAFMon WAFMonitor
+
+	// Appsec is the open-appsec agent: the Store card, and its install and
+	// uninstall jobs. Nil leaves /api/appsec answering 503, which is what a panel
+	// without the engine's package looks like.
+	Appsec AppsecService
+
+	// OpenAppsec carries the engine's state into the firewall status and overview
+	// JSON: the availability verdict, the agent's version and the tracking warning
+	// the interface renders verbatim. Nil leaves those fields out.
+	OpenAppsec func(ctx context.Context) appsec.Availability
+
+	// WAFEngineInUse reports whether any site's firewall runs the open-appsec
+	// engine. The uninstall job refuses while it does. Nil reads as no site using
+	// it, which is what the httptest suites want.
+	WAFEngineInUse func(ctx context.Context) (bool, error)
 
 	// Geo is the country database behind the world map. Nil leaves the map
 	// empty and the download answering 503.

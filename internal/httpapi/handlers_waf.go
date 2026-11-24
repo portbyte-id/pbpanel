@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/portbyte-id/server-panel/internal/appsec"
 	"github.com/portbyte-id/server-panel/internal/sites"
 	"github.com/portbyte-id/server-panel/internal/waf"
 )
@@ -11,6 +13,10 @@ import (
 type wafResponse struct {
 	Config waf.Config      `json:"config"`
 	Status sites.WAFStatus `json:"status"`
+	// OpenAppsec is the second engine's state: whether a site may choose it, the
+	// agent's version, and the warning text the interface renders verbatim. It is
+	// omitted on a panel with no appsec package wired in.
+	OpenAppsec *appsec.Availability `json:"open_appsec,omitempty"`
 }
 
 // wafPutResponse adds the warnings every applied change carries.
@@ -19,13 +25,24 @@ type wafPutResponse struct {
 	applyResponse
 }
 
+// appsecAvailability is the open-appsec state the firewall JSON carries, or nil
+// when the package is not wired in. A read that fails is left out rather than
+// failing the whole firewall view: the engine's state is secondary to it.
+func (s *server) appsecAvailability(ctx context.Context) *appsec.Availability {
+	if s.deps.OpenAppsec == nil {
+		return nil
+	}
+	a := s.deps.OpenAppsec(ctx)
+	return &a
+}
+
 func (s *server) handleGetSiteWAF(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
 	c, st, err := n.Sites.WAFConfig(r.Context(), r.PathValue("domain"))
 	if err != nil {
 		s.writeNginxError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, wafResponse{c, st})
+	writeJSON(w, http.StatusOK, wafResponse{Config: c, Status: st, OpenAppsec: s.appsecAvailability(r.Context())})
 }
 
 // handlePutSiteWAF replaces a site's firewall settings. The change goes through
@@ -42,7 +59,19 @@ func (s *server) handlePutSiteWAF(n *NginxDeps, w http.ResponseWriter, r *http.R
 		s.writeNginxError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, wafPutResponse{wafResponse{res.Config, res.Status}, applyResponse{warningsOf(res.Apply)}})
+	writeJSON(w, http.StatusOK, wafPutResponse{
+		wafResponse{Config: res.Config, Status: res.Status, OpenAppsec: s.appsecAvailability(r.Context())},
+		applyResponse{warningsOf(res.Apply)},
+	})
+}
+
+// wafOverviewResponse is every site's firewall, whether ModSecurity can be used,
+// and the second engine's state.
+type wafOverviewResponse struct {
+	sites.WAFOverview
+	// OpenAppsec carries the engine's availability and its warning text, the same
+	// value a site's firewall view and the Store card carry.
+	OpenAppsec *appsec.Availability `json:"open_appsec,omitempty"`
 }
 
 func (s *server) handleWAFStatus(n *NginxDeps, w http.ResponseWriter, r *http.Request) {
@@ -51,7 +80,7 @@ func (s *server) handleWAFStatus(n *NginxDeps, w http.ResponseWriter, r *http.Re
 		s.writeNginxError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, o)
+	writeJSON(w, http.StatusOK, wafOverviewResponse{WAFOverview: o, OpenAppsec: s.appsecAvailability(r.Context())})
 }
 
 // wafGlobalResponse is the global firewall, the presets the bot switches stand
