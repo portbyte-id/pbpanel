@@ -110,6 +110,8 @@ export interface AuditEntry {
 export interface AuditResponse {
   entries: AuditEntry[]
   limit: number
+  /** The `before` cursor of the next, older page; 0 on the last page. */
+  next_before: number
 }
 
 export type SiteKind = "static" | "proxy" | "php"
@@ -882,9 +884,9 @@ export class ApiClient {
     })
   }
 
-  async audit(limit?: number): Promise<AuditResponse> {
-    const query = limit === undefined ? "" : `?limit=${limit}`
-    return this.request<AuditResponse>(`/api/audit${query}`)
+  /** One page of the audit trail, newest first. `before` asks for the page older than that entry id. */
+  async audit(limit?: number, before?: number): Promise<AuditResponse> {
+    return this.request<AuditResponse>(`/api/audit${queryString({ limit, before })}`)
   }
 
   async sites(): Promise<Site[]> {
@@ -981,6 +983,14 @@ export class ApiClient {
 
   async wafEvents(query: WafEventQuery): Promise<WafEvents> {
     return this.request<WafEvents>(`/api/waf/events${queryString({ ...query })}`)
+  }
+
+  /**
+   * The WAF events matching the filters as an AbuseIPDB bulk-report CSV, one row per
+   * address. A link, not a request: the browser saves it as an attachment.
+   */
+  wafEventsAbuseIPDBUrl(query: WafEventQuery): string {
+    return `${this.#baseUrl}/api/waf/events/abuseipdb${queryString({ ...query })}`
   }
 
   async wafEventSummary(site: string, range: TrafficRange): Promise<WafEventSummary> {
