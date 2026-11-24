@@ -95,6 +95,9 @@ type Job struct {
 	Dropped int64 `json:"dropped"`
 	// Truncated reports that Dropped > 0: replay starts mid-stream.
 	Truncated bool `json:"truncated"`
+	// Progress is the running step's progress. It is nil when the job is not
+	// running in this process or reports none.
+	Progress *Progress `json:"progress,omitempty"`
 }
 
 // Line is one output line with the sequence number a client resumes from.
@@ -138,6 +141,8 @@ type run struct {
 	nextSeq  int64
 	finished bool
 	subs     map[chan Line]struct{}
+	// progress is the running step's progress, read by Get and List.
+	progress *Progress
 
 	// final and finishErr are written before done is closed, so a reader that
 	// waits on done sees them without taking the mutex.
@@ -253,7 +258,7 @@ func (m *Manager) Start(ctx context.Context, kind string, fn Func) (Job, error) 
 func (m *Manager) run(r *run, fn Func) error {
 	defer close(r.done)
 
-	runErr := fn(r.ctx, &Writer{m: m, r: r})
+	runErr := fn(context.WithValue(r.ctx, runKey{}, r), &Writer{m: m, r: r})
 
 	state, code, msg := StateSucceeded, 0, ""
 	switch cause := context.Cause(r.ctx); {
@@ -265,8 +270,11 @@ func (m *Manager) run(r *run, fn Func) error {
 		state, code, msg = StateFailed, exitFailed, runErr.Error()
 	}
 
+	// The progress goes before the terminal row is read back: a finished job
+	// has nothing left to measure.
 	r.mu.Lock()
 	r.finished = true
+	r.progress = nil
 	r.mu.Unlock()
 
 	r.final, r.finishErr = m.finish(r.id, state, code, msg)
@@ -346,6 +354,7 @@ func (m *Manager) Get(ctx context.Context, id string) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("jobs: read %s: %w", id, err)
 	}
+	j.Progress = m.liveProgress(id)
 	return j, nil
 }
 
@@ -399,6 +408,7 @@ func (m *Manager) List(ctx context.Context, opts ListOptions) ([]Job, error) {
 		if err != nil {
 			return nil, fmt.Errorf("jobs: list: %w", err)
 		}
+		j.Progress = m.liveProgress(j.ID)
 		out = append(out, j)
 	}
 	if err := rows.Err(); err != nil {

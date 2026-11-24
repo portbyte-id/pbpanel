@@ -1,4 +1,4 @@
-package install
+package release
 
 import (
 	"crypto/sha256"

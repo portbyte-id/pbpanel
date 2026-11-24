@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/portbyte-id/server-panel/internal/docker"
+	"github.com/portbyte-id/server-panel/internal/jobs"
 )
 
 // IndexVersion is the layout of index.json this code reads. A newer layout is
@@ -276,7 +277,10 @@ func (s Source) Fetch(ctx context.Context, p Package, versionsDir string, requir
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	sum := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(resp.Body, maxPackageBytes+1))
+	// The body is wrapped so an install job shows the download as it goes; the
+	// size is the index's, which is what the download must match anyway.
+	body := jobs.ProgressReader(ctx, "downloading "+p.File, p.Size, resp.Body)
+	n, err := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(body, maxPackageBytes+1))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}

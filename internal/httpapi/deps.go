@@ -88,6 +88,10 @@ type Deps struct {
 	// controls. Nil leaves /api/docker answering 503.
 	Docker DockerService
 
+	// Update is the version check and the detached upgrade. Nil leaves
+	// /api/update answering 503.
+	Update UpdateService
+
 	// Actor is the single admin account's username, recorded in /api/me and as
 	// the audit actor. Empty means defaultActor.
 	Actor string

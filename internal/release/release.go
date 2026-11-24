@@ -1,4 +1,8 @@
-package install
+// Package release fetches the panel's GitHub releases: the metadata the update
+// check shows, and the checksum-verified binary an upgrade installs. It depends
+// on the standard library alone, so the HTTP layer can use it without pulling in
+// the installer.
+package release
 
 import (
 	"context"
@@ -51,16 +55,41 @@ type ReleaseClient struct {
 	Out     io.Writer
 	// Arch is the GOARCH to fetch; empty means the running one.
 	Arch string
+	// Progress, when set, is told how many bytes of the binary have arrived and
+	// how many it is expected to be (0 when the server did not say). It is called
+	// from the download goroutine, after each read.
+	Progress func(done, total int64)
 }
 
 type ghRelease struct {
-	Tag    string    `json:"tag_name"`
-	Assets []ghAsset `json:"assets"`
+	Tag         string    `json:"tag_name"`
+	Name        string    `json:"name"`
+	Body        string    `json:"body"`
+	HTMLURL     string    `json:"html_url"`
+	PublishedAt string    `json:"published_at"`
+	Assets      []ghAsset `json:"assets"`
 }
 
 type ghAsset struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	Size int64  `json:"size"`
+}
+
+// ReleaseMeta describes a release without downloading its binary: what the
+// update check shows and what the upgrade needs to know before it starts.
+type ReleaseMeta struct {
+	Tag         string
+	Name        string
+	Notes       string // the release body, Markdown as GitHub stores it
+	URL         string // the release page
+	PublishedAt string // RFC 3339, as GitHub reports it
+	// BinarySize is the size of the binary asset for the client's arch, or 0
+	// when the release does not publish one.
+	BinarySize int64
+	// Installable reports that the release ships the binary for this arch and a
+	// checksum file, which is all Fetch needs.
+	Installable bool
 }
 
 func (c *ReleaseClient) client() *http.Client {
@@ -128,6 +157,53 @@ func (c *ReleaseClient) LatestTag(ctx context.Context) (string, error) {
 	return rel.Tag, err
 }
 
+// Meta describes the release the client would download, without downloading it.
+func (c *ReleaseClient) Meta(ctx context.Context) (ReleaseMeta, error) {
+	rel, err := c.resolve(ctx)
+	if err != nil {
+		return ReleaseMeta{}, err
+	}
+	meta := ReleaseMeta{
+		Tag:         rel.Tag,
+		Name:        rel.Name,
+		Notes:       rel.Body,
+		URL:         rel.HTMLURL,
+		PublishedAt: rel.PublishedAt,
+	}
+	if bin, _, err := c.assetsOf(rel); err == nil {
+		meta.Installable = true
+		meta.BinarySize = bin.Size
+	}
+	return meta, nil
+}
+
+// assetsOf finds the binary and checksum assets of rel for the client's arch.
+func (c *ReleaseClient) assetsOf(rel ghRelease) (ghAsset, ghAsset, error) {
+	arch := c.Arch
+	if arch == "" {
+		arch = runtime.GOARCH
+	}
+	binName := "pbp-linux-" + arch
+
+	var bin, sum ghAsset
+	var haveBin, haveSum bool
+	for _, a := range rel.Assets {
+		switch a.Name {
+		case binName:
+			bin, haveBin = a, true
+		case "SHA256SUMS":
+			sum, haveSum = a, true
+		}
+	}
+	if !haveBin {
+		return bin, sum, fmt.Errorf("release %s has no %s asset", rel.Tag, binName)
+	}
+	if !haveSum {
+		return bin, sum, fmt.Errorf("release %s has no SHA256SUMS asset; refusing to install an unverified binary", rel.Tag)
+	}
+	return bin, sum, nil
+}
+
 // Fetch downloads pbp-linux-<arch> and verifies it against SHA256SUMS. A release
 // without a checksum file is refused rather than installed unverified.
 func (c *ReleaseClient) Fetch(ctx context.Context) (*Release, error) {
@@ -141,20 +217,9 @@ func (c *ReleaseClient) Fetch(ctx context.Context) (*Release, error) {
 	}
 	binName := "pbp-linux-" + arch
 
-	var binURL, sumURL string
-	for _, a := range rel.Assets {
-		switch a.Name {
-		case binName:
-			binURL = a.URL
-		case "SHA256SUMS":
-			sumURL = a.URL
-		}
-	}
-	if binURL == "" {
-		return nil, fmt.Errorf("release %s has no %s asset", rel.Tag, binName)
-	}
-	if sumURL == "" {
-		return nil, fmt.Errorf("release %s has no SHA256SUMS asset; refusing to install an unverified binary", rel.Tag)
+	binAsset, sumAsset, err := c.assetsOf(rel)
+	if err != nil {
+		return nil, err
 	}
 
 	dir, err := os.MkdirTemp("", "pbp-upgrade-")
@@ -163,7 +228,7 @@ func (c *ReleaseClient) Fetch(ctx context.Context) (*Release, error) {
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 
-	if _, err := c.download(ctx, sumURL, filepath.Join(dir, "SHA256SUMS"), maxSumsBytes); err != nil {
+	if _, err := c.download(ctx, sumAsset.URL, filepath.Join(dir, "SHA256SUMS"), maxSumsBytes, nil); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("download SHA256SUMS: %w", err)
 	}
@@ -174,7 +239,7 @@ func (c *ReleaseClient) Fetch(ctx context.Context) (*Release, error) {
 	}
 
 	path := filepath.Join(dir, "pbp")
-	got, err := c.download(ctx, binURL, path, 0)
+	got, err := c.download(ctx, binAsset.URL, path, 0, c.Progress)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("download %s: %w", binName, err)
@@ -191,7 +256,9 @@ func (c *ReleaseClient) Fetch(ctx context.Context) (*Release, error) {
 }
 
 // download streams an asset to dst and returns its sha256. limit 0 means no cap.
-func (c *ReleaseClient) download(ctx context.Context, url, dst string, limit int64) (string, error) {
+// progress, when set, is called after each chunk with the bytes so far and the
+// Content-Length the server sent (0 when it sent none).
+func (c *ReleaseClient) download(ctx context.Context, url, dst string, limit int64, progress func(done, total int64)) (string, error) {
 	resp, err := c.get(ctx, url, "application/octet-stream")
 	if err != nil {
 		return "", err
@@ -209,6 +276,9 @@ func (c *ReleaseClient) download(ctx context.Context, url, dst string, limit int
 	if limit > 0 {
 		r = io.LimitReader(resp.Body, limit)
 	}
+	if progress != nil {
+		r = &progressReader{r: r, total: resp.ContentLength, report: progress}
+	}
 	if _, err := io.Copy(io.MultiWriter(f, h), r); err != nil {
 		_ = f.Close()
 		return "", err
@@ -217,6 +287,23 @@ func (c *ReleaseClient) download(ctx context.Context, url, dst string, limit int
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// progressReader counts the bytes read through it and reports them.
+type progressReader struct {
+	r      io.Reader
+	done   int64
+	total  int64
+	report func(done, total int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.done += int64(n)
+		p.report(p.done, p.total)
+	}
+	return n, err
 }
 
 // sumFor reads the digest recorded for name in a sha256sum-format file.

@@ -69,6 +69,18 @@ type Upgrader struct {
 
 	// Timeout is the health window. Zero means healthTimeout.
 	Timeout time.Duration
+
+	// Report, when set, is told each phase the upgrade enters: installing,
+	// restarting, health, rolled_back and done. `pbp upgrade --status-file` uses
+	// it to show the operator where a detached upgrade has got to.
+	Report func(phase, detail string)
+}
+
+// report forwards a phase to Report when one is set.
+func (u *Upgrader) report(phase, detail string) {
+	if u.Report != nil {
+		u.Report(phase, detail)
+	}
 }
 
 // UpgradeResult reports what the upgrade did, so the CLI can print it and a test
@@ -132,6 +144,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 		return result, nil
 	}
 
+	u.report("installing", "checking migrations")
 	printf(u.Out, "  checking migrations\n")
 	if err := store.CheckMigrations(u.Layout.DBPath()); err != nil {
 		return result, fmt.Errorf("upgrade: migrations would fail, keeping the installed binary: %w", err)
@@ -174,6 +187,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 		return result, u.rollback(previous, live, err, &result)
 	}
 
+	u.report("restarting", "restarting "+unitName)
 	printf(u.Out, "  restarting %s\n", unitName)
 	if err := u.Runner.Run(ctx, "systemctl", "restart", unitName); err != nil {
 		return result, u.rollback(previous, live, fmt.Errorf("upgrade: restart: %w", err), &result)
@@ -181,6 +195,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 	if err := u.relinkPATH(); err != nil {
 		return result, err
 	}
+	u.report("health", fmt.Sprintf("waiting up to %s for a health check", u.Timeout))
 	printf(u.Out, "  waiting up to %s for a health check\n", u.Timeout)
 	if err := u.waitHealthy(ctx); err != nil {
 		return result, u.rollback(previous, live, fmt.Errorf("upgrade: the new binary did not become healthy: %w", err), &result)
@@ -188,6 +203,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) (UpgradeResult, error) {
 
 	// The new binary is healthy, so the old one is no longer the rollback.
 	_ = os.Remove(previous)
+	u.report("done", "")
 	return result, nil
 }
 
@@ -271,6 +287,7 @@ func reconcileFile(path, want string) (bool, error) {
 // error, because the cause is what the operator has to act on.
 func (u *Upgrader) rollback(previous, live string, cause error, result *UpgradeResult) error {
 	result.RolledBack = true
+	u.report("rolled_back", cause.Error())
 
 	if err := os.Rename(previous, live); err != nil {
 		return fmt.Errorf("%w; and the rollback failed, copy %s back to %s by hand: %v", cause, previous, live, err)

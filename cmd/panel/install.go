@@ -1,19 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/osdep"
 	"github.com/portbyte-id/server-panel/internal/store"
-	"github.com/portbyte-id/server-panel/internal/version"
 )
 
 // installPanel implements `pbp install`: the step list in internal/install,
@@ -53,82 +48,6 @@ func installPanel(ctx context.Context, stdout io.Writer) error {
 		}
 	}
 	printf(stdout, "\n%d of %d steps were already done.\n", skipped, len(report.Steps))
-	return nil
-}
-
-// upgradePanel implements `pbp upgrade`: download the latest GitHub release
-// (verified against SHA256SUMS), replace the installed binary with it, restart,
-// and roll back if it does not answer.
-//
-// --local keeps the old behaviour of installing the running executable, for a
-// binary the operator copied onto the host by hand. --version <tag> picks a
-// release other than the latest.
-func upgradePanel(ctx context.Context, stdout io.Writer, args []string) error {
-	local := false
-	tag := "latest"
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--local":
-			local = true
-		case "--version":
-			if i+1 >= len(args) {
-				return errors.New("upgrade: --version needs a tag")
-			}
-			i++
-			tag = args[i]
-		default:
-			return fmt.Errorf("upgrade: unknown option %q", args[i])
-		}
-	}
-	if local && tag != "latest" {
-		return errors.New("upgrade: --local and --version cannot be combined")
-	}
-
-	u := &install.Upgrader{
-		Layout: defaultLayout(),
-		Runner: osdep.DefaultRunner(),
-		Out:    stdout,
-	}
-
-	if !local {
-		token := os.Getenv("PB_GITHUB_TOKEN")
-		if token == "" {
-			token = os.Getenv("GITHUB_TOKEN")
-		}
-		rc := &install.ReleaseClient{Repo: os.Getenv("PB_REPO"), Token: token, Version: tag, Out: stdout}
-
-		printf(stdout, "  looking up the %s release\n", tag)
-		latest, err := rc.LatestTag(ctx)
-		if err != nil {
-			return fmt.Errorf("upgrade: %w", err)
-		}
-		if latest == version.Version && os.Getenv("PB_FORCE") != "1" {
-			printf(stdout, "already up to date (%s); set PB_FORCE=1 to reinstall\n", latest)
-			return nil
-		}
-		printf(stdout, "  downloading %s\n", latest)
-		rel, err := rc.Fetch(ctx)
-		if err != nil {
-			return fmt.Errorf("upgrade: %w", err)
-		}
-		defer rel.Cleanup()
-		u.SourcePath = rel.Path
-	}
-	result, err := u.Upgrade(ctx)
-	if err != nil {
-		return err
-	}
-	if result.RolledBack {
-		return errors.New("upgrade: rolled back to the previous binary")
-	}
-	if len(result.Migrated) > 0 {
-		versions := make([]string, len(result.Migrated))
-		for i, v := range result.Migrated {
-			versions[i] = strconv.Itoa(v)
-		}
-		printf(stdout, "\nmigrated to schema version(s) %s\n", strings.Join(versions, ", "))
-	}
-	printf(stdout, "upgrade complete\n")
 	return nil
 }
 
@@ -189,13 +108,4 @@ func promptPassword(stdout io.Writer) (string, bool) {
 	}
 	printf(stdout, "no matching password after three tries; generating one instead\n")
 	return "", false
-}
-
-// readLine reads one line, without its newline, from r.
-func readLine(r io.Reader) (string, bool) {
-	line, err := bufio.NewReader(r).ReadString('\n')
-	if err != nil && line == "" {
-		return "", false
-	}
-	return strings.TrimRight(line, "\r\n"), true
 }

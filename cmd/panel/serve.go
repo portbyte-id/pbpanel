@@ -190,6 +190,7 @@ func serve(ctx context.Context, _ []string) error {
 		Geo:      geo,
 		SSHAuth:  m7.SSHAuth,
 		Docker:   newDockerMgmt(logger),
+		Update:   newUpdate(layout),
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {
