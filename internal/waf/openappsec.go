@@ -5,6 +5,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/portbyte-id/server-panel/internal/nginx"
 )
 
 // open-appsec as a second engine. Everything below is rendered from measured
@@ -22,10 +24,8 @@ import (
 //   - the agent's local policy, which names every open-appsec site by host.
 const (
 	// OpenAppsecModuleFile is the attachment module, as `load_module` takes it:
-	// relative to the build's own prefix, like the ModSecurity module. Step 1's
-	// build recipe installs it under exactly this name; when that branch merges,
-	// this should become nginx.AttachmentModuleFile, which spells it the same.
-	OpenAppsecModuleFile = "modules/ngx_cp_attachment_module.so"
+	// relative to the build's own prefix, like the ModSecurity module.
+	OpenAppsecModuleFile = nginx.AttachmentModuleFile
 
 	// OpenAppsecDirective turns inspection on for one server. Its default is
 	// inspected, so it is written only where it is wanted; a site without it is
