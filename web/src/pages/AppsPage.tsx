@@ -70,7 +70,22 @@ export function AppsTable({
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
 
   const rows = apps.filter((app) => app.type === type)
-  const act = (name: string, action: AppAction) => control.mutate({ name, action })
+  const act = (name: string, action: AppAction) => {
+    // Starting shows the app's log while supervisord works, and the dialog stays
+    // open afterwards so a failed start can be read, never closed on its own.
+    if (action !== "stop") setLogsFor(name)
+    control.mutate({ name, action })
+  }
+  const closeLogs = () => {
+    setLogsFor(null)
+    control.reset()
+  }
+  const dialogError =
+    logsFor !== null && control.variables?.name === logsFor && control.error
+      ? control.error instanceof ApiError
+        ? control.error.detail
+        : "The action failed."
+      : null
 
   return (
     <div className="flex flex-col gap-4">
@@ -81,7 +96,7 @@ export function AppsTable({
         </Button>
       </div>
 
-      {control.error && (
+      {control.error && logsFor === null && (
         <p role="alert" className="text-destructive text-sm">
           {control.error instanceof ApiError ? control.error.detail : "The action failed."}
         </p>
@@ -190,12 +205,22 @@ export function AppsTable({
         defaultType={type}
       />
 
-      <Dialog open={logsFor !== null} onOpenChange={(open) => !open && setLogsFor(null)}>
+      <Dialog open={logsFor !== null} onOpenChange={(open) => !open && closeLogs()}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{logsFor} log</DialogTitle>
             <DialogDescription>Output and errors, newest at the bottom.</DialogDescription>
           </DialogHeader>
+          {control.isPending && control.variables?.name === logsFor && (
+            <p role="status" className="text-muted-foreground text-sm">
+              {control.variables.action === "restart" ? "Restarting…" : "Starting…"}
+            </p>
+          )}
+          {dialogError && (
+            <p role="alert" className="text-destructive text-sm">
+              {dialogError}
+            </p>
+          )}
           {logsFor !== null && <AppLogs name={logsFor} />}
         </DialogContent>
       </Dialog>
