@@ -18,6 +18,11 @@ import (
 // build that does not have it.
 var ErrModuleMissing = errors.New("waf: ModSecurity is not part of the nginx build in use")
 
+// ErrOpenAppsecMissing is returned when a config asks for open-appsec on a host
+// that cannot run it. The sites layer maps it to a 422 on the engine field, the
+// way ErrModuleMissing maps to mode.
+var ErrOpenAppsecMissing = errors.New("waf: open-appsec is not available on this host")
+
 // Availability says whether the nginx build in use can run ModSecurity.
 type Availability struct {
 	Available bool   `json:"available"`
@@ -29,6 +34,11 @@ type Availability struct {
 
 // AvailabilityFunc looks at the nginx build that serves.
 type AvailabilityFunc func(ctx context.Context) (Availability, error)
+
+// OpenAppsecAvailability reports whether this host can run open-appsec: the
+// serving build has the module and the agent is installed and active. reason
+// says what is missing when it cannot.
+type OpenAppsecAvailability func(ctx context.Context) (available bool, reason string)
 
 // ErrNoChallenge is returned when a config asks for the challenge page on a
 // panel that has no secret key to sign clearance cookies with.
@@ -53,6 +63,8 @@ type Engine struct {
 	keys *guard.Keyring
 	// turnstile is set by WithTurnstile; without it no site can use Turnstile.
 	turnstile TurnstileSource
+	// openAppsec is set by WithOpenAppsec; without it no site can use the engine.
+	openAppsec OpenAppsecAvailability
 }
 
 // New returns the engine. avail may be nil, which reports ModSecurity as
@@ -70,6 +82,12 @@ func (e *Engine) WithGuard(keys *guard.Keyring) *Engine {
 // WithTurnstile gives the engine the panel's Turnstile keys.
 func (e *Engine) WithTurnstile(src TurnstileSource) *Engine {
 	e.turnstile = src
+	return e
+}
+
+// WithOpenAppsec gives the engine the host's open-appsec state.
+func (e *Engine) WithOpenAppsec(src OpenAppsecAvailability) *Engine {
+	e.openAppsec = src
 	return e
 }
 
@@ -146,6 +164,11 @@ func (e *Engine) Check(ctx context.Context, c Config) error {
 			}
 		}
 	}
+	if c.UsesOpenAppsec() {
+		if ok, reason := e.OpenAppsecAvailable(ctx); !ok {
+			return fmt.Errorf("%w: %s", ErrOpenAppsecMissing, reason)
+		}
+	}
 	if !c.UsesModSecurity() {
 		return nil
 	}
@@ -153,6 +176,13 @@ func (e *Engine) Check(ctx context.Context, c Config) error {
 		return fmt.Errorf("%w: %s", ErrModuleMissing, a.Reason)
 	}
 	return nil
+}
+
+func (e *Engine) OpenAppsecAvailable(ctx context.Context) (bool, string) {
+	if e.openAppsec == nil {
+		return false, "open-appsec is not part of this panel build"
+	}
+	return e.openAppsec(ctx)
 }
 
 // Get returns a site's settings, or the defaults for a site with none.
