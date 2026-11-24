@@ -210,7 +210,7 @@ export function FirewallActivity({
   const sites = summary.by_site.slice(0, 5)
   const sitePeak = Math.max(1, ...sites.map((s) => s.count))
   return (
-    <Panel title="Firewall activity" aside="Full detail under Logs → WAF audit">
+    <Panel title="Firewall activity" aside="Full detail under WAF audit">
       <SplitBar
         label={`${blocked} blocked, ${detected} detected`}
         segments={[

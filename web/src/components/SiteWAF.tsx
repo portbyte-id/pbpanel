@@ -874,7 +874,7 @@ function ExclusionEditor({
         </h3>
         <p className="text-muted-foreground text-xs">
           Stop one ModSecurity rule from matching where it misjudges your application. Add one from a
-          blocked request in Logs → WAF audit.
+          blocked request in WAF → WAF audit.
         </p>
       </div>
 

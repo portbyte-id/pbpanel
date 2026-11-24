@@ -2,7 +2,6 @@ import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 
-import { WafEvents } from "@/components/WafEvents"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -34,25 +33,9 @@ const RESULT_PAGE_SIZE = 100
 const LAST_MB_CHOICES = [1, 4, 16, 64, 256, 1024]
 const LIMIT_CHOICES = [100, 1000, 5000, 10_000]
 
-/**
- * The log files, and beside them the WAF audit: the same log pages, plus the
- * ModSecurity events as a table instead of raw lines.
- */
+/** The log files: the sources on the left, a tail viewer and a search for the chosen one. */
 export function LogsPage() {
-  return (
-    <Tabs defaultValue="files">
-      <TabsList aria-label="Log views">
-        <TabsTrigger value="files">Log files</TabsTrigger>
-        <TabsTrigger value="waf">WAF audit</TabsTrigger>
-      </TabsList>
-      <TabsContent value="files" className="pt-2">
-        <LogFiles />
-      </TabsContent>
-      <TabsContent value="waf" className="pt-2">
-        <WafEvents />
-      </TabsContent>
-    </Tabs>
-  )
+  return <LogFiles />
 }
 
 /** Source list, then a tail viewer and a search for the chosen source. */

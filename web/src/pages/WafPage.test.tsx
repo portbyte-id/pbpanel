@@ -246,8 +246,8 @@ describe("WafPage", () => {
     renderPage()
     await user.click(screen.getByRole("tab", { name: "Firewall" }))
     expect(await screen.findByText(/firewall audit is not available/)).toBeInTheDocument()
-    // The posture banner sits above the tabs, so it stays while the firewall tab is shown.
-    expect(screen.getByRole("region", { name: "Protection" })).toBeInTheDocument()
+    // The posture banner belongs to the Overview tab, so the firewall tab does not show it.
+    expect(screen.queryByRole("region", { name: "Protection" })).not.toBeInTheDocument()
   })
 
   it("narrows to one site from the site table and asks the server for that site", async () => {

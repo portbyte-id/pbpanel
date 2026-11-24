@@ -92,10 +92,10 @@ export const navGroups: NavGroup[] = [
         label: "WAF",
         icon: Activity,
         path: "/waf",
-        description: "Live traffic, where requests come from, firewall events, bot blocking and the block page",
-        keywords: "traffic requests monitor modsecurity bot block map country sources protection page",
+        description: "Live traffic, where requests come from, firewall events, the WAF audit, bot blocking and the block page",
+        keywords: "traffic requests monitor modsecurity bot block map country sources protection page audit",
       },
-      { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files, and the WAF audit", keywords: "tail waf audit modsecurity" },
+      { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files", keywords: "tail" },
     ],
   },
   {

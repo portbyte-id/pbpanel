@@ -6,6 +6,7 @@ import { Sparkline } from "@/components/Sparkline"
 import { TrafficChart } from "@/components/TrafficChart"
 import { FirewallActivity, Panel, percent, posture, PostureBar, ResponseMix } from "@/components/TrafficPanels"
 import { BlockPagePanel } from "@/components/WafBlockPage"
+import { WafEvents } from "@/components/WafEvents"
 import { ProtectionPanel } from "@/components/WafProtection"
 import { CountriesTable, SourcesPanel } from "@/components/WafSources"
 import { Badge } from "@/components/ui/badge"
@@ -118,8 +119,6 @@ export function WafPage() {
         </p>
       </div>
 
-      {overview.data && <PostureBar overview={overview.data} site={site} />}
-
       {traffic.isPending ? (
         <SkeletonRows label="Loading traffic…" />
       ) : traffic.error ? (
@@ -135,23 +134,27 @@ export function WafPage() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="top">Top lists</TabsTrigger>
           <TabsTrigger value="firewall">Firewall</TabsTrigger>
+          <TabsTrigger value="audit">WAF audit</TabsTrigger>
           <TabsTrigger value="live">Live requests</TabsTrigger>
           <TabsTrigger value="protection">Protection</TabsTrigger>
           <TabsTrigger value="block-page">Block page</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="pt-2">
-          {traffic.data && !traffic.error && (
-            <Overview
-              data={traffic.data}
-              events={events.data}
-              eventsFailed={events.isError}
-              eventsPending={events.isPending}
-              site={site}
-              range={range}
-              modes={modes}
-              onPickSite={setSite}
-            />
-          )}
+          <div className="flex flex-col gap-4">
+            {overview.data && <PostureBar overview={overview.data} site={site} />}
+            {traffic.data && !traffic.error && (
+              <Overview
+                data={traffic.data}
+                events={events.data}
+                eventsFailed={events.isError}
+                eventsPending={events.isPending}
+                site={site}
+                range={range}
+                modes={modes}
+                onPickSite={setSite}
+              />
+            )}
+          </div>
         </TabsContent>
         <TabsContent value="top" className="pt-2">
           {traffic.data && !traffic.error && (
@@ -160,6 +163,9 @@ export function WafPage() {
         </TabsContent>
         <TabsContent value="firewall" className="pt-2">
           <FirewallActivity summary={events.data} failed={events.isError} pending={events.isPending} />
+        </TabsContent>
+        <TabsContent value="audit" className="pt-2">
+          <WafEvents />
         </TabsContent>
         <TabsContent value="live" className="pt-2">
           <RequestFeed site={site} />
