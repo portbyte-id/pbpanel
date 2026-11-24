@@ -141,6 +141,8 @@ describe("DashboardPage", () => {
     expect(screen.getByTestId("tile-Uptime")).toHaveTextContent("3d 4h")
     expect(screen.getByTestId("tile-Network")).toHaveTextContent("↓ 2.00 KiB/s")
     expect(screen.getByRole("meter", { name: "Disk use of /" })).toHaveAttribute("aria-valuenow", "91")
+    expect(screen.getByTestId("tile-Disk")).toHaveTextContent("91%")
+    expect(screen.getByRole("region", { name: "Disk" })).toHaveTextContent("/ · 9.00 GiB free")
     // No EventSource in jsdom: the page says it is polling rather than pretending to be live.
     expect(screen.getByText(/Refreshing every 5 seconds/)).toBeInTheDocument()
     expect(screen.getByRole("img", { name: /CPU use over the last 2 samples/ })).toBeInTheDocument()
@@ -244,6 +246,21 @@ describe("MetricTiles", () => {
   it("waits for the first sample", () => {
     render(<MetricTiles latest={null} history={[]} />)
     expect(screen.getByText("Waiting for the first sample.")).toBeInTheDocument()
+  })
+
+  it("shows the fullest disk, and says so when none is mounted", () => {
+    const s = snap("2026-11-17T10:00:00Z")
+    s.disks = [
+      { mount: "/", device: "/dev/sda1", fstype: "ext4", total_bytes: 100, used_bytes: 40, free_bytes: 60, used_percent: 40 },
+      { mount: "/srv", device: "/dev/sdb1", fstype: "xfs", total_bytes: 100, used_bytes: 80, free_bytes: 20, used_percent: 80 },
+    ]
+    render(<MetricTiles latest={s} history={[s]} showDisks={false} />)
+    expect(screen.getByTestId("tile-Disk")).toHaveTextContent("80%")
+    expect(screen.getByRole("region", { name: "Disk" })).toHaveTextContent("/srv · 20 B free")
+
+    s.disks = []
+    render(<MetricTiles latest={s} history={[s]} showDisks={false} />)
+    expect(screen.getAllByRole("region", { name: "Disk" }).at(-1)).toHaveTextContent("No mounted disks")
   })
 
   it("shows swap use when there is swap", () => {

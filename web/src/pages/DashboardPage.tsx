@@ -379,6 +379,14 @@ function externalNics(s: Snapshot) {
   return real.length > 0 ? real : s.net
 }
 
+/** The fullest mount: the one that runs out first. Undefined when no disk is mounted. */
+function fullestDisk(disks: Snapshot["disks"]): Snapshot["disks"][number] | undefined {
+  return disks.reduce<Snapshot["disks"][number] | undefined>(
+    (best, d) => (best === undefined || d.used_percent > best.used_percent ? d : best),
+    undefined,
+  )
+}
+
 /** The disk rows. Free space is what runs out, so the bar is use and the text is what is left. */
 export function DisksPanel({ disks }: { disks: Snapshot["disks"] }) {
   return (
@@ -447,13 +455,14 @@ export function MetricTiles({
   const swapPct = ratioPercent(mem.swap_used_bytes, mem.swap_total_bytes)
   const cores = latest.cpu_cores.length
   const nics = externalNics(latest)
+  const fullest = fullestDisk(latest.disks)
   const rx = nics.reduce((sum, n) => sum + n.rx_bytes_per_sec, 0)
   const tx = nics.reduce((sum, n) => sum + n.tx_bytes_per_sec, 0)
   const n = history.length
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border sm:grid-cols-3 xl:grid-cols-6">
+      <div className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border sm:grid-cols-3 xl:grid-cols-7">
         <Tile
           label="CPU"
           value={measuring ? "Measuring…" : formatPercent(latest.cpu_percent)}
@@ -515,6 +524,20 @@ export function MetricTiles({
             format: formatRate,
           }}
           sparkLabel={`Network traffic over the last ${n} samples`}
+        />
+
+        <Tile
+          label="Disk"
+          value={fullest ? formatPercent(fullest.used_percent) : "–"}
+          valueClass={fullest ? levelText(fullest.used_percent) : "text-muted-foreground"}
+          note={fullest ? `${fullest.mount} · ${formatBytes(fullest.free_bytes)} free` : "No mounted disks"}
+          noteTitle={latest.disks.map((d) => `${d.mount}: ${formatPercent(d.used_percent)} used`).join("\n") || undefined}
+          series={{
+            values: history.map((s) => fullestDisk(s.disks)?.used_percent ?? 0),
+            format: formatPercent,
+            ceiling: 100,
+          }}
+          sparkLabel={`Fullest disk use over the last ${n} samples`}
         />
 
         <Tile label="Uptime" value={formatUptime(latest.uptime_seconds)} note="Since the last boot" />
