@@ -46,6 +46,18 @@ func (p Paths) Binary() string { return path.Join(p.CurrentLink(), "sbin", "ngin
 // BinaryOf is the executable of one build, for checking a candidate before it serves.
 func (p Paths) BinaryOf(id string) string { return path.Join(p.BuildDir(id), "sbin", "nginx") }
 
+// AttachmentModuleFile is the open-appsec attachment module every build ships, as
+// `load_module` takes it: relative to the build's own prefix, so a candidate
+// loads its own module and not the one of the build that serves. The module's
+// libraries are in the build's lib directory beside it.
+const AttachmentModuleFile = "modules/ngx_cp_attachment_module.so"
+
+// AttachmentModuleOf is the attachment module of one build, for checking a
+// candidate before it serves.
+func (p Paths) AttachmentModuleOf(id string) string {
+	return path.Join(p.BuildDir(id), AttachmentModuleFile)
+}
+
 // VersionFile is where a build records the nginx release it compiled. A series
 // build picks its patch release while it runs, so the family version does not say
 // which one is on disk.

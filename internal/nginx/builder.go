@@ -27,7 +27,7 @@ const (
 )
 
 // BuildSource describes what every build is made of, for the Nginx page.
-const BuildSource = "nginx.org source, OpenSSL " + openSSLSeries + ", ModSecurity"
+const BuildSource = "nginx.org source, OpenSSL " + openSSLSeries + ", ModSecurity, open-appsec"
 
 // SuggestedVersions are the nginx series the Nginx page offers, newest first. Any
 // MAJOR.MINOR nginx.org publishes works, and so does a full MAJOR.MINOR.PATCH that
@@ -96,6 +96,20 @@ const (
 	crsSHA256  = "3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427"
 )
 
+// The open-appsec attachment, the nginx dynamic module of the second firewall
+// engine. It is a separate repository with no tags and no releases, so a commit is
+// pinned rather than a version, and the archive GitHub makes of that commit is
+// checked against its digest: the same commit always yields the same tarball.
+//
+// The module pairs with an agent release over a versioned IPC protocol (see
+// docs/design/open-appsec-plan.md), so moving this commit is a deliberate change
+// that has to consider the agent pin too.
+const (
+	// openAppsecAttachmentVersion is the attachment commit.
+	openAppsecAttachmentVersion = "4c88f6389e301fd1958b0448f0e0ce01888a20c5"
+	openAppsecAttachmentSHA256  = "a46c95de2535bd91ce7120714dfcffba0c18f369d2807d8ec99cb67e01e025eb"
+)
+
 //go:embed builder.Dockerfile
 var builderDockerfile string
 
@@ -136,6 +150,8 @@ func DockerfileFor(base, id, version string, p Paths) []byte {
 		"@MODSEC_NGINX_VERSION@", modSecurityNginxVersion,
 		"@CRS_VERSION@", CRSVersion,
 		"@CRS_SHA256@", crsSHA256,
+		"@OPENAPPSEC_ATTACHMENT_SHA@", openAppsecAttachmentVersion,
+		"@OPENAPPSEC_ATTACHMENT_SHA256@", openAppsecAttachmentSHA256,
 		"@PREFIX@", p.BuildDir(id),
 		"@CONF_PATH@", p.ConfPath(),
 		"@LOG_DIR@", p.MainLogDir(),
