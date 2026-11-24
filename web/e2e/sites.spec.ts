@@ -113,7 +113,7 @@ test("create a site, break its config, detach a control, regenerate", async ({ p
   //    modal, so it is closed before the rail is used.
   await page.keyboard.press("Escape")
   await expect(page).toHaveURL(/\/sites$/)
-  await page.getByRole("link", { name: "Nginx" }).click()
+  await page.getByRole("link", { name: "Runtimes" }).click()
   await expect(page.getByText(/nginx is running/)).toBeVisible()
   await page.getByRole("tab", { name: "Settings" }).click()
   await page.getByLabel("Largest upload").fill("250m")

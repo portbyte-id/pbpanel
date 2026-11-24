@@ -248,7 +248,7 @@ describe("SiteWAF", () => {
     renderTab()
 
     expect(await screen.findByText(/ModSecurity is not available on this server/)).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Nginx page" })).toHaveAttribute("href", "/nginx")
+    expect(screen.getByRole("link", { name: "Runtimes page" })).toHaveAttribute("href", "/runtimes")
     expect(screen.getByRole("radio", { name: "Detection only" })).toBeDisabled()
     expect(screen.getByRole("radio", { name: "Blocking" })).toBeDisabled()
     expect(screen.getByRole("radio", { name: "Off" })).toBeEnabled()
