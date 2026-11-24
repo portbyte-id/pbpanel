@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/firewall"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
@@ -49,7 +50,25 @@ func newFirewall(ctx context.Context, st *store.Store, reg *settings.Registry, l
 		logger.Error("firewall is not available", "error", err)
 		return nil
 	}
+	go keepDockerHooked(ctx, svc, logger)
 	return svc
+}
+
+// keepDockerHooked re-attaches the panel filter to DOCKER-USER. Docker can start after
+// the daemon and the boot restore, and until it does that chain does not exist.
+func keepDockerHooked(ctx context.Context, svc *firewall.Service, logger *slog.Logger) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		if err := svc.ReconcileDocker(ctx); err != nil {
+			logger.Warn("firewall: hooking the Docker filter failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // openPanelPort keeps the panel port reachable through the host firewall, outside the

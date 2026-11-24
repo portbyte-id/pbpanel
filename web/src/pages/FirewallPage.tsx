@@ -293,11 +293,11 @@ function DockerWarning({ ports }: { ports: FirewallState["dockerPorts"] }) {
     >
       <TriangleAlert className="text-destructive mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium">Docker published ports bypass these rules</p>
+        <p className="text-sm font-medium">Docker published ports follow these rules</p>
         <p className="text-muted-foreground text-xs">
-          Docker adds its own rules ahead of the firewall, so a port a container publishes is
-          reachable from outside whatever the rules below say. Bind the port to 127.0.0.1 or stop
-          publishing it to close it.
+          The panel filters published container ports ahead of Docker's own rules. A port is
+          reachable only if a rule below opens it (or it is a built-in port). Open the port here,
+          or bind it to 127.0.0.1 to keep it private.
         </p>
         <ul className="mt-1 text-xs">
           {ports.map((p) => (

@@ -1,8 +1,10 @@
 *filter
 :PANEL-INPUT - [0:0]
 :PANEL-BLOCK - [0:0]
+:PANEL-FORWARD - [0:0]
 -F PANEL-INPUT
 -F PANEL-BLOCK
+-F PANEL-FORWARD
 -A PANEL-BLOCK -s 2001:db8:bad::/48 -j DROP
 -A PANEL-INPUT -i lo -j ACCEPT
 -A PANEL-INPUT -s 2001:db8:600d::/48 -j ACCEPT
@@ -28,5 +30,20 @@
 -A PANEL-INPUT -p udp --dport 443 -j ACCEPT
 -A PANEL-INPUT -p tcp -s 2001:db8::/32 --dport 3306 -j ACCEPT
 -A PANEL-INPUT -j DROP
+-A PANEL-FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A PANEL-FORWARD -j PANEL-BLOCK
+-A PANEL-FORWARD -s 2001:db8:600d::/48 -j RETURN
+-A PANEL-FORWARD -m conntrack ! --ctstate DNAT -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 22 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 2222 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 8443 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 80 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 443 -j RETURN
+-A PANEL-FORWARD -p udp -m conntrack --ctorigdstport 443 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 80 -j RETURN
+-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 443 -j RETURN
+-A PANEL-FORWARD -p udp -m conntrack --ctorigdstport 443 -j RETURN
+-A PANEL-FORWARD -p tcp -s 2001:db8::/32 -m conntrack --ctorigdstport 3306 -j RETURN
+-A PANEL-FORWARD -j DROP
 -I INPUT 1 -j PANEL-INPUT
 COMMIT

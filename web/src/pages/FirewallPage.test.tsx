@@ -173,14 +173,14 @@ describe("FirewallPage", () => {
 
   it("warns about Docker published ports only when there are some", async () => {
     setup(baseState({ dockerPorts: [{ container: "redis", port: 6379, protocol: "tcp" }] }))
-    expect(await screen.findByText(/Docker published ports bypass these rules/)).toBeInTheDocument()
+    expect(await screen.findByText(/Docker published ports follow these rules/)).toBeInTheDocument()
     expect(screen.getByText("redis: 6379/tcp")).toBeInTheDocument()
   })
 
   it("has no Docker warning without published ports", async () => {
     setup(baseState())
     await screen.findByText("Enabled")
-    expect(screen.queryByText(/bypass these rules/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/follow these rules/)).not.toBeInTheDocument()
   })
 
   it("lists built-in rows read-only and the operator rules with actions", async () => {

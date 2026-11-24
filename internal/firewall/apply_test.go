@@ -40,13 +40,13 @@ func (f *fakeTables) Output(_ context.Context, name string, _ ...string) ([]byte
 	bin := binOf(name)
 	var b strings.Builder
 	b.WriteString("*filter\n:INPUT ACCEPT [0:0]\n:DOCKER-USER - [0:0]\n")
-	for _, c := range []string{ChainInput, ChainBlock} {
+	for _, c := range []string{ChainInput, ChainBlock, ChainForward} {
 		if f.exists[bin+":"+c] {
 			b.WriteString(":" + c + " - [0:0]\n")
 		}
 	}
 	b.WriteString("-A DOCKER-USER -j RETURN\n")
-	for _, c := range []string{ChainInput, ChainBlock} {
+	for _, c := range []string{ChainInput, ChainBlock, ChainForward} {
 		for _, l := range f.chains[bin+":"+c] {
 			b.WriteString(l + "\n")
 		}
