@@ -158,7 +158,11 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 	if err != nil {
 		return WAFResult{}, err
 	}
-	rendered := m.waf.RenderConfig(s.Domain, c)
+	g, err := m.waf.Global(ctx)
+	if err != nil {
+		return WAFResult{}, err
+	}
+	rendered := m.waf.RenderWith(s.Domain, c, g)
 	if rendered.NeedsBlock && len(patch.content) > 0 && !nginx.HasBlock(patch.content, nginx.BlockWAF) {
 		next, ok := nginx.InsertBlock(patch.content, nginx.BlockWAF)
 		if !ok {
@@ -285,4 +289,98 @@ func (m *Manager) WAFSharedFiles(ctx context.Context) ([]confedit.File, error) {
 		return nil, nil
 	}
 	return m.waf.SharedFiles(ctx, "")
+}
+
+// WAFGlobalResult is what SetWAFGlobal did.
+type WAFGlobalResult struct {
+	Global waf.Global
+	Apply  confedit.Result
+}
+
+// WAFGlobal returns the global firewall.
+func (m *Manager) WAFGlobal(ctx context.Context) (waf.Global, error) {
+	if m.waf == nil {
+		return waf.Global{}, ErrNoWAF
+	}
+	return m.waf.Global(ctx)
+}
+
+// SetWAFGlobal changes the global firewall. Every site's block is rendered again
+// under the new settings, and a site that now needs a block gets one inserted,
+// all in one apply: `nginx -t` runs on the result before nginx reloads, and a
+// rejection puts every file and the stored settings back.
+func (m *Manager) SetWAFGlobal(ctx context.Context, in waf.Global) (WAFGlobalResult, error) {
+	if m.waf == nil {
+		return WAFGlobalResult{}, ErrNoWAF
+	}
+	g, err := in.Normalize()
+	if err != nil {
+		return WAFGlobalResult{}, wafInvalid(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	prev, err := m.waf.Global(ctx)
+	if err != nil {
+		return WAFGlobalResult{}, err
+	}
+	if err := m.waf.PutGlobal(ctx, g); err != nil {
+		return WAFGlobalResult{}, fmt.Errorf("sites: store the global firewall: %w", err)
+	}
+	restore := func(err error) error {
+		if rbErr := m.waf.PutGlobal(context.WithoutCancel(ctx), prev); rbErr != nil {
+			return errors.Join(err, fmt.Errorf("sites: restoring the global firewall in the database: %w", rbErr))
+		}
+		return err
+	}
+
+	list, err := m.list(ctx, m.st.DB())
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	var files []confedit.File
+	for _, s := range list {
+		c, err := m.waf.Get(ctx, s.Domain)
+		if err != nil {
+			return WAFGlobalResult{}, restore(err)
+		}
+		patch, err := m.newPatch(s)
+		if err != nil {
+			return WAFGlobalResult{}, restore(err)
+		}
+		rendered := m.waf.RenderWith(s.Domain, c, g)
+		if rendered.NeedsBlock && len(patch.content) > 0 && !nginx.HasBlock(patch.content, nginx.BlockWAF) {
+			next, ok := nginx.InsertBlock(patch.content, nginx.BlockWAF)
+			if !ok {
+				begin, end := nginx.BlockMarkers(nginx.BlockWAF)
+				return WAFGlobalResult{}, restore(invalid("site_file", "%s has no `server {` line to attach the firewall to; add the two lines `%s` and `%s` inside the server block, or regenerate the site file", s.Domain, begin, end))
+			}
+			patch.content, patch.changed = next, true
+		}
+		patch.set(FeatureWAF, rendered.Block)
+		files = append(files, patch.files()...)
+		files = append(files, rendered.Files...)
+		if c.UsesModSecurity() {
+			if err := m.prepareAuditLog(s.Domain); err != nil {
+				return WAFGlobalResult{}, restore(err)
+			}
+		}
+	}
+	shared, err := m.waf.SharedFiles(ctx, "")
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	files = append(files, shared...)
+	settings, err := m.staleSettingsFiles(ctx)
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	files = append(files, settings...)
+
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "firewall: global"})
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	return WAFGlobalResult{Global: g, Apply: res}, nil
 }

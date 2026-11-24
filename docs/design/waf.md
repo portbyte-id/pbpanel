@@ -88,3 +88,53 @@ The UI polls every two seconds while the page is open.
   the container runs in UTC.
 - Log rotation renames `*.log` and asks nginx to reopen; whether libmodsecurity
   reopens its audit file on that signal has not been checked.
+
+## Global firewall
+
+The WAF page's Protection and Block page tabs hold one firewall that applies to
+every site (`waf.Global`, stored in the `waf_global` table, migration 0021). It sits
+under each site's own settings and is rendered into every site's firewall block.
+
+| Rule | Renders | Notes |
+| --- | --- | --- |
+| Bot blocking | `map` on the User-Agent in `waf/http/_global.conf`, `if` in the site block | Presets: scanners (on by default), AI crawlers, SEO crawlers; plus an empty-User-Agent switch and custom names |
+| Dotfiles | `map` on the URI | Refuses `/.git`, `/.env`, `/.svn`; `/.well-known/` stays open |
+| TRACE and TRACK | `map` on the method | nginx core already answers TRACE with 405; the rule is a backstop |
+| Address deny list | `geo` plus `map` | Every site; a site's own allow list does not override it |
+| Block page | `error_page` and an internal location | See below |
+
+Each map is keyed on `$pbwaf_g_skip`: requests for the block page and for
+`/.well-known/acme-challenge/` are never refused, so the page cannot refuse
+itself. The maps are `volatile`, since nginx would otherwise keep a value across
+the internal redirect to the page.
+
+**Saving** re-renders every site's block in one confedit apply: `nginx -t` runs on
+the result, and a rejection restores the files and the stored settings. A site
+that has no firewall block gets one only when a global rule is on.
+
+**Block page** is `<root>/panel/nginx/waf/errors/blocked.html`, served by nginx
+with `ssi on`. The one directive allowed is `<!--#echo ... -->`, so a page cannot
+include files or run commands. A 403 keeps its status and a 429 stays a 429. The
+page also replaces any 403 the site's own application returns, while the global
+block page is on.
+
+Tests run real nginx: `TestGlobalFirewallParsesInNginx` runs `nginx -t` and
+`TestGlobalFirewallBlocksInNginx` starts nginx and checks what a client gets.
+They skip where nginx is not installed.
+
+## Where requests come from
+
+The WAF overview shows a world map shaded by requests per country, with tables of
+countries and the busiest addresses. Countries come from the **DB-IP Lite country
+database** (free, CC BY 4.0, no key). The panel downloads
+`dbip-country-lite-YYYY-MM.csv.gz` from `download.db-ip.com` on request, checks
+that it parses, and installs it under `<root>/panel/geoip/`. Lookups are local.
+The page carries DB-IP's credit, which the license requires.
+
+Routes: `GET /api/waf/sources?range=`, `GET /api/waf/geo`,
+`POST /api/waf/geo/download`. Counts come from the monitor's buckets, which keep the
+busiest addresses per interval, so a very busy host is counted as `untracked`
+rather than guessed.
+
+The map is lazy-loaded: `world-atlas` (Natural Earth 110 m, public domain) and
+`d3-geo` project it.

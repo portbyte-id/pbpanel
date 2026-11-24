@@ -143,6 +143,14 @@ func (p Paths) WAFAuditLog(domain string) string {
 // WAFModuleFile is the main-context file that loads the ModSecurity module.
 func (p Paths) WAFModuleFile() string { return path.Join(p.WAFMainDir(), "modsecurity.conf") }
 
+// WAFGlobalHTTP is the http-context file of the global firewall. Its name starts
+// with an underscore, which a domain can never do, so it cannot clash with a site.
+func (p Paths) WAFGlobalHTTP() string { return path.Join(p.WAFHTTPDir(), "_global.conf") }
+
+// WAFErrorPage is the block page nginx serves for a refused request, from the
+// panel's files. It exists while the global firewall has a page on.
+func (p Paths) WAFErrorPage() string { return path.Join(p.WAFDir(), "errors", "blocked.html") }
+
 // RunDir holds the PHP-FPM sockets, shared with the PHP containers.
 func (p Paths) RunDir() string { return path.Join(p.Root, "panel", "run") }
 

@@ -33,6 +33,13 @@ func (f *fakeWAFMon) Events(q wafmon.EventQuery) wafmon.EventPage {
 	return wafmon.EventPage{Events: []wafmon.Event{}, Total: 0}
 }
 
+func (f *fakeWAFMon) SourceCountsOver(window time.Duration) wafmon.SourceCounts {
+	return wafmon.SourceCounts{Requests: 12, IPs: []wafmon.IPRow{
+		{IP: "198.51.100.4", Requests: 9, Errors: 2},
+		{IP: "10.0.0.5", Requests: 3},
+	}}
+}
+
 func (f *fakeWAFMon) Matching(q wafmon.EventQuery) []wafmon.Event {
 	f.evQ = q
 	return []wafmon.Event{{Seq: 7, Site: "a.test", IP: "198.51.100.4", Action: wafmon.ActionBlocked, RuleID: "942100",

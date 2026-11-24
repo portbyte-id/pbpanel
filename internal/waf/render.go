@@ -56,16 +56,36 @@ func CookieName(domain string) string { return "pbg_" + SiteID(domain) }
 // directives. A config that asks for nothing renders a comment only. It leaves
 // the challenge out, which needs the site's secret: see Engine.RenderConfig.
 func BlockBody(p nginx.Paths, domain string, c Config) []byte {
-	return blockBody(p, domain, c, "")
+	return blockBody(p, domain, c, "", Global{})
 }
 
-func blockBody(p nginx.Paths, domain string, c Config, secret string) []byte {
+// BlockedPagePath is where nginx serves the block page. It has no leading dot:
+// the dotfile rule of the global firewall must not refuse the page itself.
+const BlockedPagePath = "/pb-waf-blocked"
+
+// Names of the global firewall's variables. GlobalHTTPInclude sets them in the
+// http context; the site block reads them.
+const (
+	globalSkip  = "$pbwaf_g_skip"
+	globalIP    = "$pbwaf_g_ip"
+	globalBot   = "$pbwaf_g_bot"
+	globalDot   = "$pbwaf_g_dot"
+	globalTrace = "$pbwaf_g_trace"
+)
+
+func blockBody(p nginx.Paths, domain string, c Config, secret string, g Global) []byte {
 	zone, _, _, ipdeny, path := names(domain)
 	var b strings.Builder
 	b.WriteString("# Managed by PB panel (firewall).\n")
-	if c.IsDefault() {
+	if c.IsDefault() && !g.Active() {
 		b.WriteString("# The firewall is off for this site.\n")
 		return []byte(b.String())
+	}
+	if g.Active() {
+		writeGlobalBlock(&b, g)
+	}
+	if g.ErrorPage.Enabled {
+		writeErrorPage(&b, p, c.UsesModSecurity())
 	}
 	if len(c.IPRules.Allow)+len(c.IPRules.Deny) > 0 {
 		fmt.Fprintf(&b, "if (%s) { return 403; }\n", ipdeny)

@@ -265,11 +265,22 @@ func (e *Engine) Render(ctx context.Context, domain string) (Rendered, error) {
 	if err != nil {
 		return Rendered{}, err
 	}
-	return e.RenderConfig(domain, c), nil
+	g, err := e.Global(ctx)
+	if err != nil {
+		return Rendered{}, err
+	}
+	return e.RenderWith(domain, c, g), nil
 }
 
-// RenderConfig renders a config that is not necessarily stored yet.
+// RenderConfig renders a site's config with no global protections. The sites
+// manager renders through RenderWith; this is the site-only view.
 func (e *Engine) RenderConfig(domain string, c Config) Rendered {
+	return e.RenderWith(domain, c, Global{})
+}
+
+// RenderWith renders a config that is not necessarily stored yet, under the
+// global firewall g.
+func (e *Engine) RenderWith(domain string, c Config, g Global) Rendered {
 	// A challenge stored on a panel that has since lost its key renders as off:
 	// a cookie nobody can sign would lock every visitor out.
 	if c.Challenge.Enabled && e.keys == nil {
@@ -280,8 +291,8 @@ func (e *Engine) RenderConfig(domain string, c Config) Rendered {
 		secret = e.keys.CookieSecret(domain)
 	}
 	r := Rendered{
-		Block:      blockBody(e.p, domain, c, secret),
-		NeedsBlock: !c.IsDefault(),
+		Block:      blockBody(e.p, domain, c, secret, g),
+		NeedsBlock: !c.IsDefault() || g.Active(),
 		Files:      []confedit.File{{Path: e.p.WAFHTTPFile(domain), Content: HTTPInclude(domain, c)}},
 	}
 	if c.UsesModSecurity() {
@@ -305,10 +316,52 @@ func (e *Engine) SharedFiles(ctx context.Context, except string) ([]confedit.Fil
 	if err != nil {
 		return nil, err
 	}
+	module := confedit.File{Path: e.p.WAFModuleFile(), Delete: true}
 	if any {
-		return []confedit.File{{Path: e.p.WAFModuleFile(), Content: MainInclude()}}, nil
+		module = confedit.File{Path: e.p.WAFModuleFile(), Content: MainInclude()}
 	}
-	return []confedit.File{{Path: e.p.WAFModuleFile(), Delete: true}}, nil
+	g, err := e.Global(ctx)
+	if err != nil {
+		return nil, err
+	}
+	page := confedit.File{Path: e.p.WAFErrorPage(), Delete: true}
+	if g.ErrorPage.Enabled {
+		page = confedit.File{Path: e.p.WAFErrorPage(), Content: []byte(g.ErrorPage.HTML)}
+	}
+	return []confedit.File{module, {Path: e.p.WAFGlobalHTTP(), Content: GlobalHTTPInclude(g)}, page}, nil
+}
+
+// Global returns the firewall that applies to every site: the defaults until an
+// operator changes something.
+func (e *Engine) Global(ctx context.Context) (Global, error) {
+	var raw string
+	err := e.st.DB().QueryRowContext(ctx, `SELECT json FROM waf_global WHERE id = 1`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DefaultGlobal().Normalize()
+	}
+	if err != nil {
+		return Global{}, fmt.Errorf("waf: read the global settings: %w", err)
+	}
+	g := DefaultGlobal()
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		return Global{}, fmt.Errorf("waf: the stored global settings are damaged: %w", err)
+	}
+	return g.Normalize()
+}
+
+// PutGlobal stores the global firewall. g must already be normalized.
+func (e *Engine) PutGlobal(ctx context.Context, g Global) error {
+	raw, err := json.Marshal(g)
+	if err != nil {
+		return err
+	}
+	return e.st.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO waf_global (id, json, updated_at) VALUES (1, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+			string(raw), e.now().UTC().Format(time.RFC3339Nano))
+		return err
+	})
 }
 
 // RemovedFiles are a deleted site's firewall files.

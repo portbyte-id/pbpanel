@@ -5,6 +5,9 @@ import { ErrorState } from "@/components/ErrorState"
 import { Sparkline } from "@/components/Sparkline"
 import { TrafficChart } from "@/components/TrafficChart"
 import { FirewallActivity, percent, PostureBar, ResponseMix } from "@/components/TrafficPanels"
+import { BlockPagePanel } from "@/components/WafBlockPage"
+import { ProtectionPanel } from "@/components/WafProtection"
+import { SourcesPanel } from "@/components/WafSources"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -61,8 +64,11 @@ export function statusVariant(status: number): "success" | "info" | "warning" | 
   }
 }
 
-/** Live traffic of every site, or one: totals, a chart, the busiest clients and paths, and a request feed. */
-export function TrafficPage() {
+/**
+ * The WAF: live traffic, where the requests come from, the firewall events, and
+ * the rules that apply to every site, with the page a refused visitor sees.
+ */
+export function WafPage() {
   const id = useId()
   const sites = useSites()
   const overview = useWafOverview()
@@ -127,15 +133,17 @@ export function TrafficPage() {
       )}
 
       <Tabs defaultValue="overview">
-        <TabsList aria-label="Traffic views">
+        <TabsList aria-label="WAF views">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="top">Top lists</TabsTrigger>
           <TabsTrigger value="firewall">Firewall</TabsTrigger>
           <TabsTrigger value="live">Live requests</TabsTrigger>
+          <TabsTrigger value="protection">Protection</TabsTrigger>
+          <TabsTrigger value="block-page">Block page</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="pt-2">
           {traffic.data && !traffic.error && (
-            <Overview data={traffic.data} site={site} modes={modes} onPickSite={setSite} />
+            <Overview data={traffic.data} site={site} range={range} modes={modes} onPickSite={setSite} />
           )}
         </TabsContent>
         <TabsContent value="top" className="pt-2">
@@ -146,6 +154,12 @@ export function TrafficPage() {
         </TabsContent>
         <TabsContent value="live" className="pt-2">
           <RequestFeed site={site} />
+        </TabsContent>
+        <TabsContent value="protection" className="pt-2">
+          <ProtectionPanel />
+        </TabsContent>
+        <TabsContent value="block-page" className="pt-2">
+          <BlockPagePanel />
         </TabsContent>
       </Tabs>
     </div>
@@ -233,11 +247,13 @@ function Totals({ data, events }: { data: TrafficSummary; events: WafEventSummar
 function Overview({
   data,
   site,
+  range,
   modes,
   onPickSite,
 }: {
   data: TrafficSummary
   site: string
+  range: TrafficRange
   modes: Map<string, WafOverviewSite>
   onPickSite: (domain: string) => void
 }) {
@@ -251,6 +267,8 @@ function Overview({
       </section>
 
       <ResponseMix totals={t} />
+
+      {site === "" && <SourcesPanel range={range} />}
 
       {site === "" && (
         <section aria-label="Sites" className="flex flex-col gap-2">

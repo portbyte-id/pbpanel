@@ -12,6 +12,7 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
+	"github.com/portbyte-id/server-panel/internal/geoip"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
@@ -153,6 +154,9 @@ func serve(ctx context.Context, _ []string) error {
 		Dir:    filepath.FromSlash(nginx.Paths{Root: filepath.ToSlash(layout.Root)}.SiteLogDir()),
 		Logger: logger,
 	})
+	// The country database behind the world map. Loaded at once when it was
+	// downloaded before; the first download is an action on the WAF page.
+	geo := geoip.NewStore(filepath.Join(layout.Root, "panel", "geoip"))
 	go wafCollector.Run(ctx)
 
 	// listener is assigned below; Rebind runs only on requests, which cannot
@@ -183,6 +187,7 @@ func serve(ctx context.Context, _ []string) error {
 		Logs:     m7.Logs,
 		Cron:     m7.Cron,
 		WAFMon:   wafCollector,
+		Geo:      geo,
 		SSHAuth:  m7.SSHAuth,
 		Docker:   newDockerMgmt(logger),
 		Rebind: func(p int) error {

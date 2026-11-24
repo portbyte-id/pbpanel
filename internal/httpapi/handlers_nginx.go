@@ -88,6 +88,8 @@ func (s *server) nginxRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/sites/{domain}/waf", h(s.handleGetSiteWAF))
 	mux.Handle("PUT /api/sites/{domain}/waf", h(s.handlePutSiteWAF))
 	mux.Handle("GET /api/waf/status", h(s.handleWAFStatus))
+	mux.Handle("GET /api/waf/global", h(s.handleGetWAFGlobal))
+	mux.Handle("PUT /api/waf/global", h(s.handlePutWAFGlobal))
 
 	mux.Handle("GET /api/nginx/settings", h(s.handleGetNginxSettings))
 	mux.Handle("PUT /api/nginx/settings", h(s.handlePutNginxSettings))

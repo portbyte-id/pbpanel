@@ -8,6 +8,7 @@ import {
   type TrafficRequestQuery,
   type WafConfig,
   type WafEventQuery,
+  type WafGlobal,
 } from "@/lib/waf"
 
 export const wafKeys = {
@@ -18,6 +19,9 @@ export const wafKeys = {
   requests: (filters: string) => ["waf", "requests", filters] as const,
   events: (filters: string) => ["waf", "events", filters] as const,
   summary: (site: string, range: TrafficRange) => ["waf", "summary", site, range] as const,
+  global: ["waf", "global"] as const,
+  sources: (range: TrafficRange) => ["waf", "sources", range] as const,
+  geo: ["waf", "geo"] as const,
 }
 
 /** How often the monitor asks again, and how many feed rows it keeps. */
@@ -128,4 +132,48 @@ export function useRequestFeed(filters: Omit<TrafficRequestQuery, "after" | "lim
   }, [dataUpdatedAt, data])
 
   return { rows, query }
+}
+
+/** The firewall that applies to every site. */
+export function useWafGlobal() {
+  return useQuery({ queryKey: wafKeys.global, queryFn: () => api.wafGlobal(), retry: false })
+}
+
+export function useSaveWafGlobal() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Firewall rules saved" },
+    mutationFn: (config: WafGlobal) => api.saveWafGlobal(config),
+    onSuccess: (res) => {
+      client.setQueryData(wafKeys.global, res)
+      return client.invalidateQueries({ queryKey: wafKeys.overview })
+    },
+  })
+}
+
+/** Where a window's requests came from. Polls less often than the traffic does. */
+export function useWafSources(range: TrafficRange) {
+  return useQuery({
+    queryKey: wafKeys.sources(range),
+    queryFn: () => api.wafSources(range),
+    refetchInterval: pollWhileVisible(TRAFFIC_POLL_MS * 5),
+    retry: false,
+  })
+}
+
+export function useWafGeo() {
+  return useQuery({ queryKey: wafKeys.geo, queryFn: () => api.wafGeo(), retry: false })
+}
+
+/** Fetch the country database. The sources are asked again once it is in place. */
+export function useDownloadWafGeo() {
+  const client = useQueryClient()
+  return useMutation({
+    meta: { success: "Country database installed" },
+    mutationFn: () => api.downloadWafGeo(),
+    onSuccess: (st) => {
+      client.setQueryData(wafKeys.geo, st)
+      return client.invalidateQueries({ queryKey: ["waf", "sources"] })
+    },
+  })
 }
