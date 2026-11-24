@@ -2,19 +2,14 @@ import { Link } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 import { useState } from "react"
 
-import { AppDialog } from "@/components/AppDialog"
+import { AppDialog, type AppSection } from "@/components/AppDialog"
 import { AppLogs } from "@/components/AppLogs"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { CreateSiteDialog } from "@/components/CreateSiteDialog"
+import { TLSCell } from "@/components/TLSCell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { ApiError, type AppAction, type AppType, type PanelApp, type Site } from "@/lib/api"
+import { ApiError, type AppAction, type AppType, type CertView, type PanelApp, type Site } from "@/lib/api"
 import { useControlApp, useDeleteApp } from "@/lib/queries"
 import { tabForApp } from "@/lib/sitesTabs"
 
@@ -33,10 +28,26 @@ export function formatUptime(seconds: number): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
-/** The domains of the proxy sites that pass requests to an app's port. */
-export function domainsOf(app: Pick<PanelApp, "proxy_url">, sites: Site[]): string[] {
+/** The sites that pass requests to an app's port: as the whole site or as a subpath. */
+export function sitesOf(app: Pick<PanelApp, "proxy_url">, sites: Site[]): Site[] {
   if (app.proxy_url === "") return []
-  return sites.filter((s) => s.kind === "proxy" && s.proxy_target === app.proxy_url).map((s) => s.domain)
+  return sites.filter(
+    (s) =>
+      (s.kind === "proxy" && s.proxy_target === app.proxy_url) ||
+      (s.proxy_routes ?? []).some((r) => r.target === app.proxy_url),
+  )
+}
+
+/** The domains of the sites that pass requests to an app's port. */
+export function domainsOf(app: Pick<PanelApp, "proxy_url">, sites: Site[]): string[] {
+  return sitesOf(app, sites).map((s) => s.domain)
+}
+
+/** The subpath a site hands to an app, or "" when the whole site goes to it. */
+function pathOnSite(app: Pick<PanelApp, "proxy_url">, site: Site): string {
+  if (site.kind === "proxy" && site.proxy_target === app.proxy_url) return ""
+  const route = (site.proxy_routes ?? []).find((r) => r.target === app.proxy_url)
+  return route && route.path !== "/" ? route.path : ""
 }
 
 export function isRunning(app: Pick<PanelApp, "state">): boolean {
@@ -44,13 +55,16 @@ export function isRunning(app: Pick<PanelApp, "state">): boolean {
 }
 
 /**
- * The apps of one type, with their controls, logs, and a shortcut to put a site in
- * front of one. Each app tab of the Sites page shows one of these.
+ * The apps of one type and the sites in front of them, in one table: state and
+ * controls, and under Domains each site with its HTTPS state. Manage opens a dialog
+ * with the app's settings, domains, log and delete in a sidebar.
  */
 export function AppsTable({
   type,
   apps,
   sites,
+  certs,
+  certsPending,
   intro,
   empty,
 }: {
@@ -58,6 +72,9 @@ export function AppsTable({
   /** Every app of the panel; this shows the ones of `type`. */
   apps: PanelApp[]
   sites: Site[]
+  /** Certificates by domain; a domain without one shows "No HTTPS". */
+  certs: Map<string, CertView>
+  certsPending: boolean
   /** What this kind of app is, shown above the table. */
   intro: string
   /** Shown when there are no apps of this type. */
@@ -65,38 +82,146 @@ export function AppsTable({
 }) {
   const control = useControlApp()
   const remove = useDeleteApp()
-  const [editing, setEditing] = useState<PanelApp | "new" | null>(null)
-  const [logsFor, setLogsFor] = useState<string | null>(null)
+  // `name` null is a new app. The app itself is looked up each render, so the
+  // dialog follows the list as it refreshes.
+  const [managing, setManaging] = useState<{ name: string | null; section: AppSection } | null>(null)
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
+  const [addingDomainTo, setAddingDomainTo] = useState<PanelApp | null>(null)
 
   const rows = apps.filter((app) => app.type === type)
+  const current = managing?.name == null ? null : (apps.find((a) => a.name === managing.name) ?? null)
+
   const act = (name: string, action: AppAction) => {
     // Starting shows the app's log while supervisord works, and the dialog stays
     // open afterwards so a failed start can be read, never closed on its own.
-    if (action !== "stop") setLogsFor(name)
+    if (action !== "stop") setManaging({ name, section: "logs" })
     control.mutate({ name, action })
   }
-  const closeLogs = () => {
-    setLogsFor(null)
+  const closeManage = () => {
+    setManaging(null)
     control.reset()
   }
   const dialogError =
-    logsFor !== null && control.variables?.name === logsFor && control.error
+    current !== null && control.variables?.name === current.name && control.error
       ? control.error instanceof ApiError
         ? control.error.detail
         : "The action failed."
       : null
+  const pendingHere = current !== null && control.isPending && control.variables?.name === current.name
+
+  const renderSection = (section: AppSection, app: PanelApp) => {
+    if (section === "domains") {
+      const mine = sitesOf(app, sites)
+      return (
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-muted-foreground max-w-md text-sm">
+              Sites that pass requests to this app{app.port == null ? "" : ` on port ${app.port}`}.
+            </p>
+            <Button size="sm" disabled={app.proxy_url === ""} onClick={() => setAddingDomainTo(app)}>
+              <Plus aria-hidden /> Add domain
+            </Button>
+          </div>
+          {app.proxy_url === "" && (
+            <p className="text-muted-foreground text-sm">Set a port under Settings first: a domain passes requests to it.</p>
+          )}
+          {mine.length === 0 ? (
+            app.proxy_url !== "" && (
+              <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">
+                No domain points at this app yet.
+              </p>
+            )
+          ) : (
+            <ul className="divide-border border-border divide-y rounded-md border">
+              {mine.map((s) => (
+                <li key={s.domain} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-medium">
+                      {s.domain}
+                      <span className="text-muted-foreground font-mono text-xs">{pathOnSite(app, s)}</span>
+                    </span>
+                    {s.aliases.length > 0 && <span className="text-muted-foreground text-xs">{s.aliases.join(", ")}</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {certsPending ? <span className="text-muted-foreground">…</span> : <TLSCell cert={certs.get(s.domain)} />}
+                    <Button size="sm" variant="outline" asChild>
+                      <Link
+                        to="/sites/$domain"
+                        params={{ domain: s.domain }}
+                        search={{ tab: tabForApp(app.type) }}
+                        onClick={closeManage}
+                      >
+                        Open site
+                      </Link>
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )
+    }
+    if (section === "logs") {
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-muted-foreground text-sm">Output and errors, newest at the bottom.</p>
+            <div className="flex gap-1.5">
+              {isRunning(app) ? (
+                <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "stop")}>
+                  Stop
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "start")}>
+                  Start
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "restart")}>
+                Restart
+              </Button>
+            </div>
+          </div>
+          {pendingHere && (
+            <p role="status" className="text-muted-foreground text-sm">
+              {control.variables?.action === "restart" ? "Restarting…" : "Starting…"}
+            </p>
+          )}
+          {dialogError && (
+            <p role="alert" className="text-destructive text-sm">
+              {dialogError}
+            </p>
+          )}
+          <AppLogs name={app.name} />
+        </div>
+      )
+    }
+    // delete
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm">
+          Deleting {app.name} stops it and removes its program file and log directory. Any reverse-proxy site that
+          passes requests to its port is removed too. Its working directory is left in place.
+        </p>
+        <div>
+          <Button variant="destructive" onClick={() => setDeleting(app)}>
+            Delete app
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-muted-foreground max-w-2xl text-sm">{intro}</p>
-        <Button onClick={() => setEditing("new")}>
+        <Button onClick={() => setManaging({ name: null, section: "settings" })}>
           <Plus aria-hidden /> Add app
         </Button>
       </div>
 
-      {control.error && logsFor === null && (
+      {control.error && managing === null && (
         <p role="alert" className="text-destructive text-sm">
           {control.error instanceof ApiError ? control.error.detail : "The action failed."}
         </p>
@@ -107,7 +232,7 @@ export function AppsTable({
       ) : (
         <div className="border-border overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
-            <caption className="sr-only">Apps of this type</caption>
+            <caption className="sr-only">Apps of this type and the domains in front of them</caption>
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
                 <th scope="col" className="px-3 py-1.5 font-medium">Name</th>
@@ -123,74 +248,71 @@ export function AppsTable({
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {rows.map((app) => (
-                <tr key={app.name}>
-                  <td className="px-3 py-1.5 font-medium">{app.name}</td>
-                  <td className="text-muted-foreground px-3 py-1.5">{typeLabel(app)}</td>
-                  <td className="px-3 py-1.5">
-                    <Badge variant={isRunning(app) ? "secondary" : "destructive"}>{app.state}</Badge>
-                    {app.spawn_error !== "" && (
-                      <p className="text-destructive mt-1 max-w-xs text-xs">{app.spawn_error}</p>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5 tabular-nums">{app.pid > 0 ? app.pid : "–"}</td>
-                  <td className="px-3 py-1.5 tabular-nums">
-                    {isRunning(app) && app.uptime_seconds > 0 ? formatUptime(app.uptime_seconds) : "–"}
-                  </td>
-                  <td className="px-3 py-1.5 tabular-nums">{app.port ?? "–"}</td>
-                  <td className="px-3 py-1.5">
-                    {domainsOf(app, sites).length === 0 ? (
-                      <span className="text-muted-foreground">–</span>
-                    ) : (
-                      <div className="flex flex-col gap-0.5">
-                        {domainsOf(app, sites).map((d) => (
-                          <Link
-                            key={d}
-                            to="/sites/$domain"
-                            params={{ domain: d }}
-                            search={{ tab: tabForApp(app.type) }}
-                            className="underline-offset-4 hover:underline"
-                          >
-                            {d}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <div className="flex flex-wrap justify-end gap-1.5">
-                      {isRunning(app) ? (
-                        <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "stop")}>
-                          Stop
-                        </Button>
+              {rows.map((app) => {
+                const mine = sitesOf(app, sites)
+                return (
+                  <tr key={app.name}>
+                    <td className="px-3 py-1.5 font-medium">{app.name}</td>
+                    <td className="text-muted-foreground px-3 py-1.5">{typeLabel(app)}</td>
+                    <td className="px-3 py-1.5">
+                      <Badge variant={isRunning(app) ? "secondary" : "destructive"}>{app.state}</Badge>
+                      {app.spawn_error !== "" && (
+                        <p className="text-destructive mt-1 max-w-xs text-xs">{app.spawn_error}</p>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5 tabular-nums">{app.pid > 0 ? app.pid : "–"}</td>
+                    <td className="px-3 py-1.5 tabular-nums">
+                      {isRunning(app) && app.uptime_seconds > 0 ? formatUptime(app.uptime_seconds) : "–"}
+                    </td>
+                    <td className="px-3 py-1.5 tabular-nums">{app.port ?? "–"}</td>
+                    <td className="px-3 py-1.5">
+                      {mine.length === 0 ? (
+                        <span className="text-muted-foreground">–</span>
                       ) : (
-                        <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "start")}>
-                          Start
-                        </Button>
+                        <ul className="flex flex-col gap-1">
+                          {mine.map((s) => (
+                            <li key={s.domain} className="flex flex-wrap items-center gap-2">
+                              <Link
+                                to="/sites/$domain"
+                                params={{ domain: s.domain }}
+                                search={{ tab: tabForApp(app.type) }}
+                                className="underline-offset-4 hover:underline"
+                              >
+                                {s.domain}
+                                <span className="text-muted-foreground font-mono text-xs">{pathOnSite(app, s)}</span>
+                              </Link>
+                              {certsPending ? (
+                                <span className="text-muted-foreground">…</span>
+                              ) : (
+                                <TLSCell cert={certs.get(s.domain)} />
+                              )}
+                            </li>
+                          ))}
+                        </ul>
                       )}
-                      <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "restart")}>
-                        Restart
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setLogsFor(app.name)}>
-                        Logs
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setEditing(app)}>
-                        Edit
-                      </Button>
-                      {app.proxy_url !== "" && (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to="/sites" search={{ proxy: app.proxy_url, tab: tabForApp(app.type) }}>
-                            Add domain
-                          </Link>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {isRunning(app) ? (
+                          <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "stop")}>
+                            Stop
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "start")}>
+                            Start
+                          </Button>
+                        )}
+                        <Button size="sm" variant="outline" disabled={control.isPending} onClick={() => act(app.name, "restart")}>
+                          Restart
                         </Button>
-                      )}
-                      <Button size="sm" variant="outline" onClick={() => setDeleting(app)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <Button size="sm" variant="outline" onClick={() => setManaging({ name: app.name, section: "settings" })}>
+                          Manage
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -198,32 +320,22 @@ export function AppsTable({
 
       <AppDialog
         // Remounted per target so the form never shows another app's fields.
-        key={editing === "new" ? "new" : (editing?.name ?? "none")}
-        open={editing !== null}
-        onOpenChange={(open) => !open && setEditing(null)}
-        app={editing === "new" ? null : editing}
+        key={managing === null ? "none" : (managing.name ?? "new")}
+        open={managing !== null && (managing.name === null || current !== null)}
+        onOpenChange={(open) => !open && closeManage()}
+        app={current}
         defaultType={type}
+        section={managing?.section ?? "settings"}
+        onSectionChange={(section) => setManaging((m) => (m === null ? m : { ...m, section }))}
+        renderSection={renderSection}
       />
 
-      <Dialog open={logsFor !== null} onOpenChange={(open) => !open && closeLogs()}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{logsFor} log</DialogTitle>
-            <DialogDescription>Output and errors, newest at the bottom.</DialogDescription>
-          </DialogHeader>
-          {control.isPending && control.variables?.name === logsFor && (
-            <p role="status" className="text-muted-foreground text-sm">
-              {control.variables.action === "restart" ? "Restarting…" : "Starting…"}
-            </p>
-          )}
-          {dialogError && (
-            <p role="alert" className="text-destructive text-sm">
-              {dialogError}
-            </p>
-          )}
-          {logsFor !== null && <AppLogs name={logsFor} />}
-        </DialogContent>
-      </Dialog>
+      <CreateSiteDialog
+        open={addingDomainTo !== null}
+        initial={addingDomainTo === null ? undefined : { target: addingDomainTo.proxy_url }}
+        onOpenChange={(open) => !open && setAddingDomainTo(null)}
+        onCreated={() => setAddingDomainTo(null)}
+      />
 
       <ConfirmDialog
         open={deleting !== null}
@@ -242,7 +354,10 @@ export function AppsTable({
         onConfirm={() =>
           deleting &&
           remove.mutate(deleting.name, {
-            onSuccess: () => setDeleting(null),
+            onSuccess: () => {
+              setDeleting(null)
+              closeManage()
+            },
           })
         }
       >

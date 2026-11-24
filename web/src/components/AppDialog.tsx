@@ -2,6 +2,7 @@ import { useId, useState } from "react"
 
 import { ApplyError, ApplyWarnings } from "@/components/ApplyError"
 import { APPS_ROOT, PathPicker, isEnvFile, parentOf } from "@/components/PathPicker"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -24,6 +25,7 @@ import {
   type PanelApp,
 } from "@/lib/api"
 import { useCreateSite, useRuntimes, useSaveApp } from "@/lib/queries"
+import { cn } from "@/lib/utils"
 import { parseAliases } from "@/components/CreateSiteDialog"
 
 /** The domain an app is bound to when it is created. */
@@ -626,17 +628,37 @@ export function AppForm({
   )
 }
 
-/** The add and edit dialog. Closing it forgets a failed save. */
+/** The sections in the dialog's sidebar. A new app has only the settings. */
+export type AppSection = "settings" | "domains" | "logs" | "delete"
+
+const appSections: { id: AppSection; label: string }[] = [
+  { id: "settings", label: "Settings" },
+  { id: "domains", label: "Domains" },
+  { id: "logs", label: "Logs & control" },
+  { id: "delete", label: "Delete" },
+]
+
+/**
+ * The add and manage dialog: a sidebar of sections on the left, the section on the
+ * right. Settings is the form; the other sections come from `renderSection`.
+ * Closing it forgets a failed save.
+ */
 export function AppDialog({
   open,
   onOpenChange,
   app,
   defaultType,
+  section = "settings",
+  onSectionChange,
+  renderSection,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   app: PanelApp | null
   defaultType?: AppType
+  section?: AppSection
+  onSectionChange?: (section: AppSection) => void
+  renderSection?: (section: AppSection, app: PanelApp) => React.ReactNode
 }) {
   const save = useSaveApp()
   const createSite = useCreateSite()
@@ -657,17 +679,12 @@ export function AppDialog({
     onOpenChange(next)
   }
 
-  return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[720px]">
-        <DialogHeader>
-          <DialogTitle>{app ? `Edit ${app.name}` : "Add an app"}</DialogTitle>
-          <DialogDescription>
-            supervisord checks the program file before anything changes. If it refuses it, the
-            previous definition stays.
-          </DialogDescription>
-        </DialogHeader>
-        {open && warnings !== null && (
+  const sections = app ? appSections : appSections.slice(0, 1)
+  const active = app ? section : "settings"
+
+  const settings = (
+    <>
+      {open && warnings !== null && (
           <div className="flex flex-col gap-3">
             <p className="text-sm">The app was saved, with a problem:</p>
             <ApplyWarnings warnings={warnings} />
@@ -717,6 +734,48 @@ export function AppDialog({
             }
           />
         )}
+    </>
+  )
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="h-[min(760px,90dvh)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[880px]">
+        <DialogHeader className="border-b px-4 py-3 pr-12">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            <span>{app ? `Manage app [${app.name}]` : "Add an app"}</span>
+            {app && <Badge variant="secondary">{app.type === "node" ? `Node.js ${app.node_version}` : app.type === "go" ? "Program" : "Command"}</Badge>}
+          </DialogTitle>
+          <DialogDescription>
+            supervisord checks the program file before anything changes. If it refuses it, the
+            previous definition stays.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[11.5rem_minmax(0,1fr)] sm:grid-rows-1">
+          <nav
+            aria-label="App sections"
+            className="bg-muted/30 flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
+          >
+            {sections.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                aria-current={active === s.id ? "page" : undefined}
+                onClick={() => onSectionChange?.(s.id)}
+                className={cn(
+                  "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
+                  active === s.id
+                    ? "bg-accent text-foreground font-medium"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </nav>
+          <div className="min-h-0 overflow-y-auto p-4">
+            {active === "settings" ? settings : app && renderSection?.(active, app)}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )

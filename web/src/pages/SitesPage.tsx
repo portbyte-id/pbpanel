@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { type AppType, type CertView, type Site } from "@/lib/api"
+import { TLSCell } from "@/components/TLSCell"
+import { type AppType, type Site } from "@/lib/api"
 import { useApps, useSites, useTLSCerts } from "@/lib/queries"
 import { sitesTabs, tabFromSearch, tabOfSite, type SitesTab } from "@/lib/sitesTabs"
 import { AppsTable } from "@/pages/AppsPage"
@@ -33,14 +34,6 @@ export function describeSite(site: Site): string[] {
     parts.push(`${r.path} → ${r.target.replace(/^https?:\/\//, "")}`)
   }
   return parts
-}
-
-/** HTTPS state for the list: expiry soon is a warning, not just a number. */
-function TLSCell({ cert }: { cert: CertView | undefined }) {
-  if (!cert) return <span className="text-muted-foreground">No HTTPS</span>
-  if (cert.days_left < 0) return <Badge variant="destructive">Expired</Badge>
-  if (cert.days_left <= 14) return <Badge variant="warning">Expires in {cert.days_left}d</Badge>
-  return <Badge variant="success">HTTPS · {cert.days_left}d</Badge>
 }
 
 /** What each app tab says about its kind of app, and the type it lists. */
@@ -256,7 +249,15 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
     ) : apps.error ? (
       <ErrorState error={apps.error} fallback="The apps could not be loaded." onRetry={() => void apps.refetch()} />
     ) : (
-      <AppsTable type={appTab.type} apps={appList} sites={siteList} intro={appTab.intro} empty={appTab.empty} />
+      <AppsTable
+        type={appTab.type}
+        apps={appList}
+        sites={siteList}
+        certs={certByDomain}
+        certsPending={certs.isPending}
+        intro={appTab.intro}
+        empty={appTab.empty}
+      />
     )
 
   return (
@@ -271,10 +272,14 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
         </TabsList>
 
         <TabsContent value={tab} className="flex flex-col gap-4">
-          {appSection}
-          {appTab !== null && <h2 className="text-sm font-medium">Sites on {current.label} apps</h2>}
-          {toolbar}
-          {siteTable}
+          {appTab === null ? (
+            <>
+              {toolbar}
+              {siteTable}
+            </>
+          ) : (
+            appSection
+          )}
         </TabsContent>
       </Tabs>
 
