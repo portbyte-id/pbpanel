@@ -57,6 +57,17 @@ func TestDockerfileForFillsEveryPlaceholder(t *testing.T) {
 		"--without-curl",
 		"fastcgi_params",
 		"mime.types",
+		// The attachment: pinned commit and archive digest, built against the
+		// nginx tree this recipe configures, installed under the name a config loads.
+		// The archive is named on purpose: GitHub's URL ends in the bare commit, so
+		// -O would save it under a name neither the check nor the unpack expects.
+		`tgz="attachment-` + openAppsecAttachmentVersion + `.tar.gz"`,
+		`curl -fsSL -o "$tgz" "https://github.com/openappsec/attachment/archive/` + openAppsecAttachmentVersion + `.tar.gz"`,
+		openAppsecAttachmentSHA256 + `  $tgz`,
+		"-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+		`"$L/libngx_module.so" "$P/modules/ngx_cp_attachment_module.so"`,
+		`test -f "$P/modules/ngx_cp_attachment_module.so"`,
+		`panel.nginx.openappsec="` + openAppsecAttachmentVersion + `"`,
 	} {
 		if !strings.Contains(d, want) {
 			t.Errorf("Dockerfile lacks %q", want)
