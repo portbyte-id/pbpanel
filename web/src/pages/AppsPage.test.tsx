@@ -82,14 +82,14 @@ describe("the app dialog's domain menu", () => {
     const nav = within(await screen.findByRole("navigation", { name: "App sections" }))
     expect(nav.getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Settings",
-      "Logs & control",
-      "Domain manager",
+      "Domains",
       "Reverse proxy",
       "Config",
       "SSL",
       "Firewall",
-      "Logs",
+      "Site logs",
       "Reset or delete",
+      "App logs",
       "Delete app",
     ])
     expect(screen.queryByRole("button", { name: "Configure" })).not.toBeInTheDocument()
@@ -117,8 +117,8 @@ describe("the app dialog's domain menu", () => {
     const nav = within(await screen.findByRole("navigation", { name: "App sections" }))
     expect(nav.getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Settings",
-      "Logs & control",
       "Domains",
+      "App logs",
       "Delete app",
     ])
   })

@@ -1,4 +1,4 @@
-import { Fragment, useId, useState } from "react"
+import { useId, useState } from "react"
 
 import { ApplyError, ApplyWarnings } from "@/components/ApplyError"
 import { APPS_ROOT, PathPicker, isEnvFile, parentOf } from "@/components/PathPicker"
@@ -673,11 +673,8 @@ export function AppForm({
  */
 export type AppSection = "settings" | "logs" | "delete" | `site:${string}`
 
-/** The domain menu of an app: a heading and the sections under it. */
-export interface AppSiteNav {
-  heading: string
-  items: { id: AppSection; label: string }[]
-}
+/** The domain sections of an app, listed in the same sidebar as its own. */
+export type AppSiteNav = { id: AppSection; label: string }[]
 
 /** The kinds a new app can be, in the order the sidebar lists them. */
 const newAppKinds: { type: AppType; label: string }[] = [
@@ -688,8 +685,6 @@ const newAppKinds: { type: AppType; label: string }[] = [
 
 interface NavItem {
   key: string
-  /** A small heading drawn above this item, starting a group. */
-  heading?: string
   label: string
   active: boolean
   onSelect: () => void
@@ -747,19 +742,19 @@ export function AppDialog({
     onOpenChange(next)
   }
 
-  const appItem = (id: AppSection, label: string, heading?: string): NavItem => ({
+  const appItem = (id: AppSection, label: string): NavItem => ({
     key: id,
-    heading,
     label,
     active: section === id,
     onSelect: () => onSectionChange?.(id),
   })
+  // One flat list: the app's own sections and the domains' sections together.
   const nav: NavItem[] = app
     ? [
         appItem("settings", "Settings"),
-        appItem("logs", "Logs & control"),
-        ...(siteNav?.items ?? []).map((it, i) => appItem(it.id, it.label, i === 0 ? siteNav?.heading : undefined)),
-        appItem("delete", "Delete app", siteNav ? "App" : undefined),
+        ...(siteNav ?? []).map((it) => appItem(it.id, it.label)),
+        appItem("logs", "App logs"),
+        appItem("delete", "Delete app"),
       ]
     : [
         ...newAppKinds.map((k) => ({
@@ -860,26 +855,20 @@ export function AppDialog({
             className="bg-muted/30 flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
           >
             {nav.map((s) => (
-              <Fragment key={s.key}>
-                {s.heading && (
-                  <span className="text-muted-foreground hidden px-3 pt-3 pb-1 text-xs font-medium break-all sm:block">
-                    {s.heading}
-                  </span>
+              <button
+                key={s.key}
+                type="button"
+                aria-current={s.active ? "page" : undefined}
+                onClick={s.onSelect}
+                className={cn(
+                  "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
+                  s.active
+                    ? "bg-accent text-foreground font-medium"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
-                <button
-                  type="button"
-                  aria-current={s.active ? "page" : undefined}
-                  onClick={s.onSelect}
-                  className={cn(
-                    "focus-visible:ring-ring rounded-md px-3 py-2 text-left text-sm whitespace-nowrap outline-none focus-visible:ring-2",
-                    s.active
-                      ? "bg-accent text-foreground font-medium"
-                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                  )}
-                >
-                  {s.label}
-                </button>
-              </Fragment>
+              >
+                {s.label}
+              </button>
             ))}
           </nav>
           <div className="min-h-0 overflow-y-auto p-4">

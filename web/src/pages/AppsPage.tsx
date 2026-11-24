@@ -137,20 +137,17 @@ export function AppsTable({
     current === null
       ? undefined
       : activeSite === undefined
-        ? { heading: "Domains", items: [{ id: "site:domains", label: "Domains" }] }
-        : {
-            heading: mine.length > 1 ? `Domain: ${activeSite.domain}` : activeSite.domain,
-            items: siteSectionList(activeSite.php_version !== null).map((i) => ({
-              id: `site:${i.id}` as AppSection,
-              label: i.label,
-            })),
-          }
+        ? [{ id: "site:domains", label: "Domains" }]
+        : siteSectionList(false).map((i) => ({
+            id: `site:${i.id}` as AppSection,
+            label: i.id === "domains" ? "Domains" : i.id === "logs" ? "Site logs" : i.label,
+          }))
 
   const renderSection = (section: AppSection, app: PanelApp) => {
     if (section.startsWith("site:")) {
       // A section the active domain does not have (the PHP ones, after switching
       // domains) falls back to the manager.
-      const id: SiteSection = siteNav?.items.some((i) => i.id === section)
+      const id: SiteSection = siteNav?.some((i) => i.id === section)
         ? (section.slice("site:".length) as SiteSection)
         : "domains"
       return (
