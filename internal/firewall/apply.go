@@ -133,6 +133,8 @@ func (m *Manager) families() []famCmds { return families(m.ipv6) }
 type snapshot struct {
 	Existed bool   `json:"existed"`
 	Hooked  bool   `json:"hooked"`
+	// DockerHooked is whether DOCKER-USER jumps to ChainForward.
+	DockerHooked bool   `json:"dockerHooked"`
 	Lines   string `json:"lines"` // the -A lines of the owned chains, as iptables-save printed them
 }
 
@@ -149,14 +151,15 @@ func (m *Manager) snapshot(ctx context.Context, fc famCmds) (snapshot, error) {
 			continue
 		}
 		switch {
-		case f[0] == ":"+ChainInput || f[0] == ":"+ChainBlock:
+		case f[0] == ":"+ChainInput || f[0] == ":"+ChainBlock || f[0] == ":"+ChainForward:
 			s.Existed = true
-		case f[0] == "-A" && (f[1] == ChainInput || f[1] == ChainBlock):
+		case f[0] == "-A" && (f[1] == ChainInput || f[1] == ChainBlock || f[1] == ChainForward):
 			keep.WriteString(l + "\n")
 		}
 	}
 	s.Lines = keep.String()
 	s.Hooked = m.hooked(ctx, fc)
+	s.DockerHooked = dockerHooked(ctx, m.cmd, fc)
 	return s, nil
 }
 
@@ -188,7 +191,50 @@ func (m *Manager) rollbackFamily(ctx context.Context, fc famCmds, s snapshot) er
 			}
 		}
 	}
+	if !s.DockerHooked {
+		unhookDocker(ctx, m.cmd, fc)
+	}
 	return m.cmd.RunStdin(ctx, restoreText(s), fc.restore, "--noflush")
+}
+
+// dockerHooked reports whether DOCKER-USER already jumps to ChainForward.
+func dockerHooked(ctx context.Context, cmd Cmd, fc famCmds) bool {
+	return cmd.RunStdin(ctx, "", fc.bin, "-C", "DOCKER-USER", "-j", ChainForward) == nil
+}
+
+// hookDocker puts the jump to ChainForward first in DOCKER-USER, once. A host without
+// Docker has no such chain; that is not an error, the next apply or daemon start
+// hooks it after Docker appears.
+func hookDocker(ctx context.Context, cmd Cmd, fc famCmds) error {
+	if cmd.RunStdin(ctx, "", fc.bin, "-S", "DOCKER-USER") != nil {
+		return nil
+	}
+	if dockerHooked(ctx, cmd, fc) {
+		// Keep it first even if something inserted ahead of it.
+		return nil
+	}
+	return cmd.RunStdin(ctx, "", fc.bin, "-I", "DOCKER-USER", "1", "-j", ChainForward)
+}
+
+// unhookDocker removes every jump from DOCKER-USER to ChainForward.
+func unhookDocker(ctx context.Context, cmd Cmd, fc famCmds) {
+	for range 8 {
+		if !dockerHooked(ctx, cmd, fc) {
+			return
+		}
+		if cmd.RunStdin(ctx, "", fc.bin, "-D", "DOCKER-USER", "-j", ChainForward) != nil {
+			return
+		}
+	}
+}
+
+// HookDocker re-attaches the Docker filter after Docker (re)creates DOCKER-USER.
+func HookDocker(ctx context.Context, cmd Cmd, ipv6 bool) error {
+	var errs []error
+	for _, fc := range families(ipv6) {
+		errs = append(errs, hookDocker(ctx, cmd, fc))
+	}
+	return errors.Join(errs...)
 }
 
 // Apply renders in, applies it, and starts the confirmation timer. The caller sets
@@ -244,6 +290,10 @@ func (m *Manager) Apply(ctx context.Context, in RenderInput) (Pending, error) {
 		if err := m.cmd.RunStdin(ctx, texts[fc.f], fc.restore, "--noflush"); err != nil {
 			rbErr := m.rollbackLocked(context.WithoutCancel(ctx), row)
 			return Pending{}, errors.Join(fmt.Errorf("firewall: apply %s: %w", fc.bin, err), rbErr)
+		}
+		if err := hookDocker(ctx, m.cmd, fc); err != nil {
+			rbErr := m.rollbackLocked(context.WithoutCancel(ctx), row)
+			return Pending{}, errors.Join(fmt.Errorf("firewall: hook DOCKER-USER %s: %w", fc.bin, err), rbErr)
 		}
 	}
 	m.stop = m.after(m.window, func() { m.expire(p.Token) })

@@ -168,8 +168,8 @@ func TestRenderGolden(t *testing.T) {
 
 func TestRenderTouchesOnlyOwnedChains(t *testing.T) {
 	r := Render(sampleInput())
-	owned := map[string]bool{ChainInput: true, ChainBlock: true}
-	targets := map[string]bool{"ACCEPT": true, "DROP": true, ChainInput: true, ChainBlock: true}
+	owned := map[string]bool{ChainInput: true, ChainBlock: true, ChainForward: true}
+	targets := map[string]bool{"ACCEPT": true, "DROP": true, "RETURN": true, ChainInput: true, ChainBlock: true, ChainForward: true}
 	for fam, text := range map[string]string{"v4": r.V4, "v6": r.V6} {
 		for l := range strings.SplitSeq(strings.TrimSpace(text), "\n") {
 			f := strings.Fields(l)
@@ -236,4 +236,21 @@ func indexOf(s []string, v string) int {
 		}
 	}
 	return -1
+}
+
+func TestRenderForwardJudgesPublishedPorts(t *testing.T) {
+	r := Render(sampleInput())
+	for _, want := range []string{
+		"-A PANEL-FORWARD -m conntrack ! --ctstate DNAT -j RETURN",
+		"-A PANEL-FORWARD -p tcp -m conntrack --ctorigdstport 443 -j RETURN",
+		"-A PANEL-FORWARD -p udp -s 10.0.0.0/8 -m conntrack --ctorigdstport 5000:5100 -j RETURN",
+		"-A PANEL-FORWARD -j DROP",
+	} {
+		if !strings.Contains(r.V4, want) {
+			t.Errorf("v4 missing %q", want)
+		}
+	}
+	if strings.Contains(r.V4, "--ctorigdstport 25 ") {
+		t.Error("disabled rule reached the forward chain")
+	}
 }

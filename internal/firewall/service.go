@@ -204,6 +204,16 @@ func (s *Service) Confirm(ctx context.Context, token string) error { return s.m.
 // Revert rolls the pending ruleset back now.
 func (s *Service) Revert(ctx context.Context) error { return s.m.Revert(ctx) }
 
+// ReconcileDocker re-hooks the Docker filter when the firewall is enabled. Docker may
+// have started after the boot restore ran, so DOCKER-USER did not exist then.
+func (s *Service) ReconcileDocker(ctx context.Context) error {
+	enabled, _, err := s.confirmed(ctx)
+	if err != nil || !enabled {
+		return err
+	}
+	return HookDocker(ctx, s.cmd, s.m.ipv6)
+}
+
 // Disable unhooks and flushes the panel chains and forgets the confirmed ruleset.
 // ufw and firewalld stay masked.
 func (s *Service) Disable(ctx context.Context) error { return s.m.Disable(ctx) }
@@ -412,6 +422,7 @@ func disableAll(ctx context.Context, st *store.Store, cmd Cmd, ipv6 bool) error 
 				break
 			}
 		}
+		unhookDocker(ctx, cmd, fc)
 		if err := cmd.RunStdin(ctx, restoreText(snapshot{}), fc.restore, "--noflush"); err != nil {
 			errs = append(errs, err)
 		}
@@ -454,7 +465,9 @@ func RestoreConfirmed(ctx context.Context, st *store.Store, cmd Cmd) error {
 		}
 		if err := cmd.RunStdin(ctx, t, fc.restore, "--noflush"); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		errs = append(errs, hookDocker(ctx, cmd, fc))
 	}
 	return errors.Join(errs...)
 }

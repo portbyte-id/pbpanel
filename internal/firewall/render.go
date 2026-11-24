@@ -11,6 +11,9 @@ import (
 const (
 	ChainInput = "PANEL-INPUT"
 	ChainBlock = "PANEL-BLOCK"
+	// ChainForward filters traffic Docker publishes. It is jumped to from DOCKER-USER,
+	// which Docker evaluates before its own rules, so the panel decides first.
+	ChainForward = "PANEL-FORWARD"
 )
 
 // RenderInput is everything the renderer needs. It holds no state of its own.
@@ -52,8 +55,10 @@ func renderFamily(in RenderInput, f family) string {
 	line("*filter")
 	line(":%s - [0:0]", ChainInput)
 	line(":%s - [0:0]", ChainBlock)
+	line(":%s - [0:0]", ChainForward)
 	line("-F %s", ChainInput)
 	line("-F %s", ChainBlock)
+	line("-F %s", ChainForward)
 
 	// Blocklist chain.
 	for _, e := range in.Blocklist {
@@ -115,6 +120,8 @@ func renderFamily(in RenderInput, f family) string {
 	}
 
 	line("-A %s -j DROP", ChainInput)
+
+	renderForward(in, f, line)
 	if (f == fam4 && in.HookV4) || (f == fam6 && in.HookV6) {
 		line("-I INPUT 1 -j %s", ChainInput)
 	}
@@ -165,4 +172,50 @@ func commentArg(c string) string {
 		return ""
 	}
 	return fmt.Sprintf(" -m comment --comment \"%s\"", c)
+}
+
+// renderForward fills ChainForward, which sees only forwarded traffic. Published
+// container ports are reachable by DNAT, so a connection that was DNATed is judged by
+// the port the client dialled (conntrack's original destination port), with the same
+// allow, block and port rules as the host. Traffic that was not DNATed, such as
+// container to container or a container's own outbound traffic, returns untouched.
+func renderForward(in RenderInput, f family, line func(string, ...any)) {
+	c := ChainForward
+	line("-A %s -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN", c)
+	line("-A %s -j %s", c, ChainBlock)
+	for _, e := range in.Allowlist {
+		p, err := ParsePrefix(e.Addr)
+		if err != nil || (p.Addr().Is4()) != (f == fam4) {
+			continue
+		}
+		line("-A %s -s %s -j RETURN", c, p)
+	}
+	line("-A %s -m conntrack ! --ctstate DNAT -j RETURN", c)
+	for _, p := range builtinPorts(in) {
+		line("-A %s -p tcp -m conntrack --ctorigdstport %d -j RETURN", c, p)
+	}
+	for _, w := range webPorts {
+		line("-A %s -p %s -m conntrack --ctorigdstport %d -j RETURN", c, w.proto, w.port)
+	}
+	for _, r := range in.Rules {
+		if !r.Enabled {
+			continue
+		}
+		src := ""
+		if r.Source != "" {
+			p, err := ParsePrefix(r.Source)
+			if err != nil || (p.Addr().Is4()) != (f == fam4) {
+				continue
+			}
+			src = " -s " + p.String()
+		}
+		dport := fmt.Sprintf("%d", r.PortStart)
+		if r.PortEnd != r.PortStart {
+			dport = fmt.Sprintf("%d:%d", r.PortStart, r.PortEnd)
+		}
+		for _, proto := range protosOf(r.Protocol) {
+			line("-A %s -p %s%s -m conntrack --ctorigdstport %s -j RETURN", c, proto, src, dport)
+		}
+	}
+	line("-A %s -j DROP", c)
 }
