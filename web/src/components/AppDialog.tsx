@@ -40,6 +40,57 @@ export function parseLines(text: string): string[] {
     .filter((l) => l.trim() !== "")
 }
 
+/**
+ * Splits an execution command into the program and its arguments, by shell-like
+ * rules: whitespace separates, single quotes are literal, double quotes allow
+ * `\"` and `\\`, and a backslash outside quotes escapes the next character.
+ * Nothing is expanded. `error` is set for an unterminated quote.
+ */
+export function splitCommandLine(text: string): { argv: string[]; error: string | null } {
+  const argv: string[] = []
+  let cur = ""
+  let has = false
+  let quote: "'" | '"' | null = null
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (quote === "'") {
+      if (c === "'") quote = null
+      else cur += c
+    } else if (quote === '"') {
+      if (c === '"') quote = null
+      else if (c === "\\" && (text[i + 1] === '"' || text[i + 1] === "\\")) cur += text[++i]
+      else cur += c
+    } else if (c === "'" || c === '"') {
+      quote = c
+      has = true
+    } else if (c === "\\" && i + 1 < text.length && text[i + 1] !== "\n") {
+      cur += text[++i]
+      has = true
+    } else if (/\s/.test(c)) {
+      if (has || cur !== "") argv.push(cur)
+      cur = ""
+      has = false
+    } else {
+      cur += c
+      has = true
+    }
+  }
+  if (quote !== null) return { argv, error: "A quote is not closed." }
+  if (has || cur !== "") argv.push(cur)
+  return { argv, error: null }
+}
+
+/** The inverse of {@link splitCommandLine}: quotes only the words that need it. */
+export function joinCommandLine(argv: string[]): string {
+  return argv
+    .map((a) => {
+      if (a !== "" && /^[A-Za-z0-9_@+=:,./-]+$/.test(a)) return a
+      if (!a.includes("'")) return `'${a}'`
+      return `"${a.replace(/(["\\])/g, "\\$1")}"`
+    })
+    .join(" ")
+}
+
 /** `KEY=value`, one per line. Blank lines and `#` comments are skipped. */
 export function parseEnv(text: string): { env: Record<string, string>; error: string | null } {
   const env: Record<string, string> = {}
@@ -119,6 +170,8 @@ export function AppForm({
   const [type, setType] = useState<AppType>(app?.type ?? defaultType)
   const [command, setCommand] = useState(app?.command ?? "")
   const [args, setArgs] = useState((app?.args ?? []).join("\n"))
+  // Go and binary apps show program and arguments as one execution command line.
+  const [line, setLine] = useState(joinCommandLine([...(app?.command ? [app.command] : []), ...(app?.args ?? [])]))
   const [workdir, setWorkdir] = useState(app?.workdir ?? "")
   const [env, setEnv] = useState(formatEnv(app?.env ?? {}))
   const [user, setUser] = useState(app?.user ?? "www")
@@ -163,7 +216,9 @@ export function AppForm({
       ? (error.field ?? null)
       : null
   // args[2] is reported against the one "args" box.
-  const fieldName = apiField?.replace(/\[\d+\]$/, "") ?? null
+  // With one command line there is no args box, so an argument error shows under it.
+  const rawField = apiField?.replace(/\[\d+\]$/, "") ?? null
+  const fieldName = rawField === "args" && type !== "node" ? "command" : rawField
   const fieldError = (n: string) => {
     if (localError?.field === n) {
       return (
@@ -202,12 +257,23 @@ export function AppForm({
       setLocalError({ field: "domain", text: "Set a port first: the domain passes requests to it." })
       return
     }
+    let programPath = command.trim()
+    let programArgs = parseLines(args)
+    if (type !== "node") {
+      const split = splitCommandLine(line)
+      if (split.error) {
+        setLocalError({ field: "command", text: split.error })
+        return
+      }
+      programPath = split.argv[0] ?? ""
+      programArgs = split.argv.slice(1)
+    }
     setLocalError(null)
     const input: AppInput = {
       name: name.trim(),
       type,
-      command: command.trim(),
-      args: parseLines(args),
+      command: programPath,
+      args: programArgs,
       env: parsed.env,
       restart,
       autostart,
@@ -229,12 +295,37 @@ export function AppForm({
     }
   }
 
+  // Moving between Node.js (two fields) and the others (one line) carries the text over.
+  const changeType = (next: AppType) => {
+    if (type === "node" && next !== "node") {
+      setLine(joinCommandLine([...(command.trim() ? [command.trim()] : []), ...parseLines(args)]))
+    } else if (type !== "node" && next === "node") {
+      const { argv, error: splitError } = splitCommandLine(line)
+      if (!splitError) {
+        setCommand(argv[0] ?? "")
+        setArgs(argv.slice(1).join("\n"))
+      }
+    }
+    setType(next)
+  }
+
+  const pickProgram = (path: string) => {
+    if (type === "node") {
+      setCommand(path)
+      return
+    }
+    // Only the program changes; the arguments after it stay.
+    const { argv, error: splitError } = splitCommandLine(line)
+    setLine(joinCommandLine([path, ...(splitError ? [] : argv.slice(1))]))
+  }
+
   const noNode = type === "node" && majors.length === 0
   // Where each browser opens: the folder a path already names, else the app's own.
   const appDir = name.trim() === "" ? APPS_ROOT : `${APPS_ROOT}/${name.trim()}`
   const workdirStart = workdir.trim().startsWith("/") ? workdir.trim() : appDir
-  const commandStart = command.trim().startsWith("/")
-    ? parentOf(command.trim())
+  const programNow = type === "node" ? command.trim() : (splitCommandLine(line).argv[0] ?? "")
+  const commandStart = programNow.startsWith("/")
+    ? parentOf(programNow)
     : workdir.trim().startsWith("/")
       ? workdir.trim()
       : appDir
@@ -263,7 +354,7 @@ export function AppForm({
         <Select
           id={`${id}-type`}
           value={type}
-          onChange={(e) => setType(e.target.value as AppType)}
+          onChange={(e) => changeType(e.target.value as AppType)}
           aria-invalid={invalid("type")}
         >
           <option value="go">A compiled program (Go or any binary)</option>
@@ -300,15 +391,17 @@ export function AppForm({
       )}
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-command`}>{type === "node" ? "Entry script" : "Program path"}</Label>
+        <Label htmlFor={`${id}-command`}>{type === "node" ? "Entry script" : "Execution command"}</Label>
         <div className="flex gap-2">
           <Input
             id={`${id}-command`}
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
+            value={type === "node" ? command : line}
+            onChange={(e) => (type === "node" ? setCommand(e.target.value) : setLine(e.target.value))}
             autoComplete="off"
             spellCheck={false}
-            placeholder={type === "node" ? "server.js" : "/www/services/sites/my-app/bin/my-app"}
+            placeholder={
+              type === "node" ? "server.js" : "/www/services/sites/my-app/bin/my-app --listen :3000"
+            }
             required
             aria-invalid={invalid("command")}
             aria-describedby={describedBy("command")}
@@ -322,6 +415,11 @@ export function AppForm({
             Browse…
           </Button>
         </div>
+        {type !== "node" && (
+          <p className="text-muted-foreground text-xs">
+            The program's absolute path, then its arguments. Quote an argument that contains spaces.
+          </p>
+        )}
         {fieldError("command")}
         <PathPicker
           open={picking === "command"}
@@ -330,10 +428,11 @@ export function AppForm({
           mode="file"
           title={type === "node" ? "Choose the entry script" : "Choose the program"}
           description="Open a folder, then choose a file in it. The whole filesystem is browsable."
-          onPick={setCommand}
+          onPick={pickProgram}
         />
       </div>
 
+      {type === "node" && (
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-args`}>Arguments</Label>
         <textarea
@@ -348,6 +447,7 @@ export function AppForm({
         />
         {fieldError("args")}
       </div>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-workdir`}>Working directory</Label>
