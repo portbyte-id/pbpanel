@@ -5,7 +5,9 @@ import { ApplyError, ApplyWarnings } from "@/components/ApplyError"
 import { ConfigEditor } from "@/components/ConfigEditor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { api, ApiError, type ConfigVersion } from "@/lib/api"
+import { matchesQuery } from "@/lib/table"
 import {
   type ConfigSource,
   configService,
@@ -14,6 +16,101 @@ import {
   useRestoreConfigVersion,
   useSaveConfigFile,
 } from "@/lib/queries"
+
+/** The saved versions of a file, newest first, with search and paging. */
+function HistoryTable({
+  versions,
+  confirmRestore,
+  restorePending,
+  onLoad,
+  onAskRestore,
+  onRestore,
+}: {
+  versions: ConfigVersion[]
+  confirmRestore: number | null
+  restorePending: boolean
+  onLoad: (v: ConfigVersion) => void
+  onAskRestore: (version: number) => void
+  onRestore: (version: number) => void
+}) {
+  const [search, setSearch] = useState("")
+  const filtered = versions.filter((v) =>
+    matchesQuery([`v${v.version}`, v.version, v.reason, new Date(v.created_at).toLocaleString()], search),
+  )
+  const pager = usePagedRows(filtered, search)
+  return (
+    <>
+      <TableToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="Search versions"
+        placeholder="Search by version or change"
+      />
+      {filtered.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No version matches the search.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+              <tr>
+                <th scope="col" className="px-3 py-1.5 font-medium">Version</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Saved</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Change</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {pager.rows.map((v) => (
+                <tr key={v.version}>
+                  <td className="px-3 py-1.5 font-mono text-xs">v{v.version}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">
+                    {new Date(v.created_at).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-1.5">{v.reason || "—"}</td>
+                  <td className="px-3 py-1.5">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onLoad(v)}
+                        aria-label={`Load version ${v.version} into the editor`}
+                      >
+                        Load into editor
+                      </Button>
+                      {confirmRestore === v.version ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={restorePending}
+                          onClick={() => onRestore(v.version)}
+                        >
+                          Confirm restore v{v.version}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={restorePending}
+                          onClick={() => onAskRestore(v.version)}
+                          aria-label={`Restore version ${v.version}`}
+                        >
+                          Restore
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <TablePagination pager={pager} />
+    </>
+  )
+}
 
 /**
  * The raw editor for a file the operator owns: a site file or nginx.conf.
@@ -169,63 +266,14 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
             No earlier versions yet. Every saved change is kept here, up to the last ten.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-                <tr>
-                  <th scope="col" className="px-3 py-1.5 font-medium">Version</th>
-                  <th scope="col" className="px-3 py-1.5 font-medium">Saved</th>
-                  <th scope="col" className="px-3 py-1.5 font-medium">Change</th>
-                  <th scope="col" className="px-3 py-1.5 font-medium">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-border divide-y">
-                {(history.data ?? []).map((v) => (
-                  <tr key={v.version}>
-                    <td className="px-3 py-1.5 font-mono text-xs">v{v.version}</td>
-                    <td className="px-3 py-1.5 whitespace-nowrap">
-                      {new Date(v.created_at).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-1.5">{v.reason || "—"}</td>
-                    <td className="px-3 py-1.5">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void loadVersion(v)}
-                          aria-label={`Load version ${v.version} into the editor`}
-                        >
-                          Load into editor
-                        </Button>
-                        {confirmRestore === v.version ? (
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={restore.isPending}
-                            onClick={() => doRestore(v.version)}
-                          >
-                            Confirm restore v{v.version}
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={restore.isPending}
-                            onClick={() => setConfirmRestore(v.version)}
-                            aria-label={`Restore version ${v.version}`}
-                          >
-                            Restore
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <HistoryTable
+            versions={history.data ?? []}
+            confirmRestore={confirmRestore}
+            restorePending={restore.isPending}
+            onLoad={(v) => void loadVersion(v)}
+            onAskRestore={setConfirmRestore}
+            onRestore={doRestore}
+          />
         )}
       </section>
     </div>

@@ -5,6 +5,7 @@ import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { formatWhen } from "@/lib/cron"
 import {
   formatDuration,
@@ -15,6 +16,7 @@ import {
   type JobState,
 } from "@/lib/jobs"
 import { useJobs } from "@/lib/queries"
+import { matchesQuery } from "@/lib/table"
 
 type Scope = "running" | "recent"
 
@@ -96,7 +98,26 @@ function JobTable({
   now: number
   onWatch: (id: string) => void
 }) {
+  const [filter, setFilter] = useState("")
+  const [stateFilter, setStateFilter] = useState("all")
+  const shown = jobs.filter(
+    (job) =>
+      (stateFilter === "all" || job.state === stateFilter) &&
+      matchesQuery([job.kind, job.id, job.state, job.error], filter),
+  )
+  const pager = usePagedRows(shown, `${filter}|${stateFilter}`)
+  const stateOptions = [...new Set(jobs.map((j) => j.state))].map((s) => ({ value: s, label: JOB_STATE_LABELS[s] }))
+
   return (
+    <div className="flex flex-col">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter jobs" placeholder="Filter jobs">
+        <TableFilter label="State" value={stateFilter} onChange={setStateFilter} options={stateOptions} />
+      </TableToolbar>
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
     <div className="border-border overflow-x-auto rounded-md border">
       <table className="w-full text-sm">
         <caption className="sr-only">Background jobs</caption>
@@ -113,7 +134,7 @@ function JobTable({
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
-          {jobs.map((job) => {
+          {pager.rows.map((job) => {
             const elapsed = jobElapsedMs(job, now)
             const shortId = job.id.slice(0, 8)
             const live = isActiveJob(job)
@@ -160,6 +181,9 @@ function JobTable({
           })}
         </tbody>
       </table>
+    </div>
+      )}
+      <TablePagination pager={pager} />
     </div>
   )
 }

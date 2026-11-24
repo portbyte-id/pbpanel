@@ -8,11 +8,25 @@ import { IssueCertForm, ProviderForm, UploadCertForm } from "@/components/TLSFor
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  TableFilter,
+  TablePagination,
+  TableToolbar,
+  usePagedRows,
+} from "@/components/ui/table-controls"
 import { type CertView, type DNSProvider } from "@/lib/api"
 import { describeError } from "@/lib/errors"
+import { matchesQuery } from "@/lib/table"
 import {
   useDeleteTLSProvider,
   useIssueTLSCert,
@@ -84,27 +98,24 @@ function CertificatesCard() {
           ) : (
             <CertificateTable
               certs={data}
-              renderDomain={(domain) =>
-                siteDomains.has(domain) ? (
-                  <Link
-                    to="/sites/$domain"
-                    params={{ domain }}
-                    className="font-medium underline-offset-2 hover:underline"
-                  >
-                    {domain}
-                  </Link>
-                ) : (
-                  <span className="font-medium">{domain}</span>
-                )
-              }
-              renderActions={(domain) =>
-                sitesKnown && !siteDomains.has(domain) ? (
+              linkedDomains={siteDomains}
+              renderSiteLink={(domain) => (
+                <Link
+                  to="/sites/$domain"
+                  params={{ domain }}
+                  className="font-medium underline-offset-2 hover:underline"
+                >
+                  {domain}
+                </Link>
+              )}
+              renderActions={(cert) =>
+                sitesKnown && !siteDomains.has(cert.domain) ? (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
                       remove.reset()
-                      setRemoving(domain)
+                      setRemoving(cert.domain)
                     }}
                   >
                     Remove
@@ -254,16 +265,39 @@ function AddCertificateCard() {
   )
 }
 
-/** The certificate list. `renderDomain` supplies the name, and `renderActions` an optional last column. */
+const SOURCE_FILTERS = [
+  { value: "http01", label: sourceLabel("http01") },
+  { value: "dns01", label: sourceLabel("dns01") },
+  { value: "upload", label: sourceLabel("upload") },
+]
+
+/**
+ * The certificate list, soonest expiry first. A certificate a site uses shows no
+ * name here: its row says it is in use, and Details opens a dialog with the site
+ * and the certificate. Any other certificate shows its name and `renderActions`.
+ */
 export function CertificateTable({
   certs,
-  renderDomain,
+  linkedDomains,
+  renderSiteLink,
   renderActions,
 }: {
   certs: CertView[]
-  renderDomain: (domain: string) => ReactNode
-  renderActions?: (domain: string) => ReactNode
+  /** Names that a site serves, so their certificate is in use. */
+  linkedDomains: ReadonlySet<string>
+  renderSiteLink: (domain: string) => ReactNode
+  renderActions?: (cert: CertView) => ReactNode
 }) {
+  const [search, setSearch] = useState("")
+  const [source, setSource] = useState("all")
+  const [detail, setDetail] = useState<CertView | null>(null)
+  const filtered = sortCertsBySoonest(certs).filter(
+    (c) =>
+      (source === "all" || c.source === source) &&
+      matchesQuery([c.domain, c.issuer, c.serial, ...c.names], search),
+  )
+  const pager = usePagedRows(filtered, `${search}|${source}`)
+
   if (certs.length === 0) {
     return (
       <p className="text-sm">
@@ -272,50 +306,155 @@ export function CertificateTable({
     )
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead className="text-muted-foreground text-xs">
-          <tr>
-            <th scope="col" className="py-2 pr-4 font-medium">Name</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Expires</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Source</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Renewal</th>
-            {renderActions && (
-              <th scope="col" className="py-2 font-medium">
-                <span className="sr-only">Actions</span>
-              </th>
-            )}
-          </tr>
-        </thead>
-        <tbody className="divide-border divide-y">
-          {sortCertsBySoonest(certs).map((c) => (
-            <tr key={c.domain} data-domain={c.domain}>
-              <td className="py-2 pr-4">{renderDomain(c.domain)}</td>
-              <td className="py-2 pr-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span>{formatDate(c.not_after)}</span>
-                  <ExpiryBadge daysLeft={c.days_left} />
-                </div>
-              </td>
-              <td className="py-2 pr-4">
-                <Badge variant="secondary">{sourceLabel(c.source)}</Badge>
-              </td>
-              <td className="py-2 pr-4">
-                <span className={c.last_renewal_result === "failed" ? "text-destructive" : undefined}>
-                  {renewalStatus(c)}
+    <>
+      <TableToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="Search certificates"
+        placeholder="Search by name or issuer"
+      >
+        <TableFilter label="Source" value={source} onChange={setSource} options={SOURCE_FILTERS} />
+      </TableToolbar>
+      {filtered.length === 0 ? (
+        <p className="text-sm">No certificates match the filters.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-muted-foreground text-xs">
+              <tr>
+                <th scope="col" className="py-2 pr-4 font-medium">Name</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Expires</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Source</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Renewal</th>
+                <th scope="col" className="py-2 font-medium">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {pager.rows.map((c) => {
+                const linked = linkedDomains.has(c.domain)
+                return (
+                  <tr key={c.domain} data-domain={c.domain}>
+                    <td className="py-2 pr-4">
+                      {linked ? (
+                        <span className="text-muted-foreground">In use by a site</span>
+                      ) : (
+                        <span className="font-medium">{c.domain}</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>{formatDate(c.not_after)}</span>
+                        <ExpiryBadge daysLeft={c.days_left} />
+                      </div>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Badge variant="secondary">{sourceLabel(c.source)}</Badge>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <span
+                        className={c.last_renewal_result === "failed" ? "text-destructive" : undefined}
+                      >
+                        {renewalStatus(c)}
+                      </span>
+                      {c.last_renewal_result === "failed" && c.last_renewal_error && (
+                        <span className="text-muted-foreground block text-xs break-words">
+                          {c.last_renewal_error}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 text-right">
+                      {linked ? (
+                        <Button variant="outline" size="sm" onClick={() => setDetail(c)}>
+                          Details
+                        </Button>
+                      ) : (
+                        renderActions?.(c)
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <TablePagination pager={pager} />
+      <CertificateDialog
+        cert={detail}
+        siteLink={detail ? renderSiteLink(detail.domain) : null}
+        onClose={() => setDetail(null)}
+      />
+    </>
+  )
+}
+
+/** The site that serves a certificate, and everything the list leaves out about it. */
+function CertificateDialog({
+  cert,
+  siteLink,
+  onClose,
+}: {
+  cert: CertView | null
+  siteLink: ReactNode
+  onClose: () => void
+}) {
+  return (
+    <Dialog
+      open={cert !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent>
+        {cert && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Certificate in use by a site</DialogTitle>
+              <DialogDescription>The site that serves this certificate, and its details.</DialogDescription>
+            </DialogHeader>
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Site</dt>
+              <dd>{siteLink}</dd>
+              <dt className="text-muted-foreground">Names</dt>
+              <dd className="break-words">{cert.names.join(", ") || "—"}</dd>
+              <dt className="text-muted-foreground">Expires</dt>
+              <dd className="flex flex-wrap items-center gap-2">
+                <span>{formatDate(cert.not_after)}</span>
+                <ExpiryBadge daysLeft={cert.days_left} />
+              </dd>
+              <dt className="text-muted-foreground">Valid from</dt>
+              <dd>{formatDate(cert.not_before)}</dd>
+              <dt className="text-muted-foreground">Issuer</dt>
+              <dd className="break-words">{cert.issuer || "—"}</dd>
+              <dt className="text-muted-foreground">Serial</dt>
+              <dd className="font-mono text-xs break-all">{cert.serial || "—"}</dd>
+              <dt className="text-muted-foreground">Source</dt>
+              <dd>
+                {sourceLabel(cert.source)}
+                {cert.provider ? `, ${cert.provider}` : ""}
+              </dd>
+              <dt className="text-muted-foreground">Renewal</dt>
+              <dd>
+                <span className={cert.last_renewal_result === "failed" ? "text-destructive" : undefined}>
+                  {renewalStatus(cert)}
                 </span>
-                {c.last_renewal_result === "failed" && c.last_renewal_error && (
+                {cert.last_renewal_result === "failed" && cert.last_renewal_error && (
                   <span className="text-muted-foreground block text-xs break-words">
-                    {c.last_renewal_error}
+                    {cert.last_renewal_error}
                   </span>
                 )}
-              </td>
-              {renderActions && <td className="py-2 text-right">{renderActions(c.domain)}</td>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+              </dd>
+              <dt className="text-muted-foreground">Last renewal</dt>
+              <dd>{cert.last_renewal_at ? formatDate(cert.last_renewal_at) : "Never"}</dd>
+              <dt className="text-muted-foreground">HTTP redirect</dt>
+              <dd>{cert.redirect_http ? "Redirects to HTTPS" : "Off"}</dd>
+            </dl>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -1,16 +1,17 @@
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
-import { Plus, Search } from "lucide-react"
+import { Plus } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { CreateSiteDialog } from "@/components/CreateSiteDialog"
 import { ErrorState } from "@/components/ErrorState"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TLSCell } from "@/components/TLSCell"
 import { type AppType, type Site } from "@/lib/api"
+import { matchesQuery } from "@/lib/table"
 import { useApps, useSites, useTLSCerts } from "@/lib/queries"
 import { sitesTabs, tabFromSearch, tabOfSite, type SitesTab } from "@/lib/sitesTabs"
 import { AppsTable } from "@/pages/AppsPage"
@@ -78,6 +79,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
   const navigate = useNavigate()
   const [creating, setCreating] = useState(proxy !== undefined)
   const [filter, setFilter] = useState("")
+  const [kindFilter, setKindFilter] = useState("all")
 
   const siteList = useMemo(() => sites.data ?? [], [sites.data])
   const appList = useMemo(() => apps.data ?? [], [apps.data])
@@ -89,17 +91,19 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
   const certByDomain = useMemo(() => new Map((certs.data ?? []).map((c) => [c.domain, c])), [certs.data])
 
   const tabSites = useMemo(() => siteList.filter((s) => tabOfSite(s, appList) === tab), [siteList, appList, tab])
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (q === "") return tabSites
-    return tabSites.filter((s) =>
-      `${s.domain} ${s.aliases.join(" ")} ${s.root ?? ""} ${(s.proxy_routes ?? [])
-        .map((r) => `${r.path} ${r.target}`)
-        .join(" ")}`
-        .toLowerCase()
-        .includes(q),
-    )
-  }, [tabSites, filter])
+  const visible = useMemo(
+    () =>
+      tabSites.filter(
+        (s) =>
+          (kindFilter === "all" || s.kind === kindFilter) &&
+          matchesQuery(
+            [s.domain, ...s.aliases, s.root, ...(s.proxy_routes ?? []).flatMap((r) => [r.path, r.target])],
+            filter,
+          ),
+      ),
+    [tabSites, filter, kindFilter],
+  )
+  const pager = usePagedRows(visible, `${tab}|${filter}|${kindFilter}`)
 
   const selectTab = (next: string) => {
     void navigate({ to: "/sites", search: { tab: tabFromSearch(next) }, replace: true })
@@ -117,22 +121,6 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
             : `${tabSites.length} site${tabSites.length === 1 ? "" : "s"} pass requests to ${current.label} apps.`}
       </p>
       <div className="flex items-center gap-2">
-        {tabSites.length > 5 && (
-          <div className="relative">
-            <Search
-              className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2"
-              aria-hidden="true"
-            />
-            <Input
-              type="search"
-              aria-label="Filter sites"
-              placeholder="Filter sites"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              className="w-48 pl-7"
-            />
-          </div>
-        )}
         {tab === "web" && (
           <Button onClick={() => setCreating(true)}>
             <Plus aria-hidden="true" />
@@ -163,11 +151,26 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
     <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">
       Use <span className="font-medium">Add domain</span> on an app above to put a site in front of it.
     </p>
-  ) : visible.length === 0 ? (
-    <p className="text-muted-foreground text-sm" role="status">
-      No site matches “{filter}”.
-    </p>
   ) : (
+    <div className="flex flex-col gap-3">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter sites" placeholder="Filter sites">
+        <TableFilter
+          label="Type"
+          value={kindFilter}
+          onChange={setKindFilter}
+          options={[
+            { value: "php", label: "PHP" },
+            { value: "proxy", label: "Reverse proxy" },
+            { value: "static", label: "Static files" },
+          ]}
+        />
+      </TableToolbar>
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
+        <>
     <div className="overflow-x-auto rounded-lg border">
       <table className="w-full text-sm">
         <caption className="sr-only">Sites served by nginx</caption>
@@ -181,7 +184,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
-          {visible.map((site) => (
+          {pager.rows.map((site) => (
             <tr
               key={site.domain}
               className="hover:bg-accent/40 cursor-pointer"
@@ -239,6 +242,10 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
           ))}
         </tbody>
       </table>
+    </div>
+    <TablePagination pager={pager} />
+        </>
+      )}
     </div>
   )
 

@@ -7,8 +7,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
+import { TableFilter, TableToolbar } from "@/components/ui/table-controls"
 import { type AuditEntry } from "@/lib/api"
 import { useAudit } from "@/lib/queries"
+import { matchesQuery } from "@/lib/table"
 
 const PAGE_SIZE_CHOICES = [25, 50, 100, 200]
 const DEFAULT_PAGE_SIZE = 50
@@ -37,6 +39,8 @@ export function AuditPage() {
   const sizeId = useId()
   const [paging, setPaging] = useState<Paging>({ size: DEFAULT_PAGE_SIZE, cursors: [] })
   const [jobId, setJobId] = useState<string | null>(null)
+  const [filter, setFilter] = useState("")
+  const [resultFilter, setResultFilter] = useState("all")
 
   const before = paging.cursors.length > 0 ? paging.cursors[paging.cursors.length - 1] : undefined
   const { data, isPending, isPlaceholderData, error, refetch } = useAudit(paging.size, before)
@@ -48,7 +52,14 @@ export function AuditPage() {
     return <ErrorState error={error} fallback="The audit log could not be loaded." onRetry={() => void refetch()} />
   }
 
-  const entries = data?.entries ?? []
+  const allEntries = data?.entries ?? []
+  // The server pages the trail by cursor; these filters narrow the page on screen.
+  const entries = allEntries.filter(
+    (e) =>
+      (resultFilter === "all" || e.result === resultFilter) &&
+      matchesQuery([e.actor, e.action, e.target, e.result, summarize(e.detail)], filter),
+  )
+  const resultOptions = [...new Set(allEntries.map((e) => e.result))].map((r) => ({ value: r, label: r }))
   const page = paging.cursors.length + 1
   const hasNewer = paging.cursors.length > 0
   const hasOlder = (data?.next_before ?? 0) > 0
@@ -59,7 +70,7 @@ export function AuditPage() {
   }
   const newerPage = () => setPaging((p) => ({ ...p, cursors: p.cursors.slice(0, -1) }))
 
-  if (entries.length === 0 && !hasNewer) {
+  if (allEntries.length === 0 && !hasNewer) {
     return (
       <p className="text-muted-foreground text-sm">
         No audited actions yet. Changing a setting, signing in or out, and a rejected request all
@@ -91,6 +102,15 @@ export function AuditPage() {
         </p>
       </div>
 
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter audit entries" placeholder="Filter this page">
+        <TableFilter label="Result" value={resultFilter} onChange={setResultFilter} options={resultOptions} />
+      </TableToolbar>
+
+      {entries.length === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className={`overflow-x-auto rounded-lg border ${isPlaceholderData ? "opacity-60" : ""}`}>
         <table className="w-full text-sm">
           <caption className="sr-only">Audit trail, newest first</caption>
@@ -111,6 +131,7 @@ export function AuditPage() {
           </tbody>
         </table>
       </div>
+      )}
 
       <nav aria-label="Audit pages" className="flex items-center justify-end gap-2">
         <Button type="button" variant="outline" size="sm" disabled={!hasNewer} onClick={newerPage}>

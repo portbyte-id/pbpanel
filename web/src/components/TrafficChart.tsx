@@ -1,3 +1,4 @@
+import { TablePagination, usePagedRows } from "@/components/ui/table-controls"
 import { compactCount, type TrafficPoint } from "@/lib/waf"
 
 /** One colour per status class. The legend names each, so colour is never the only cue. */
@@ -10,6 +11,45 @@ export const CLASS_SERIES = [
 
 function clock(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+/** The bucket data, newest first, one page at a time. Time has no free text to search, so only paging. */
+function SeriesTable({ series, stepSeconds }: { series: TrafficPoint[]; stepSeconds: number }) {
+  const pager = usePagedRows([...series].reverse())
+  return (
+    <div className="mt-2">
+      <div className="max-h-64 overflow-auto rounded-md border">
+        <table className="w-full text-xs">
+          <caption className="sr-only">Requests per {stepSeconds} seconds by status class</caption>
+          <thead className="bg-muted text-muted-foreground sticky top-0 text-left">
+            <tr>
+              <th scope="col" className="px-3 py-1 font-medium">Time</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">Requests</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">2xx</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">3xx</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">4xx</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">5xx</th>
+              <th scope="col" className="px-3 py-1 text-right font-medium">WAF events</th>
+            </tr>
+          </thead>
+          <tbody className="divide-border divide-y">
+            {pager.rows.map((p) => (
+              <tr key={p.t}>
+                <td className="px-3 py-1 tabular-nums">{clock(p.t)}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.requests}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.s2xx}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.s3xx}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.s4xx}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.s5xx}</td>
+                <td className="px-3 py-1 text-right tabular-nums">{p.waf_events}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePagination pager={pager} />
+    </div>
+  )
 }
 
 /**
@@ -88,35 +128,7 @@ export function TrafficChart({ series, stepSeconds }: { series: TrafficPoint[]; 
       </ul>
       <details className="text-sm">
         <summary className="text-muted-foreground cursor-pointer text-xs">Show the data</summary>
-        <div className="mt-2 max-h-64 overflow-auto rounded-md border">
-          <table className="w-full text-xs">
-            <caption className="sr-only">Requests per {stepSeconds} seconds by status class</caption>
-            <thead className="bg-muted text-muted-foreground sticky top-0 text-left">
-              <tr>
-                <th scope="col" className="px-3 py-1 font-medium">Time</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">Requests</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">2xx</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">3xx</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">4xx</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">5xx</th>
-                <th scope="col" className="px-3 py-1 text-right font-medium">WAF events</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {[...series].reverse().map((p) => (
-                <tr key={p.t}>
-                  <td className="px-3 py-1 tabular-nums">{clock(p.t)}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.requests}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.s2xx}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.s3xx}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.s4xx}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.s5xx}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{p.waf_events}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SeriesTable series={series} stepSeconds={stepSeconds} />
       </details>
     </figure>
   )

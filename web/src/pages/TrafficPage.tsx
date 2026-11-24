@@ -12,7 +12,9 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { useSites } from "@/lib/queries"
+import { matchesQuery } from "@/lib/table"
 import { formatBytes } from "@/lib/sysinfo"
 import {
   compactCount,
@@ -256,67 +258,114 @@ function Overview({
           {data.sites.length === 0 ? (
             <p className="text-muted-foreground text-sm">No site has had traffic in this period.</p>
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm">
-                <caption className="sr-only">Traffic per site</caption>
-                <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-                  <tr>
-                    <th scope="col" className="px-3 py-1.5 font-medium">Site</th>
-                    <th scope="col" className="px-3 py-1.5 text-right font-medium">Requests</th>
-                    <th scope="col" className="px-3 py-1.5 text-right font-medium">Errors</th>
-                    <th scope="col" className="px-3 py-1.5 text-right font-medium">Error rate</th>
-                    <th scope="col" className="px-3 py-1.5 text-right font-medium">WAF events</th>
-                    <th scope="col" className="px-3 py-1.5 font-medium">ModSecurity</th>
-                    <th scope="col" className="px-3 py-1.5 font-medium">Also on</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-border divide-y">
-                  {data.sites.map((s) => {
-                    const m = modes.get(s.domain)
-                    return (
-                      <tr key={s.domain}>
-                        <td className="px-3 py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => onPickSite(s.domain)}
-                            className="focus-visible:ring-ring/50 rounded font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px]"
-                          >
-                            {s.domain}
-                          </button>
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString("en-US")}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString("en-US")}</td>
-                        <td className="text-muted-foreground px-3 py-1.5 text-right text-xs tabular-nums">
-                          {percent(s.errors, s.requests)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{s.waf_events.toLocaleString("en-US")}</td>
-                        <td className="px-3 py-1.5">
-                          {m ? (
-                            <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "destructive"}>
-                              {MODE_LABEL[m.mode as WafMode]}
-                              {m.mode !== "off" && ` · level ${m.paranoia}`}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <span className="flex flex-wrap gap-1">
-                            {m?.rate_limit && <Badge variant="outline">Rate limit</Badge>}
-                            {m?.challenge && <Badge variant="outline">Challenge</Badge>}
-                            {m && !m.rate_limit && !m.challenge && <span className="text-muted-foreground">—</span>}
-                          </span>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <SitesTable sites={data.sites} modes={modes} onPickSite={onPickSite} />
           )}
         </section>
       )}
     </div>
+  )
+}
+
+const NO_WAF_MODE = "none"
+
+/** Per-site traffic with search by domain, a ModSecurity filter, and paging. */
+function SitesTable({
+  sites,
+  modes,
+  onPickSite,
+}: {
+  sites: TrafficSummary["sites"]
+  modes: Map<string, WafOverviewSite>
+  onPickSite: (domain: string) => void
+}) {
+  const [search, setSearch] = useState("")
+  const [mode, setMode] = useState("all")
+  const matching = sites.filter((s) => {
+    const current = modes.get(s.domain)?.mode ?? NO_WAF_MODE
+    return (mode === "all" || current === mode) && matchesQuery([s.domain], search)
+  })
+  const pager = usePagedRows(matching, `${search}|${mode}`)
+  return (
+    <>
+      <TableToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="Search sites"
+        placeholder="Search by domain"
+      >
+        <TableFilter
+          label="ModSecurity"
+          value={mode}
+          onChange={setMode}
+          options={[
+            ...(["block", "detect", "off"] as WafMode[]).map((k) => ({ value: k, label: MODE_LABEL[k] })),
+            { value: NO_WAF_MODE, label: "No WAF data" },
+          ]}
+        />
+      </TableToolbar>
+      {matching.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No site matches the filters.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <caption className="sr-only">Traffic per site</caption>
+            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+              <tr>
+                <th scope="col" className="px-3 py-1.5 font-medium">Site</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">Requests</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">Errors</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">Error rate</th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">WAF events</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">ModSecurity</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Also on</th>
+              </tr>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {pager.rows.map((s) => {
+                const m = modes.get(s.domain)
+                return (
+                  <tr key={s.domain}>
+                    <td className="px-3 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onPickSite(s.domain)}
+                        className="focus-visible:ring-ring/50 rounded font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px]"
+                      >
+                        {s.domain}
+                      </button>
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString("en-US")}</td>
+                    <td className="text-muted-foreground px-3 py-1.5 text-right text-xs tabular-nums">
+                      {percent(s.errors, s.requests)}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.waf_events.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5">
+                      {m ? (
+                        <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "destructive"}>
+                          {MODE_LABEL[m.mode as WafMode]}
+                          {m.mode !== "off" && ` · level ${m.paranoia}`}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <span className="flex flex-wrap gap-1">
+                        {m?.rate_limit && <Badge variant="outline">Rate limit</Badge>}
+                        {m?.challenge && <Badge variant="outline">Challenge</Badge>}
+                        {m && !m.rate_limit && !m.challenge && <span className="text-muted-foreground">—</span>}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <TablePagination pager={pager} />
+    </>
   )
 }
 
@@ -362,13 +411,21 @@ function TopTable({
   rows: (string | number)[][]
   mono?: boolean
 }) {
+  const [search, setSearch] = useState("")
   const peak = Math.max(1, ...rows.map((r) => (typeof r[1] === "number" ? r[1] : 0)))
+  const matching = rows.filter((r) => matchesQuery([r[0]], search))
+  const pager = usePagedRows(matching, search)
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-2">
       <h2 className="text-sm font-semibold">{title}</h2>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-sm">Nothing in this period.</p>
       ) : (
+        <>
+          <TableToolbar search={search} onSearchChange={setSearch} searchLabel={`Search ${title.toLowerCase()}`} />
+          {matching.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No rows match the filters.</p>
+          ) : (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
             <caption className="sr-only">{title}</caption>
@@ -382,7 +439,7 @@ function TopTable({
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {rows.map((r) => (
+              {pager.rows.map((r) => (
                 <tr key={String(r[0])}>
                   {r.map((cell, i) => (
                     <td
@@ -410,6 +467,9 @@ function TopTable({
             </tbody>
           </table>
         </div>
+          )}
+          <TablePagination pager={pager} />
+        </>
       )}
     </section>
   )
@@ -458,6 +518,7 @@ export function RequestFeed({ site }: { site: string }) {
 
   const filters = useMemo(() => ({ site, status, ip: dIp, q: dText }), [site, status, dIp, dText])
   const { rows, query } = useRequestFeed(filters, paused)
+  const pager = usePagedRows(rows, `${site}|${status}|${dIp}|${dText}`)
 
   return (
     <section aria-labelledby={`${id}-heading`} className="flex flex-col gap-3">
@@ -530,13 +591,14 @@ export function RequestFeed({ site }: { site: string }) {
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {rows.map((r) => (
+              {pager.rows.map((r) => (
                 <FeedRow key={r.seq} r={r} showSite={site === ""} />
               ))}
             </tbody>
           </table>
         </div>
       )}
+      <TablePagination pager={pager} />
       <p className="text-muted-foreground text-xs" aria-live="polite">
         {paused ? "Paused. Resume to catch up." : `Showing the newest ${rows.length} requests.`}
       </p>

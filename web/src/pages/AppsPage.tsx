@@ -9,8 +9,10 @@ import { CreateSiteDialog } from "@/components/CreateSiteDialog"
 import { TLSCell } from "@/components/TLSCell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { ApiError, type AppAction, type AppType, type CertView, type PanelApp, type Site } from "@/lib/api"
 import { useControlApp, useDeleteApp } from "@/lib/queries"
+import { matchesQuery } from "@/lib/table"
 import { tabForApp } from "@/lib/sitesTabs"
 import { SiteDetailBody } from "@/pages/SiteDetailPage"
 
@@ -92,6 +94,17 @@ export function AppsTable({
   const [addingDomainTo, setAddingDomainTo] = useState<PanelApp | null>(null)
 
   const rows = apps.filter((app) => app.type === type)
+  const [filter, setFilter] = useState("")
+  const [runFilter, setRunFilter] = useState("all")
+  const shown = rows.filter(
+    (app) =>
+      (runFilter === "all" || (runFilter === "running") === isRunning(app)) &&
+      matchesQuery(
+        [app.name, typeLabel(app), app.state, app.port, ...sitesOf(app, sites).map((s) => s.domain)],
+        filter,
+      ),
+  )
+  const pager = usePagedRows(shown, `${type}|${filter}|${runFilter}`)
   const current = managing?.name == null ? null : (apps.find((a) => a.name === managing.name) ?? null)
 
   const act = (name: string, action: AppAction) => {
@@ -244,6 +257,23 @@ export function AppsTable({
       {rows.length === 0 ? (
         <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">{empty}</p>
       ) : (
+        <div className="flex flex-col">
+          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter apps" placeholder="Filter apps">
+            <TableFilter
+              label="State"
+              value={runFilter}
+              onChange={setRunFilter}
+              options={[
+                { value: "running", label: "Running" },
+                { value: "stopped", label: "Not running" },
+              ]}
+            />
+          </TableToolbar>
+          {pager.total === 0 ? (
+            <p className="text-muted-foreground text-sm" role="status">
+              No rows match the filters.
+            </p>
+          ) : (
         <div className="border-border overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
             <caption className="sr-only">Apps of this type and the domains in front of them</caption>
@@ -262,7 +292,7 @@ export function AppsTable({
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {rows.map((app) => {
+              {pager.rows.map((app) => {
                 const mine = sitesOf(app, sites)
                 return (
                   <tr key={app.name}>
@@ -329,6 +359,9 @@ export function AppsTable({
               })}
             </tbody>
           </table>
+        </div>
+          )}
+          <TablePagination pager={pager} />
         </div>
       )}
 

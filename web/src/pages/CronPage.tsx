@@ -14,7 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { ApiError } from "@/lib/api"
+import { matchesQuery } from "@/lib/table"
 import {
   commandSummary,
   formatWhen,
@@ -59,6 +61,15 @@ export function CronPage() {
   const [history, setHistory] = useState<CronJob | null>(null)
   const [deleting, setDeleting] = useState<CronJob | null>(null)
   const [ran, setRan] = useState<string | null>(null)
+  const [filter, setFilter] = useState("")
+  const [enabledFilter, setEnabledFilter] = useState("all")
+  const allJobs = jobs.data ?? []
+  const shownJobs = allJobs.filter(
+    (job) =>
+      (enabledFilter === "all" || (enabledFilter === "enabled") === job.enabled) &&
+      matchesQuery([job.name, job.schedule, job.user, commandSummary(job)], filter),
+  )
+  const pager = usePagedRows(shownJobs, `${filter}|${enabledFilter}`)
 
   if (jobs.isPending) {
     return <SkeletonRows label="Loading cron jobs…" />
@@ -114,6 +125,23 @@ export function CronPage() {
           </p>
         </div>
       ) : (
+        <div className="flex flex-col">
+          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter cron jobs" placeholder="Filter jobs">
+            <TableFilter
+              label="Status"
+              value={enabledFilter}
+              onChange={setEnabledFilter}
+              options={[
+                { value: "enabled", label: "Enabled" },
+                { value: "disabled", label: "Disabled" },
+              ]}
+            />
+          </TableToolbar>
+          {pager.total === 0 ? (
+            <p className="text-muted-foreground text-sm" role="status">
+              No rows match the filters.
+            </p>
+          ) : (
         <div className="border-border overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
             <caption className="sr-only">Cron jobs</caption>
@@ -130,7 +158,7 @@ export function CronPage() {
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {list.map((job) => (
+              {pager.rows.map((job) => (
                 <tr key={job.id} data-testid="cron-row" data-job={job.name}>
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-2">
@@ -220,6 +248,9 @@ export function CronPage() {
             </tbody>
           </table>
         </div>
+          )}
+          <TablePagination pager={pager} />
+        </div>
       )}
 
       <CronJobDialog
@@ -284,6 +315,19 @@ function HistoryDialog({ job, onClose }: { job: CronJob | null; onClose: () => v
 export function RunHistory({ job }: { job: CronJob }) {
   const runs = useCronRuns(job.id)
   const [openRun, setOpenRun] = useState<number | null>(null)
+  const [filter, setFilter] = useState("")
+  const [resultFilter, setResultFilter] = useState("all")
+  const allRuns = runs.data ?? []
+  const shownRuns = allRuns.filter(
+    (r) =>
+      (resultFilter === "all" || r.status === resultFilter) &&
+      matchesQuery(
+        [formatWhen(r.started_at), r.source === "manual" ? "Run now" : "Schedule", STATUS_LABELS[r.status]],
+        filter,
+      ),
+  )
+  const pager = usePagedRows(shownRuns, `${filter}|${resultFilter}`)
+  const resultOptions = [...new Set(allRuns.map((r) => r.status))].map((s) => ({ value: s, label: STATUS_LABELS[s] }))
 
   if (runs.isPending) return <SkeletonRows label="Loading runs…" />
   // The list refreshes every few seconds while a run is going. A failed refresh keeps
@@ -306,8 +350,16 @@ export function RunHistory({ job }: { job: CronJob }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {error}
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter runs" placeholder="Filter runs">
+        <TableFilter label="Result" value={resultFilter} onChange={setResultFilter} options={resultOptions} />
+      </TableToolbar>
       {/* Only the run list scrolls. The output panel keeps its place under it, so
           asking for a run's output never means scrolling past every row first. */}
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className="border-border min-h-0 overflow-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Runs of {job.name}</caption>
@@ -324,7 +376,7 @@ export function RunHistory({ job }: { job: CronJob }) {
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {runs.data.map((r) => (
+            {pager.rows.map((r) => (
               <tr key={r.id} data-testid="run-row">
                 <td className="px-3 py-1.5 whitespace-nowrap">{formatWhen(r.started_at)}</td>
                 <td className="px-3 py-1.5">{r.source === "manual" ? "Run now" : "Schedule"}</td>
@@ -349,6 +401,8 @@ export function RunHistory({ job }: { job: CronJob }) {
           </tbody>
         </table>
       </div>
+      )}
+      <TablePagination pager={pager} />
       {openRun !== null && (
         <div className="shrink-0">
           <RunOutput

@@ -12,8 +12,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { describeError } from "@/lib/errors"
+import { matchesQuery } from "@/lib/table"
 import {
   ACTION_LABELS,
   formatPercent,
@@ -134,6 +136,16 @@ function ContainersTab() {
   const [inspect, setInspect] = useState<DockerContainer | null>(null)
   const [confirming, setConfirming] = useState<{ c: DockerContainer; kind: "kill" | "remove" } | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
+  const [filter, setFilter] = useState("")
+  const [stateFilter, setStateFilter] = useState("all")
+  const allContainers = list.data ?? []
+  const shownContainers = allContainers.filter(
+    (c) =>
+      (stateFilter === "all" || c.state === stateFilter) &&
+      matchesQuery([c.name, c.image, c.id, c.status, ...uniquePorts(c.ports).map(portLabel)], filter),
+  )
+  const pager = usePagedRows(shownContainers, `${filter}|${stateFilter}`)
+  const stateOptions = [...new Set(allContainers.map((c) => c.state))].map((s) => ({ value: s, label: s }))
 
   if (list.isPending) return <SkeletonRows label="Loading containers…" />
   if (list.error) {
@@ -156,6 +168,14 @@ function ContainersTab() {
           {errorText(control.error, "The action failed.")}
         </p>
       )}
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers">
+        <TableFilter label="State" value={stateFilter} onChange={setStateFilter} options={stateOptions} />
+      </TableToolbar>
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className="border-border overflow-x-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Containers</caption>
@@ -171,7 +191,7 @@ function ContainersTab() {
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {list.data.map((c) => {
+            {pager.rows.map((c) => {
               const running = c.state === "running" || c.state === "restarting"
               const busy = pendingId === c.id
               return (
@@ -238,6 +258,8 @@ function ContainersTab() {
           </tbody>
         </table>
       </div>
+      )}
+      <TablePagination pager={pager} />
 
       <DetailsDialog container={inspect} onClose={() => setInspect(null)} />
 
@@ -358,9 +380,19 @@ function LogsPane({ id }: { id: string | null }) {
 
 function ProcessPane({ id }: { id: string | null }) {
   const top = useDockerProcesses(id)
+  const [filter, setFilter] = useState("")
+  const shownProcesses = (top.data?.processes ?? []).filter((row) => matchesQuery(row, filter))
+  const pager = usePagedRows(shownProcesses, filter)
   if (top.isPending) return <SkeletonRows label="Loading processes…" />
   if (top.error) return <ErrorState error={top.error} fallback="The processes could not be loaded." onRetry={() => void top.refetch()} />
   return (
+    <div className="flex flex-col">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter processes" placeholder="Filter processes" />
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
     <div className="border-border overflow-x-auto rounded-md border">
       <table className="w-full text-xs">
         <caption className="sr-only">Processes in the container</caption>
@@ -374,7 +406,7 @@ function ProcessPane({ id }: { id: string | null }) {
           </tr>
         </thead>
         <tbody className="divide-border divide-y font-mono">
-          {top.data.processes.map((row, i) => (
+          {pager.rows.map((row, i) => (
             <tr key={i}>
               {row.map((cell, j) => (
                 <td key={j} className="px-2 py-1 whitespace-nowrap">
@@ -385,6 +417,9 @@ function ProcessPane({ id }: { id: string | null }) {
           ))}
         </tbody>
       </table>
+    </div>
+      )}
+      <TablePagination pager={pager} />
     </div>
   )
 }
@@ -410,14 +445,24 @@ function Meter({ percent, label }: { percent: number; label: string }) {
 function MonitorTab({ active }: { active: boolean }) {
   // Sampling costs the host about a second per container, so only the visible tab polls.
   const stats = useDockerStats(active)
+  const [filter, setFilter] = useState("")
+  const rows = (stats.data ?? [])
+    .filter((s) => matchesQuery([s.name, s.id], filter))
+    .sort((a, b) => b.cpuPercent - a.cpuPercent)
+  const pager = usePagedRows(rows, filter)
   if (stats.isPending) return <SkeletonRows label="Sampling containers…" />
   if (stats.error) return <ErrorState error={stats.error} fallback="The containers could not be sampled." onRetry={() => void stats.refetch()} />
   if (stats.data.length === 0) {
     return <EmptyNote title="Nothing is running">Start a container to see its CPU, memory and I/O here.</EmptyNote>
   }
-  const rows = [...stats.data].sort((a, b) => b.cpuPercent - a.cpuPercent)
   return (
     <div className="flex flex-col gap-2">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers" />
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className="border-border overflow-x-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Resource use of running containers</caption>
@@ -432,7 +477,7 @@ function MonitorTab({ active }: { active: boolean }) {
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {rows.map((s) => (
+            {pager.rows.map((s) => (
               <tr key={s.id} data-testid="docker-stats-row" data-container={s.name}>
                 <td className={`${TD} font-medium`}>{s.name}</td>
                 <td className={TD}>
@@ -462,6 +507,8 @@ function MonitorTab({ active }: { active: boolean }) {
           </tbody>
         </table>
       </div>
+      )}
+      <TablePagination pager={pager} />
       <p className="text-muted-foreground text-xs">
         CPU is a share of one core per 100%. Network and disk are totals since the container started.
       </p>
@@ -475,6 +522,14 @@ function ImagesTab() {
   const list = useDockerImages()
   const remove = useDockerRemoveImage()
   const [deleting, setDeleting] = useState<DockerImage | null>(null)
+  const [filter, setFilter] = useState("")
+  const [usedFilter, setUsedFilter] = useState("all")
+  const shownImages = (list.data ?? []).filter(
+    (im) =>
+      (usedFilter === "all" || (usedFilter === "used") === (im.inUseBy.length > 0)) &&
+      matchesQuery([...im.tags, im.id, ...im.inUseBy], filter),
+  )
+  const pager = usePagedRows(shownImages, `${filter}|${usedFilter}`)
 
   if (list.isPending) return <SkeletonRows label="Loading images…" />
   if (list.error) return <ErrorState error={list.error} fallback="The images could not be loaded." onRetry={() => void list.refetch()} />
@@ -482,6 +537,22 @@ function ImagesTab() {
 
   return (
     <div className="flex flex-col gap-3">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter images" placeholder="Filter images">
+        <TableFilter
+          label="Use"
+          value={usedFilter}
+          onChange={setUsedFilter}
+          options={[
+            { value: "used", label: "In use" },
+            { value: "unused", label: "Not used" },
+          ]}
+        />
+      </TableToolbar>
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className="border-border overflow-x-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Images</caption>
@@ -497,7 +568,7 @@ function ImagesTab() {
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {list.data.map((im) => (
+            {pager.rows.map((im) => (
               <tr key={im.id} data-testid="docker-image-row" data-image={imageLabel(im)}>
                 <td className={TD}>
                   {im.tags.length === 0 ? (
@@ -544,6 +615,8 @@ function ImagesTab() {
           </tbody>
         </table>
       </div>
+      )}
+      <TablePagination pager={pager} />
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => {
@@ -572,6 +645,14 @@ function VolumesTab() {
   const list = useDockerVolumes()
   const remove = useDockerRemoveVolume()
   const [deleting, setDeleting] = useState<DockerVolume | null>(null)
+  const [filter, setFilter] = useState("")
+  const [usedFilter, setUsedFilter] = useState("all")
+  const shownVolumes = (list.data ?? []).filter(
+    (v) =>
+      (usedFilter === "all" || (usedFilter === "used") === (v.inUseBy.length > 0)) &&
+      matchesQuery([v.name, v.driver, v.mountpoint, ...v.inUseBy], filter),
+  )
+  const pager = usePagedRows(shownVolumes, `${filter}|${usedFilter}`)
 
   if (list.isPending) return <SkeletonRows label="Loading volumes…" />
   if (list.error) return <ErrorState error={list.error} fallback="The volumes could not be loaded." onRetry={() => void list.refetch()} />
@@ -579,6 +660,22 @@ function VolumesTab() {
 
   return (
     <div className="flex flex-col gap-3">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter volumes" placeholder="Filter volumes">
+        <TableFilter
+          label="Use"
+          value={usedFilter}
+          onChange={setUsedFilter}
+          options={[
+            { value: "used", label: "In use" },
+            { value: "unused", label: "Not used" },
+          ]}
+        />
+      </TableToolbar>
+      {pager.total === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          No rows match the filters.
+        </p>
+      ) : (
       <div className="border-border overflow-x-auto rounded-md border">
         <table className="w-full text-sm">
           <caption className="sr-only">Volumes</caption>
@@ -594,7 +691,7 @@ function VolumesTab() {
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {list.data.map((v) => (
+            {pager.rows.map((v) => (
               <tr key={v.name} data-testid="docker-volume-row" data-volume={v.name}>
                 <td className={`${TD} font-medium break-all`}>{v.name}</td>
                 <td className={TD}>{v.driver}</td>
@@ -621,6 +718,8 @@ function VolumesTab() {
           </tbody>
         </table>
       </div>
+      )}
+      <TablePagination pager={pager} />
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => {

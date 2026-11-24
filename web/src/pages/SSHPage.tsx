@@ -9,9 +9,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { api, ApiError, type SSHAttempt, type SSHSummary } from "@/lib/api"
 import { formatWhen } from "@/lib/cron"
 import { useDebounced, useSSHAttempts } from "@/lib/queries"
+import { matchesQuery } from "@/lib/table"
 
 /** The windows offered. Every value is a valid `range`: 5m is the floor, 720h the cap. */
 const RANGES: { value: string; label: string }[] = [
@@ -228,33 +230,52 @@ function TopList({
   firstHeading: string
   rows: { key: string; label: string; failed: number; total: number }[]
 }) {
+  const [query, setQuery] = useState("")
+  const filtered = rows.filter((r) => matchesQuery([r.label], query))
+  const pager = usePagedRows(filtered, query)
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-1.5">
       <h2 className="text-sm font-semibold">{title}</h2>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-sm">Nothing in this period.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <caption className="sr-only">{title}</caption>
-            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-1.5 font-medium">{firstHeading}</th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">Failed</th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {rows.map((r) => (
-                <tr key={r.key}>
-                  <td className="px-3 py-1.5 font-mono text-xs break-all">{r.label || "—"}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{r.failed.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{r.total.toLocaleString("en-US")}</td>
+        <>
+          <TableToolbar
+            search={query}
+            onSearchChange={setQuery}
+            searchLabel={`Search ${title.toLowerCase()}`}
+            placeholder={`Search ${firstHeading.toLowerCase()}`}
+          />
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <caption className="sr-only">{title}</caption>
+              <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+                <tr>
+                  <th scope="col" className="px-3 py-1.5 font-medium">{firstHeading}</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">Failed</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">Total</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-border divide-y">
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-muted-foreground px-3 py-3 text-sm">
+                      No rows match the filters.
+                    </td>
+                  </tr>
+                )}
+                {pager.rows.map((r) => (
+                  <tr key={r.key}>
+                    <td className="px-3 py-1.5 font-mono text-xs break-all">{r.label || "—"}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{r.failed.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{r.total.toLocaleString("en-US")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <TablePagination pager={pager} />
+        </>
       )}
     </section>
   )
@@ -272,6 +293,14 @@ function AttemptTable({
   paused: boolean
 }) {
   const truncated = fetched < total
+  const [query, setQuery] = useState("")
+  const filtered = rows.filter((a) =>
+    matchesQuery(
+      [formatWhen(a.at), a.outcome === "failed" ? "failed" : "succeeded", a.ip, a.user, a.port, METHOD_LABEL[a.method]],
+      query,
+    ),
+  )
+  const pager = usePagedRows(filtered, query)
   return (
     <section aria-label="Login attempts" className="flex flex-col gap-2">
       <p className="text-muted-foreground text-xs" aria-live="polite">
@@ -285,44 +314,60 @@ function AttemptTable({
           No attempts match. Widen the period or clear a filter.
         </p>
       ) : (
-        <div
-          className="focus-visible:ring-ring relative max-h-[36rem] overflow-auto rounded-lg border focus-visible:ring-2 focus-visible:outline-none"
-          tabIndex={0}
-        >
-          <table className="w-full text-sm">
-            <caption className="sr-only">SSH login attempts, newest first</caption>
-            <thead className="bg-muted text-muted-foreground sticky top-0 text-left text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-1.5 font-medium">Time</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Outcome</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">IP</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Username</th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">Port</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Method</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {rows.map((a, i) => (
-                <tr key={`${a.at}-${a.ip}-${a.port}-${i}`}>
-                  <td className="px-3 py-1 text-xs whitespace-nowrap tabular-nums">
-                    <time dateTime={a.at} title={a.at}>
-                      {formatWhen(a.at)}
-                    </time>
-                  </td>
-                  <td className="px-3 py-1">
-                    <Badge variant={a.outcome === "failed" ? "destructive" : "success"}>
-                      {a.outcome === "failed" ? "Failed" : "Succeeded"}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-1 font-mono text-xs">{a.ip}</td>
-                  <td className="px-3 py-1 font-mono text-xs break-all">{a.user || "—"}</td>
-                  <td className="px-3 py-1 text-right text-xs tabular-nums">{a.port}</td>
-                  <td className="px-3 py-1 text-xs">{METHOD_LABEL[a.method]}</td>
+        <>
+          <TableToolbar
+            search={query}
+            onSearchChange={setQuery}
+            searchLabel="Search login attempts"
+            placeholder="Search IP, username, port or method"
+          />
+          <div
+            className="focus-visible:ring-ring relative max-h-[36rem] overflow-auto rounded-lg border focus-visible:ring-2 focus-visible:outline-none"
+            tabIndex={0}
+          >
+            <table className="w-full text-sm">
+              <caption className="sr-only">SSH login attempts, newest first</caption>
+              <thead className="bg-muted text-muted-foreground sticky top-0 text-left text-xs">
+                <tr>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Time</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Outcome</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">IP</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Username</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">Port</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Method</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-border divide-y">
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-muted-foreground px-3 py-3 text-sm">
+                      No attempts match the filters.
+                    </td>
+                  </tr>
+                )}
+                {pager.rows.map((a, i) => (
+                  <tr key={`${a.at}-${a.ip}-${a.port}-${i}`}>
+                    <td className="px-3 py-1 text-xs whitespace-nowrap tabular-nums">
+                      <time dateTime={a.at} title={a.at}>
+                        {formatWhen(a.at)}
+                      </time>
+                    </td>
+                    <td className="px-3 py-1">
+                      <Badge variant={a.outcome === "failed" ? "destructive" : "success"}>
+                        {a.outcome === "failed" ? "Failed" : "Succeeded"}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-1 font-mono text-xs">{a.ip}</td>
+                    <td className="px-3 py-1 font-mono text-xs break-all">{a.user || "—"}</td>
+                    <td className="px-3 py-1 text-right text-xs tabular-nums">{a.port}</td>
+                    <td className="px-3 py-1 text-xs">{METHOD_LABEL[a.method]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <TablePagination pager={pager} />
+        </>
       )}
     </section>
   )

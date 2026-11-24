@@ -13,7 +13,9 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TableFilter, TablePagination, TableToolbar, usePagedRows } from "@/components/ui/table-controls"
 import { ApiError } from "@/lib/api"
+import { matchesQuery } from "@/lib/table"
 import {
   CLEARANCE_OPTIONS,
   configProblems,
@@ -728,6 +730,95 @@ function ListEditor({
   )
 }
 
+/** The exclusions in force, with search, a type filter and paging. Remove acts on the stored list, not the page. */
+function ExclusionTable({
+  exclusions,
+  onChange,
+}: {
+  exclusions: WafExclusion[]
+  onChange: (next: WafExclusion[]) => void
+}) {
+  const [search, setSearch] = useState("")
+  const [kindFilter, setKindFilter] = useState("all")
+  const matching = exclusions
+    .map((e, index) => ({ e, index }))
+    .filter(
+      ({ e }) =>
+        (kindFilter === "all" || e.kind === kindFilter) &&
+        matchesQuery(
+          [EXCLUSION_KIND_LABEL[e.kind], e.rule_id, e.path, e.arg, e.note],
+          search,
+        ),
+    )
+  const pager = usePagedRows(matching, `${search}|${kindFilter}`)
+  return (
+    <>
+      <TableToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="Search exclusions"
+        placeholder="Search by rule, path or note"
+      >
+        <TableFilter
+          label="Exclusion type"
+          value={kindFilter}
+          onChange={setKindFilter}
+          options={(Object.keys(EXCLUSION_KIND_LABEL) as WafExclusionKind[]).map((k) => ({
+            value: k,
+            label: EXCLUSION_KIND_LABEL[k],
+          }))}
+        />
+      </TableToolbar>
+      {matching.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No exclusion matches the filters.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <caption className="sr-only">Rule exclusions</caption>
+            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+              <tr>
+                <th scope="col" className="px-3 py-1.5 font-medium">Exclusion</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Rule</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Where</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">Note</th>
+                <th scope="col" className="px-3 py-1.5 font-medium">
+                  <span className="sr-only">Remove</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {pager.rows.map(({ e, index: i }) => (
+                <tr key={`${e.kind}:${e.rule_id}:${e.path}:${e.arg}:${i}`}>
+                  <td className="px-3 py-1.5">{EXCLUSION_KIND_LABEL[e.kind]}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs">{e.rule_id}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs break-all">
+                    {e.kind === "rule" && <span className="text-muted-foreground font-sans">whole site</span>}
+                    {e.kind !== "rule" && e.path}
+                    {e.kind === "rule_arg" && <span className="block">arg {e.arg}</span>}
+                  </td>
+                  <td className="text-muted-foreground px-3 py-1.5">{e.note || "—"}</td>
+                  <td className="px-3 py-1.5 text-right">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Remove exclusion of rule ${e.rule_id}${e.path ? ` on ${e.path}` : ""}`}
+                      onClick={() => onChange(exclusions.filter((_, j) => j !== i))}
+                    >
+                      Remove
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <TablePagination pager={pager} />
+    </>
+  )
+}
+
 function ExclusionEditor({
   exclusions,
   disabled,
@@ -798,47 +889,7 @@ function ExclusionEditor({
       {exclusions.length === 0 ? (
         <p className="text-muted-foreground text-sm">No exclusions.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <caption className="sr-only">Rule exclusions</caption>
-            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-1.5 font-medium">Exclusion</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Rule</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Where</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Note</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">
-                  <span className="sr-only">Remove</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {exclusions.map((e, i) => (
-                <tr key={`${e.kind}:${e.rule_id}:${e.path}:${e.arg}:${i}`}>
-                  <td className="px-3 py-1.5">{EXCLUSION_KIND_LABEL[e.kind]}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs">{e.rule_id}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs break-all">
-                    {e.kind === "rule" && <span className="text-muted-foreground font-sans">whole site</span>}
-                    {e.kind !== "rule" && e.path}
-                    {e.kind === "rule_arg" && <span className="block">arg {e.arg}</span>}
-                  </td>
-                  <td className="text-muted-foreground px-3 py-1.5">{e.note || "—"}</td>
-                  <td className="px-3 py-1.5 text-right">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      aria-label={`Remove exclusion of rule ${e.rule_id}${e.path ? ` on ${e.path}` : ""}`}
-                      onClick={() => onChange(exclusions.filter((_, j) => j !== i))}
-                    >
-                      Remove
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ExclusionTable exclusions={exclusions} onChange={onChange} />
       )}
 
       <fieldset

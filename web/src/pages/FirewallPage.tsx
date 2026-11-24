@@ -9,9 +9,16 @@ import { Button } from "@/components/ui/button"
 import { calloutVariants } from "@/components/ui/callout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  TableFilter,
+  TablePagination,
+  TableToolbar,
+  usePagedRows,
+} from "@/components/ui/table-controls"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, type FirewallPending, type FirewallRule, type FirewallState } from "@/lib/api"
 import { coarseSeconds, useCountdown } from "@/lib/countdown"
+import { matchesQuery } from "@/lib/table"
 import {
   useAddAllowlistEntry,
   useAddBlocklistEntry,
@@ -321,8 +328,21 @@ function RulesSection({ fw }: { fw: FirewallState }) {
   const [editing, setEditing] = useState<FirewallRule | null>(null)
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<FirewallRule | null>(null)
+  const [query, setQuery] = useState("")
+  const [protocol, setProtocol] = useState("all")
+  const [state, setState] = useState("all")
 
   const list = rules.data ?? []
+  const filtered = list.filter(
+    (rule) =>
+      (protocol === "all" || rule.protocol === protocol) &&
+      (state === "all" || (state === "enabled") === rule.enabled) &&
+      matchesQuery(
+        [portLabel(rule), protocolLabel(rule.protocol), rule.source, rule.comment],
+        query,
+      ),
+  )
+  const pager = usePagedRows(filtered, `${query}|${protocol}|${state}`)
 
   return (
     <section aria-labelledby="fw-rules" className="flex flex-col gap-3">
@@ -341,6 +361,33 @@ function RulesSection({ fw }: { fw: FirewallState }) {
           {firewallErrorText(rules.error, "The rules could not be loaded.")}
         </p>
       )}
+
+      <TableToolbar
+        search={query}
+        onSearchChange={setQuery}
+        searchLabel="Search allow rules"
+        placeholder="Search port, protocol, source or comment"
+      >
+        <TableFilter
+          label="Protocol"
+          value={protocol}
+          onChange={setProtocol}
+          options={[
+            { value: "tcp", label: "TCP" },
+            { value: "udp", label: "UDP" },
+            { value: "both", label: "TCP+UDP" },
+          ]}
+        />
+        <TableFilter
+          label="State"
+          value={state}
+          onChange={setState}
+          options={[
+            { value: "enabled", label: "Only enabled" },
+            { value: "off", label: "Only off" },
+          ]}
+        />
+      </TableToolbar>
 
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
@@ -382,7 +429,14 @@ function RulesSection({ fw }: { fw: FirewallState }) {
                 </td>
               </tr>
             )}
-            {list.map((rule) => (
+            {!rules.isPending && list.length > 0 && filtered.length === 0 && (
+              <tr>
+                <td colSpan={6} className="text-muted-foreground px-3 py-3 text-sm">
+                  No rules match the filters.
+                </td>
+              </tr>
+            )}
+            {pager.rows.map((rule) => (
               <tr key={rule.id}>
                 <td className="px-3 py-1.5 font-mono text-xs">{portLabel(rule)}</td>
                 <td className="px-3 py-1.5">{protocolLabel(rule.protocol)}</td>
@@ -418,6 +472,7 @@ function RulesSection({ fw }: { fw: FirewallState }) {
           </tbody>
         </table>
       </div>
+      <TablePagination pager={pager} />
 
       <FirewallRuleDialog
         open={adding || editing !== null}
@@ -467,6 +522,9 @@ function BlocklistSection() {
 
   const entries = list.data ?? []
   const addError = firewallErrorText(add.error, "The address could not be blocked.")
+  const [query, setQuery] = useState("")
+  const filtered = entries.filter((entry) => matchesQuery([entry.addr, entry.comment], query))
+  const pager = usePagedRows(filtered, query)
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -528,39 +586,55 @@ function BlocklistSection() {
       {!list.isPending && entries.length === 0 ? (
         <p className="text-muted-foreground text-sm">No blocked addresses.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <caption className="sr-only">Blocked addresses</caption>
-            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {entries.map((entry) => (
-                <tr key={entry.id}>
-                  <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
-                  <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
-                  <td className="px-3 py-1.5">
-                    <div className="flex justify-end">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={remove.isPending}
-                        aria-label={`Unblock ${entry.addr}`}
-                        onClick={() => remove.mutate(entry.id)}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  </td>
+        <>
+          <TableToolbar
+            search={query}
+            onSearchChange={setQuery}
+            searchLabel="Search blocked addresses"
+            placeholder="Search address or comment"
+          />
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Blocked addresses</caption>
+              <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+                <tr>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-border divide-y">
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-muted-foreground px-3 py-3 text-sm">
+                      No addresses match the filters.
+                    </td>
+                  </tr>
+                )}
+                {pager.rows.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
+                    <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
+                    <td className="px-3 py-1.5">
+                      <div className="flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={remove.isPending}
+                          aria-label={`Unblock ${entry.addr}`}
+                          onClick={() => remove.mutate(entry.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <TablePagination pager={pager} />
+        </>
       )}
       {remove.error && (
         <p role="alert" className="text-destructive text-xs">
@@ -581,6 +655,9 @@ function AllowlistSection() {
 
   const entries = list.data ?? []
   const addError = firewallErrorText(add.error, "The address could not be allowed.")
+  const [query, setQuery] = useState("")
+  const filtered = entries.filter((entry) => matchesQuery([entry.addr, entry.comment], query))
+  const pager = usePagedRows(filtered, query)
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -645,39 +722,55 @@ function AllowlistSection() {
       {!list.isPending && entries.length === 0 ? (
         <p className="text-muted-foreground text-sm">No allowed addresses.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <caption className="sr-only">Allowed addresses</caption>
-            <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
-                <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {entries.map((entry) => (
-                <tr key={entry.id}>
-                  <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
-                  <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
-                  <td className="px-3 py-1.5">
-                    <div className="flex justify-end">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={remove.isPending}
-                        aria-label={`Remove ${entry.addr} from the allow list`}
-                        onClick={() => remove.mutate(entry.id)}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  </td>
+        <>
+          <TableToolbar
+            search={query}
+            onSearchChange={setQuery}
+            searchLabel="Search allowed addresses"
+            placeholder="Search address or comment"
+          />
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Allowed addresses</caption>
+              <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
+                <tr>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Address</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Comment</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-border divide-y">
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-muted-foreground px-3 py-3 text-sm">
+                      No addresses match the filters.
+                    </td>
+                  </tr>
+                )}
+                {pager.rows.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="px-3 py-1.5 font-mono text-xs">{entry.addr}</td>
+                    <td className="text-muted-foreground px-3 py-1.5">{entry.comment || "—"}</td>
+                    <td className="px-3 py-1.5">
+                      <div className="flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={remove.isPending}
+                          aria-label={`Remove ${entry.addr} from the allow list`}
+                          onClick={() => remove.mutate(entry.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <TablePagination pager={pager} />
+        </>
       )}
       {remove.error && (
         <p role="alert" className="text-destructive text-xs">

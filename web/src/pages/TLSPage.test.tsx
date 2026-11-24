@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import type { CertInfo, CertView, DNSProvider } from "@/lib/api"
+import { matchesQuery } from "@/lib/table"
 import { CertificateTable, PanelCertSummary, ProviderList } from "@/pages/TLSPage"
 
 const cert = (over: Partial<CertView>): CertView => ({
@@ -22,11 +23,14 @@ const cert = (over: Partial<CertView>): CertView => ({
   ...over,
 })
 
+const siteLink = (d: string) => <a href={`/sites/${d}`}>{d}</a>
+
 describe("CertificateTable", () => {
   it("lists the soonest expiry first", () => {
     render(
       <CertificateTable
-        renderDomain={(d) => <span>{d}</span>}
+        linkedDomains={new Set()}
+        renderSiteLink={siteLink}
         certs={[
           cert({ domain: "late.test", not_after: "2026-09-01T00:00:00Z", days_left: 150 }),
           cert({ domain: "soon.test", not_after: "2026-03-01T00:00:00Z", days_left: 9 }),
@@ -48,7 +52,8 @@ describe("CertificateTable", () => {
   it("shows source and renewal status, with the error for a failed renewal", () => {
     render(
       <CertificateTable
-        renderDomain={(d) => <span>{d}</span>}
+        linkedDomains={new Set()}
+        renderSiteLink={siteLink}
         certs={[
           cert({ domain: "up.test", source: "upload" }),
           cert({
@@ -60,16 +65,78 @@ describe("CertificateTable", () => {
         ]}
       />,
     )
-    expect(screen.getByText("Uploaded")).toBeInTheDocument()
+    expect(within(screen.getByRole("table")).getByText("Uploaded")).toBeInTheDocument()
     expect(screen.getByText("Not renewed by the panel")).toBeInTheDocument()
     expect(screen.getByText("Last renewal failed")).toBeInTheDocument()
     expect(screen.getByText("dns: zone not found")).toBeInTheDocument()
   })
 
+  it("shows no site domain for a certificate in use, and Details opens the linked site", async () => {
+    const user = userEvent.setup()
+    render(
+      <CertificateTable
+        linkedDomains={new Set(["shop.test"])}
+        renderSiteLink={siteLink}
+        certs={[
+          cert({ domain: "shop.test", names: ["shop.test", "www.shop.test"], issuer: "R11" }),
+          cert({ domain: "free.test" }),
+        ]}
+      />,
+    )
+    const linkedRow = document.querySelector('tr[data-domain="shop.test"]') as HTMLElement
+    expect(within(linkedRow).queryByText("shop.test")).not.toBeInTheDocument()
+    expect(within(linkedRow).getByText("In use by a site")).toBeInTheDocument()
+    expect(within(screen.getByRole("row", { name: /free\.test/ })).getByText("free.test")).toBeInTheDocument()
+
+    await user.click(within(linkedRow).getByRole("button", { name: "Details" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByRole("link", { name: "shop.test" })).toHaveAttribute(
+      "href",
+      "/sites/shop.test",
+    )
+    expect(within(dialog).getByText("shop.test, www.shop.test")).toBeInTheDocument()
+    expect(within(dialog).getByText("R11")).toBeInTheDocument()
+  })
+
+  it("filters by search and source, and pages the list", async () => {
+    const user = userEvent.setup()
+    const many = Array.from({ length: 12 }, (_, i) =>
+      cert({ domain: `host${String(i).padStart(2, "0")}.test`, days_left: 100 + i }),
+    )
+    render(
+      <CertificateTable
+        linkedDomains={new Set()}
+        renderSiteLink={siteLink}
+        certs={[...many, cert({ domain: "upload.test", source: "upload" })]}
+      />,
+    )
+    expect(screen.getByText("1–10 of 13")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Next page" }))
+    expect(screen.getByText("11–13 of 13")).toBeInTheDocument()
+
+    await user.type(screen.getByRole("searchbox", { name: "Search certificates" }), "upload")
+    expect(screen.getByText("1–1 of 1")).toBeInTheDocument()
+
+    await user.clear(screen.getByRole("searchbox", { name: "Search certificates" }))
+    await user.selectOptions(screen.getByLabelText("Source"), "upload")
+    expect(screen.getByText("1–1 of 1")).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText("Source"), "dns01")
+    expect(screen.getByText("No certificates match the filters.")).toBeInTheDocument()
+  })
+
   it("says how to get the first certificate when there are none", () => {
-    render(<CertificateTable certs={[]} renderDomain={(d) => <span>{d}</span>} />)
+    render(<CertificateTable certs={[]} linkedDomains={new Set()} renderSiteLink={siteLink} />)
     expect(screen.getByText(/No site has a certificate yet/)).toBeInTheDocument()
     expect(screen.queryByRole("table")).not.toBeInTheDocument()
+  })
+})
+
+describe("lib/table", () => {
+  it("matches every term, ignoring case, across the fields", () => {
+    expect(matchesQuery(["Shop.Test", "R11"], "shop r1")).toBe(true)
+    expect(matchesQuery(["Shop.Test", "R11"], "shop zzz")).toBe(false)
+    expect(matchesQuery([null, 42], "42")).toBe(true)
+    expect(matchesQuery(["x"], "   ")).toBe(true)
   })
 })
 
