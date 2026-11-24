@@ -30,10 +30,11 @@ func commandSet(stdout io.Writer) []*command {
 		},
 		{
 			name:    "upgrade",
-			summary: "replace the binary and migrate",
-			usage:   "pbp upgrade",
-			run: func(ctx context.Context, _ []string) error {
-				return upgradePanel(ctx, stdout)
+			summary: "download the latest release, replace the binary and migrate",
+			usage:   "pbp upgrade [--local | --version <tag>]",
+			maxArgs: 2,
+			run: func(ctx context.Context, args []string) error {
+				return upgradePanel(ctx, stdout, args)
 			},
 		},
 		{
