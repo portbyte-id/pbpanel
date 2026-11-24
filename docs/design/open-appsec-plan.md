@@ -1,6 +1,7 @@
 # open-appsec as a second WAF engine: plan
 
-Status: **plan + step 0 spike complete (2026-11-25); blocked on D5; steps 1-8 not built.**
+Status: **plan + step 0 spike complete (2026-11-25); D5 decided (accept, marked as tracking);
+steps 1-8 in progress.**
 
 Written after reading the current firewall (`internal/waf/*`, `internal/sites/waf.go`), the nginx
 build recipe (`internal/nginx/builder.Dockerfile`, `builder.go`, `paths.go`) and the monitor
@@ -914,6 +915,27 @@ running agent into non-enforcement, because the fog is on the policy *and* healt
 
 **Consequence for D5.** The only honest options are (a) ship and document the cloud link loudly, or
 (c) do not ship. A "standalone" install is not a third option.
+
+**D5 decision — 2026-11-25: option (a), accept with a prominent tracking mark.** The operator
+chose to ship open-appsec and mark clearly, wherever the engine is offered, that using this WAF
+variant can subject the host and its traffic to Check Point's tracking. This is a product
+requirement, not only a doc note, and it binds steps 2, 6 and 8:
+
+- **Step 2 (Store):** the open-appsec card and the install confirmation must state, before the
+  operator can install, that the agent holds a continuous TLS connection to Check Point's cloud and
+  that using this engine can subject the host to tracking. Installation requires an explicit
+  acknowledgement of that same text.
+- **Step 6 (site UI):** the engine picker marks open-appsec with the same warning inline, so the
+  choice is never made without seeing it.
+- **Step 2/6 (firewall overview and events page):** a site running open-appsec is marked as such, so
+  an operator reading the firewall page can see which sites carry the engine.
+- **Step 8 (docs):** the warning appears in the firewall section of the operator docs and in the
+  handover note, with the measured facts from 0.7 (hostnames, the 45-day reconnect requirement, and
+  that the traffic is on the policy-apply path).
+
+The warning text must be accurate rather than vague: name Check Point, name that the connection is
+continuous and required, and say that enforcement degrades without it. Do not euphemise it as
+"telemetry optional" — 0.7 and 6.1 show it is neither optional nor telemetry-only.
 
 ### 6.2 A host conflict that weakens part of 0.9's evidence
 
