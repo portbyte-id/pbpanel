@@ -10,6 +10,9 @@ import { Sidebar } from "@/components/layout/Sidebar"
 import { UserMenu } from "@/components/layout/UserMenu"
 import { useMe } from "@/lib/queries"
 
+/** Pages that use the whole content width instead of the centred column. */
+const FULL_WIDTH_PATHS = ["/files", "/logs", "/traffic"]
+
 /**
  * The signed-in frame: sidebar, header and the routed page.
  *
@@ -46,7 +49,7 @@ export function AppLayout() {
       <Sidebar />
       <MobileNav open={navOpen} onOpenChange={setNavOpen} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="border-border bg-background/90 z-30 flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4 backdrop-blur pointer-coarse:h-12">
+        <header className="border-border bg-background/90 z-30 flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4 backdrop-blur sm:px-6 pointer-coarse:h-12">
           <div className="flex min-w-0 items-center gap-2 md:items-baseline md:gap-3">
             <button
               type="button"
@@ -74,9 +77,12 @@ export function AppLayout() {
           </div>
         </header>
         {/* Only <main> scrolls; the header and footer stay pinned to the frame. */}
-        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 outline-none">
-          {current && <p className="text-muted-foreground mb-3 text-sm md:hidden">{current.description}</p>}
-          <Outlet />
+        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 outline-none sm:px-6">
+          {/* Pages are centred in a readable column; the file manager and logs need the width, so they fill it. */}
+          <div className={FULL_WIDTH_PATHS.some((p) => path.startsWith(p)) ? "w-full" : "mx-auto w-full max-w-[84rem]"}>
+            {current && <p className="text-muted-foreground mb-3 text-sm md:hidden">{current.description}</p>}
+            <Outlet />
+          </div>
         </main>
         <footer className="border-border bg-background text-muted-foreground z-30 flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t px-4 py-2 text-xs">
           <span>Server Panel</span>

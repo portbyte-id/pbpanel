@@ -32,7 +32,7 @@ export function SettingField({
   const errorId = `${id}-error`
 
   return (
-    <div className="flex flex-col gap-1.5 py-3" data-setting={setting.name}>
+    <div className="flex flex-col gap-2 py-4" data-setting={setting.name}>
       <div className="flex items-center justify-between gap-3">
         <Label htmlFor={id} className="font-mono text-sm">
           {setting.name}
@@ -108,7 +108,7 @@ function SettingControl({
           {...shared}
           value={value === "true" ? "true" : "false"}
           onChange={(e) => onChange(e.target.value)}
-          className="max-w-48"
+          className="w-full"
         >
           <option value="true">Enabled</option>
           <option value="false">Disabled</option>
@@ -121,7 +121,7 @@ function SettingControl({
           {...shared}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="max-w-md"
+          className="w-full"
         >
           {/* A value saved before the list was fixed (a custom CA URL) stays
               selectable, so opening the page never silently changes it. */}
@@ -148,20 +148,20 @@ function SettingControl({
           max={setting.type === "port" ? 65535 : undefined}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="max-w-48"
+          className="w-full"
         />
       )
 
     case "duration":
       return (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-1.5">
           <Input
             {...shared}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="30m"
             spellCheck={false}
-            className="max-w-48 font-mono"
+            className="w-full font-mono"
           />
           <span className="text-muted-foreground text-xs">e.g. 90s, 30m, 2h</span>
         </div>

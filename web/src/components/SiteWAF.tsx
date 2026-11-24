@@ -206,7 +206,7 @@ function WafForm({
               </p>
             </fieldset>
 
-            <div className="flex max-w-md flex-col gap-1.5">
+            <div className="flex w-full flex-col gap-1.5">
               <Label htmlFor={`${id}-paranoia`}>Paranoia level</Label>
               <Select
                 id={`${id}-paranoia`}

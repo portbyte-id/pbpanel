@@ -26,8 +26,8 @@ export function Panel({
   bodyClassName?: string
 }) {
   return (
-    <section aria-label={title} className={cn("bg-card flex min-w-0 flex-col rounded-lg border", className)}>
-      <div className="border-border flex h-9 shrink-0 items-center justify-between gap-3 border-b px-3">
+    <section aria-label={title} className={cn("bg-card flex min-w-0 flex-col rounded-xl border shadow-xs", className)}>
+      <div className="border-border flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4">
         <div className="flex min-w-0 items-baseline gap-2">
           <h2 className="text-sm font-semibold">{title}</h2>
           {note && <p className="text-muted-foreground truncate text-xs">{note}</p>}

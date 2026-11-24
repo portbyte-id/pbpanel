@@ -22,7 +22,7 @@ const buttonVariants = cva(
       size: {
         // On a touch screen (`pointer-coarse`) every size grows to a 40px target
         // minimum; mouse users keep the compact desktop sizes.
-        default: "h-8 px-3 has-[>svg]:px-2.5 pointer-coarse:h-10",
+        default: "h-9 px-4 has-[>svg]:px-3 pointer-coarse:h-10",
         sm: "h-7 rounded-md gap-1.5 px-2.5 text-xs has-[>svg]:px-2 pointer-coarse:h-10",
         lg: "h-9 rounded-md px-5 has-[>svg]:px-4 pointer-coarse:h-11",
         icon: "size-8 pointer-coarse:size-10",

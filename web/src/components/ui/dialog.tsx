@@ -49,7 +49,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2.5rem)] min-w-[min(500px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 gap-3 rounded-lg border p-4 shadow-xl sm:max-w-[500px]",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2.5rem)] min-w-[min(500px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border p-6 shadow-2xl sm:max-w-[560px]",
           className,
         )}
         {...props}
@@ -58,7 +58,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring absolute top-2 right-2 grid size-7 place-items-center rounded-md transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none pointer-coarse:size-10"
+            className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring absolute top-4 right-4 grid size-8 place-items-center rounded-md transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none pointer-coarse:size-10"
           >
             <XIcon className="size-4" aria-hidden="true" />
             <span className="sr-only">Close</span>
@@ -93,7 +93,7 @@ function DialogTitle({ className, ...props }: React.ComponentProps<typeof Dialog
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-md leading-tight font-semibold", className)}
+      className={cn("text-lg leading-tight font-semibold tracking-tight", className)}
       {...props}
     />
   )
