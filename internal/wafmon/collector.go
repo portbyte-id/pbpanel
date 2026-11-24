@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -198,13 +200,11 @@ type Collector struct {
 	pollMu sync.Mutex
 	tails  map[string]*tail
 
-	// appsec is the one tail of the agent's event log, and appsecPath the file it
-	// is following. The agent writes one log for every site and rotates by
-	// renumbering it, so a single tail follows the live file rather than a
-	// per-path map that would re-read the rotated siblings and count their events
-	// again. See appsecLiveFile.
-	appsec     *tail
-	appsecPath string
+	// appsecTails tails the agent's numbered event logs, one per worker. Each
+	// worker writes its own `cp-nano-http-transaction-handler.log<N>`, so the
+	// monitor reads all of them; a tail per path gives each the same rotation
+	// handling the site logs get, and the tails of files that vanish are dropped.
+	appsecTails map[string]*tail
 
 	mu     sync.RWMutex
 	sites  map[string]*siteData
@@ -218,7 +218,7 @@ type Collector struct {
 func New(o Options) *Collector {
 	c := &Collector{
 		dir: o.Dir, appsecDir: o.AppsecDir, now: o.Now, log: o.Logger,
-		tails: map[string]*tail{}, sites: map[string]*siteData{},
+		tails: map[string]*tail{}, sites: map[string]*siteData{}, appsecTails: map[string]*tail{},
 	}
 	if c.appsecDir == "" {
 		c.appsecDir = DefaultAppsecDir
@@ -381,7 +381,7 @@ func (c *Collector) Poll() {
 			}
 			continue
 		}
-		c.ingest(sourceSite, domain, audit, lines)
+		c.ingest(domain, audit, lines)
 	}
 	for path := range c.tails {
 		if !seen[path] {
@@ -409,88 +409,94 @@ func (c *Collector) Poll() {
 	c.mu.Unlock()
 }
 
-// pollAppsec reads the agent's event log, if the agent is installed. A missing
+// pollAppsec reads the agent's event logs, if the agent is installed. A missing
 // directory means "no events", not an error: this host may never run open-appsec.
 // It returns the sites the events named, so a site that only ever runs
 // open-appsec is not dropped for having no log file of its own.
+//
+// There is one log per worker, and each worker writes its own file, so every
+// numbered file is read; one file is only a fraction of the traffic. The events
+// are ordered by their own eventTime after parsing, never by file name, because
+// the numbering is the vendor's rotation scheme and a lower number is not older.
 func (c *Collector) pollAppsec() []string {
-	path, ok := c.appsecLiveFile()
-	if !ok {
-		return nil
-	}
-	if path != c.appsecPath {
-		if c.appsecPath != "" {
-			c.log.Info("waf monitor: open-appsec log switched", "was", c.appsecPath, "now", path)
+	paths := c.appsecLogFiles()
+	seen := make(map[string]bool, len(paths))
+	var parsed []Event
+	for _, path := range paths {
+		seen[path] = true
+		t := c.appsecTails[path]
+		if t == nil {
+			t = &tail{}
+			c.appsecTails[path] = t
 		}
-		c.appsecPath = path
-	}
-	if c.appsec == nil {
-		c.appsec = &tail{}
-	}
-	lines, err := c.appsec.read(path)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			c.log.Warn("waf monitor: read the open-appsec log", "file", path, "error", err)
+		lines, err := t.read(path)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				c.log.Warn("waf monitor: read an open-appsec log", "file", path, "error", err)
+			}
+			continue
 		}
-		return nil
+		for _, l := range lines {
+			if e, ok := ParseOpenAppsec(l); ok {
+				parsed = append(parsed, e)
+			}
+		}
 	}
-	return c.ingest(sourceAppsec, "", false, lines)
+	// A file the agent retired is forgotten, so a later file reusing its name
+	// starts from the top rather than from a stale offset.
+	for path := range c.appsecTails {
+		if !seen[path] {
+			delete(c.appsecTails, path)
+		}
+	}
+	// The numbering is the vendor's rotation scheme, so a lower-numbered file is
+	// not necessarily older; the ring is ordered by each event's own eventTime.
+	// The sort is stable so events of equal time keep their file and line order.
+	sort.SliceStable(parsed, func(i, j int) bool { return parsed[i].Time.Before(parsed[j].Time) })
+	return c.ingestAppsec(parsed)
 }
 
-// appsecLiveFile returns the agent's live event log. The agent writes the bare
-// `cp-nano-http-transaction-handler.log` and, on its own rotation, renumbers the
-// files it retires into `.log1`, `.log2`, and so on; `.dbg` files are the agent's
-// own debug output and are never an event log.
-//
-// The bare name wins whenever it exists, which is the normal case and the only
-// one where following it can never double count. When it is gone, the path
-// already being followed is kept if it still exists; only when that is gone too
-// is the newest numbered sibling taken. Following "the newest file" instead would
-// re-read a rotated sibling from the top as soon as a clock or a rename made it
-// the newest, counting its events twice.
-func (c *Collector) appsecLiveFile() (string, bool) {
+// appsecLogFiles returns the agent's event logs: every
+// `cp-nano-http-transaction-handler.log<N>` in the directory. There is no bare
+// `cp-nano-http-transaction-handler.log` on a real host; the bare name in the
+// agent's configuration is only the template each worker suffixes with its id
+// (step 4 findings, section E). The `.dbg<N>` files are the agent's own debug
+// output and the `.err<N>` files its errors, so neither is an event log.
+func (c *Collector) appsecLogFiles() []string {
 	entries, err := os.ReadDir(c.appsecDir)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			c.log.Warn("waf monitor: list the open-appsec log directory", "dir", c.appsecDir, "error", err)
 		}
-		return "", false
+		return nil
 	}
-	live := filepath.Join(c.appsecDir, appsecLogPrefix)
-	var numbered []string
+	var paths []string
 	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, appsecLogPrefix) || strings.HasSuffix(name, ".dbg") || !e.Type().IsRegular() {
-			continue
-		}
-		if name == appsecLogPrefix {
-			return live, true
-		}
-		numbered = append(numbered, filepath.Join(c.appsecDir, name))
-	}
-	if c.appsecPath != "" {
-		for _, p := range numbered {
-			if p == c.appsecPath {
-				return p, true
-			}
+		if appsecLogNumber(e.Name()) >= 0 && e.Type().IsRegular() {
+			paths = append(paths, filepath.Join(c.appsecDir, e.Name()))
 		}
 	}
-	if len(numbered) == 0 {
-		return "", false
+	return paths
+}
+
+// appsecLogNumber reports which worker's log name is, or -1 when it is not one.
+// The name must be the handler prefix followed by one or more digits and nothing
+// else, so `.dbg1`, `.err1`, `-install.log` and a bare `.log` are all excluded.
+func appsecLogNumber(name string) int {
+	digits, ok := strings.CutPrefix(name, appsecLogPrefix)
+	if !ok || digits == "" {
+		return -1
 	}
-	// No bare file and the followed one is gone: take the newest sibling. The
-	// tail's own read starts it from a fresh offset.
-	newest, newestAt := "", time.Time{}
-	for _, p := range numbered {
-		info, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		if newest == "" || info.ModTime().After(newestAt) {
-			newest, newestAt = p, info.ModTime()
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return -1
 		}
 	}
-	return newest, newest != ""
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 func (c *Collector) bucketFor(domain string, at time.Time) *bucket {
@@ -508,49 +514,16 @@ func (c *Collector) bucketFor(domain string, at time.Time) *bucket {
 	return b
 }
 
-// sourceSite and sourceAppsec name the two kinds of log line ingest reads:
-// per-site files, and the agent's single log whose events name their own host.
-const (
-	sourceSite = iota
-	sourceAppsec
-)
-
-// ingest reads one batch of lines and reports the sites an open-appsec event
-// named, so Poll can keep a site alive that has no log file of its own.
-func (c *Collector) ingest(source int, domain string, audit bool, lines []string) []string {
+// ingest reads one batch of site-log lines.
+func (c *Collector) ingest(domain string, audit bool, lines []string) {
 	if len(lines) == 0 {
-		return nil
+		return
 	}
 	now := c.now()
 	horizon := now.Add(-Retention)
-	var routed []string
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, l := range lines {
-		if source == sourceAppsec {
-			e, ok := ParseOpenAppsec(l)
-			if !ok {
-				continue
-			}
-			if e.Time.IsZero() {
-				e.Time = now
-			}
-			// The site comes from the event's own Host header. An event whose host
-			// is no site stays in the ring with an empty site, the way an access
-			// line for an unknown host still counts in the totals: the events page
-			// shows it, and the per-site views ignore it.
-			c.evSeq++
-			e.Seq = c.evSeq
-			c.events.push(e)
-			if e.Site == "" {
-				continue
-			}
-			routed = append(routed, e.Site)
-			if !e.Time.Before(horizon) {
-				c.bucketFor(e.Site, e.Time).waf++
-			}
-			continue
-		}
 		if audit {
 			e, ok := ParseAudit(l)
 			if !ok {
@@ -581,6 +554,38 @@ func (c *Collector) ingest(source int, domain string, audit bool, lines []string
 		c.reqs.push(r)
 		if !r.Time.Before(horizon) {
 			c.bucketFor(domain, r.Time).add(r)
+		}
+	}
+}
+
+// ingestAppsec files the agent's parsed events, already ordered by eventTime, and
+// returns the sites they named.
+func (c *Collector) ingestAppsec(events []Event) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	now := c.now()
+	horizon := now.Add(-Retention)
+	var routed []string
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range events {
+		if e.Time.IsZero() {
+			e.Time = now
+		}
+		// The site comes from the event's own Host header. An event whose host is
+		// no site stays in the ring with an empty site, the way an access line for
+		// an unknown host still counts in the totals: the events page shows it,
+		// and the per-site views ignore it.
+		c.evSeq++
+		e.Seq = c.evSeq
+		c.events.push(e)
+		if e.Site == "" {
+			continue
+		}
+		routed = append(routed, e.Site)
+		if !e.Time.Before(horizon) {
+			c.bucketFor(e.Site, e.Time).waf++
 		}
 	}
 	return routed
