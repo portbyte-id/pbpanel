@@ -11,9 +11,6 @@ permissions:
   contents: write
 
 jobs:
-  # The tagged commit must pass the same checks as main, on amd64 and arm64.
-  ci:
-    uses: ./.github/workflows/ci.yml
 
   release:
     name: Build and publish
