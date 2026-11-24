@@ -1,6 +1,6 @@
 # open-appsec as a second WAF engine: plan
 
-Status: **plan + step 0 spike complete (2026-11-25); steps 1-8 not built.**
+Status: **plan + step 0 spike complete (2026-11-25); blocked on D5; steps 1-8 not built.**
 
 Written after reading the current firewall (`internal/waf/*`, `internal/sites/waf.go`), the nginx
 build recipe (`internal/nginx/builder.Dockerfile`, `builder.go`, `paths.go`) and the monitor
@@ -877,3 +877,70 @@ final window, so it is **still installed at hand-off** — remove it again with 
 host must be clean. Inert leftovers the uninstaller does not reap:
 `/dev/shm/{check-point,static_resources,cp_nano_http_attachment_conf}`.
 `panel.service` and `panel-nginx.service` are active and serving.
+
+### 6.1 Follow-up: is there a standalone mode that avoids the cloud?
+
+**No.** Checked on 2026-11-25 because D5 turned on whether the agent can run without egress.
+
+**The vendor documents "standalone", but it is the mode 0.7 already measured.** The docs describe
+*Declarative Management* vs *Central Management*, and the Helm/compose `standalone` profile as
+"locally managed … with no connection to central management WebUI (SaaS)". The agents page is
+unqualified by mode: "make sure to have outbound communication allowed from your agent", naming
+`https://inext-agents.cloud.ngen.checkpoint.com`. "No cloud *console*" is not "no cloud *egress*".
+
+**The vendor's own script rewrites `--standalone` into `hybrid_mode`** — it is a label, not a
+separate code path (`open-appsec-ctl.sh:1494-1498`; same at `cp-nano-agent-ctl.sh:1371-1375`):
+
+```
+$ sed -n '1494,1498p' /etc/cp/scripts/open-appsec-ctl.sh
+if [ "$current_var" = "--online_mode" ] || [ "$current_var" = "--offline_mode" ] || [ "$current_var" = "--standalone" ]; then
+    mode=$(echo $current_var | sed 's/-//g')
+    if [ "$mode" = "standalone" ]; then
+        mode="hybrid_mode"
+    fi
+```
+
+The installed agent confirms it: `/etc/cp/conf/agent_details.json` records
+`"Orchestration mode": "hybrid_mode"` while `--status` prints `Management mode: Local management`.
+
+**Blocking the fog is worse than 0.7 recorded: it stops enforcement, not just policy pushes.**
+With `iptables -I OUTPUT -j <chain rejecting the two fog addresses>`, a `--apply-policy` of a
+*modified* policy **hung past a 120 s timeout** (never returned), the agent fell to
+`Policy load status: Error`, and an SQL-injection request returned **200** — the same fail-open
+200 that a healthy agent gives only to benign traffic. Removing the block made the same command
+finish immediately (`New policy applied.`, `Policy load status: Success`). So plan option (b)
+("firewall egress, accept that policy apply fails") does not hold: an egress block degrades the
+running agent into non-enforcement, because the fog is on the policy *and* health path.
+
+**Consequence for D5.** The only honest options are (a) ship and document the cloud link loudly, or
+(c) do not ship. A "standalone" install is not a third option.
+
+### 6.2 A host conflict that weakens part of 0.9's evidence
+
+Found 2026-11-25 while restoring the box. **`nginx.service` — the distro nginx 1.28.3 installed on
+the host on 2026-11-19 — was `enabled` and active, and also bound `:80`.** It serves no site, but
+`SO_REUSEPORT` put both listeners on port 80, so requests were split between the panel's nginx
+(with the attachment) and the bare distro one:
+
+```
+$ ss -tlnp | grep ':80 '
+LISTEN … users:(("nginx",pid=87751,fd=7),("nginx",pid=87748,fd=7),…,("nginx",pid=1391,fd=7))
+```
+
+Any request → 200 could therefore have been the bare nginx, not the agent failing open. **0.9's
+fail-open result stands** (it also checked `nginx -t`), but a smoke test that sends an attack and
+expects 403 must first assert that only the panel's nginx owns the port. It is now
+`inactive`/`disabled`.
+
+**Boot-order hazard:** `systemctl stop nginx.service` also took down `panel-nginx.service`, so the
+two share a listener in a way that is not safe across a reboot. Step 7 (host gate) and the installer
+should assert the serving port has exactly one owner.
+
+**One thing this follow-up could not settle.** After restoring the module from the surviving Docker
+build layer and re-adding the site directive, all four workers registered
+(`successfully registered to nano service`) and `/dev/shm` matched 0.4's contract, but the agent
+wrote no `Web Request` event for a repeat SQL-injection — only `Nano-service started`. The module's
+three `NEEDED` libraries all resolve, and the two files the install prefix lacked
+(`libnano_attachment{,_util}.so`) are not among them. Whether this is a consequence of the
+hand-restored prefix, of the policy rebuild under blocked egress, or of something else was not
+established; **step 1's real build (not a hand-copied prefix) is the place to settle it.**
