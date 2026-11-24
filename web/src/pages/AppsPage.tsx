@@ -1,5 +1,3 @@
-import { ErrorState } from "@/components/ErrorState"
-import { SkeletonRows } from "@/components/ui/skeleton"
 import { Link } from "@tanstack/react-router"
 import { Plus } from "lucide-react"
 import { useState } from "react"
@@ -16,8 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ApiError, type AppAction, type PanelApp, type Site } from "@/lib/api"
-import { useApps, useControlApp, useDeleteApp, useSites } from "@/lib/queries"
+import { ApiError, type AppAction, type AppType, type PanelApp, type Site } from "@/lib/api"
+import { useControlApp, useDeleteApp } from "@/lib/queries"
+import { tabForApp } from "@/lib/sitesTabs"
 
 export function typeLabel(app: Pick<PanelApp, "type" | "node_version">): string {
   if (app.type === "node") return `Node.js ${app.node_version}`
@@ -44,33 +43,39 @@ export function isRunning(app: Pick<PanelApp, "state">): boolean {
   return app.state === "RUNNING" || app.state === "STARTING"
 }
 
-/** The apps: their state, controls, logs, and a shortcut to put a site in front of one. */
-export function AppsPage() {
-  const { data, isPending, error, refetch } = useApps()
+/**
+ * The apps of one type, with their controls, logs, and a shortcut to put a site in
+ * front of one. Each app tab of the Sites page shows one of these.
+ */
+export function AppsTable({
+  type,
+  apps,
+  sites,
+  intro,
+  empty,
+}: {
+  type: AppType
+  /** Every app of the panel; this shows the ones of `type`. */
+  apps: PanelApp[]
+  sites: Site[]
+  /** What this kind of app is, shown above the table. */
+  intro: string
+  /** Shown when there are no apps of this type. */
+  empty: string
+}) {
   const control = useControlApp()
   const remove = useDeleteApp()
-  // Domains are a nicety here: if the sites fail to load the list still works.
-  const sites = useSites().data ?? []
   const [editing, setEditing] = useState<PanelApp | "new" | null>(null)
   const [logsFor, setLogsFor] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PanelApp | null>(null)
 
-  if (isPending) {
-    return <SkeletonRows label="Loading apps…" />
-  }
-  if (error) {
-    return <ErrorState error={error} fallback="The apps could not be loaded." onRetry={() => void refetch()} />
-  }
-
+  const rows = apps.filter((app) => app.type === type)
   const act = (name: string, action: AppAction) => control.mutate({ name, action })
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-muted-foreground max-w-2xl text-sm">
-          Programs that run in the background under supervisord. They keep running when the panel
-          restarts, and start again if they exit.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <p className="text-muted-foreground max-w-2xl text-sm">{intro}</p>
         <Button onClick={() => setEditing("new")}>
           <Plus aria-hidden /> Add app
         </Button>
@@ -82,13 +87,12 @@ export function AppsPage() {
         </p>
       )}
 
-      {data.length === 0 ? (
-        <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">
-          No apps yet. Add a compiled program or a Node.js app to run it.
-        </p>
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">{empty}</p>
       ) : (
         <div className="border-border overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
+            <caption className="sr-only">Apps of this type</caption>
             <thead className="bg-muted text-muted-foreground text-left text-xs">
               <tr>
                 <th scope="col" className="px-3 py-1.5 font-medium">Name</th>
@@ -104,7 +108,7 @@ export function AppsPage() {
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {data.map((app) => (
+              {rows.map((app) => (
                 <tr key={app.name}>
                   <td className="px-3 py-1.5 font-medium">{app.name}</td>
                   <td className="text-muted-foreground px-3 py-1.5">{typeLabel(app)}</td>
@@ -129,6 +133,7 @@ export function AppsPage() {
                             key={d}
                             to="/sites/$domain"
                             params={{ domain: d }}
+                            search={{ tab: tabForApp(app.type) }}
                             className="underline-offset-4 hover:underline"
                           >
                             {d}
@@ -159,7 +164,7 @@ export function AppsPage() {
                       </Button>
                       {app.proxy_url !== "" && (
                         <Button size="sm" variant="outline" asChild>
-                          <Link to="/sites" search={{ proxy: app.proxy_url }}>
+                          <Link to="/sites" search={{ proxy: app.proxy_url, tab: tabForApp(app.type) }}>
                             Add domain
                           </Link>
                         </Button>
@@ -182,6 +187,7 @@ export function AppsPage() {
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
         app={editing === "new" ? null : editing}
+        defaultType={type}
       />
 
       <Dialog open={logsFor !== null} onOpenChange={(open) => !open && setLogsFor(null)}>
