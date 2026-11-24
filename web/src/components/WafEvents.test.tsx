@@ -14,7 +14,15 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
-  return { ...actual, api: { sites: vi.fn(), wafEvents: vi.fn(), wafEventSummary: vi.fn() } }
+  return {
+    ...actual,
+    api: {
+      sites: vi.fn(),
+      wafEvents: vi.fn(),
+      wafEventSummary: vi.fn(),
+      wafEventsAbuseIPDBUrl: vi.fn(() => "/api/waf/events/abuseipdb?site=a.test&action=blocked"),
+    },
+  }
 })
 
 const event = (seq: number, over: Partial<WafEvent> = {}): WafEvent => ({
@@ -103,7 +111,14 @@ describe("WafEvents", () => {
     expect(within(rows[1]).getByText("942100")).toBeInTheDocument()
     expect(await screen.findByText("9 blocked")).toBeInTheDocument()
     expect(screen.getByText("3 detected")).toBeInTheDocument()
-    expect(screen.getByText("Showing 2 of 2 events.")).toBeInTheDocument()
+    expect(screen.getByText("Showing 1–2 of 2 events.")).toBeInTheDocument()
+  })
+
+  it("offers the filtered set as an AbuseIPDB export", async () => {
+    renderEvents()
+    const link = await screen.findByRole("link", { name: "Export to AbuseIPDB" })
+    expect(link).toHaveAttribute("href", "/api/waf/events/abuseipdb?site=a.test&action=blocked")
+    expect(link).toHaveAttribute("download")
   })
 
   it("passes each filter to the server", async () => {
@@ -176,20 +191,26 @@ describe("WafEvents", () => {
     })
   })
 
-  it("loads older events with the last sequence number as the cursor", async () => {
+  it("pages older with the last sequence number as the cursor, and back to newer", async () => {
     const user = userEvent.setup()
     const first = Array.from({ length: 50 }, (_, i) => event(100 - i))
     vi.mocked(api.wafEvents)
       .mockResolvedValueOnce(page(first, { total: 60 }))
-      .mockResolvedValueOnce(page([event(10), event(9)], { total: 60 }))
+      .mockResolvedValueOnce(page([event(10), event(9)], { total: 60, next_before: 0 }))
+      .mockResolvedValueOnce(page(first, { total: 60 }))
     renderEvents()
 
-    await screen.findByText("Showing 50 of 60 events.")
-    await user.click(screen.getByRole("button", { name: "Load older" }))
+    await screen.findByText("Showing 1–50 of 60 events.")
+    expect(screen.getByRole("button", { name: "Newer" })).toBeDisabled()
+    await user.click(screen.getByRole("button", { name: "Older" }))
 
-    await screen.findByText("Showing 52 of 60 events.")
-    expect(vi.mocked(api.wafEvents).mock.calls[1][0]).toEqual(expect.objectContaining({ before: 51 }))
-    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument()
+    await screen.findByText("Showing 51–52 of 60 events.")
+    expect(vi.mocked(api.wafEvents).mock.calls[1][0]).toEqual(expect.objectContaining({ before: 51, limit: 50 }))
+    expect(screen.getByRole("button", { name: "Older" })).toBeDisabled()
+
+    await user.click(screen.getByRole("button", { name: "Newer" }))
+    await screen.findByText("Showing 1–50 of 60 events.")
+    expect(vi.mocked(api.wafEvents).mock.calls[2][0]).toEqual(expect.objectContaining({ before: undefined }))
   })
 
   it("explains an empty audit log and an unavailable one", async () => {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -17,6 +18,7 @@ type WAFMonitor interface {
 	Traffic(site string, window time.Duration) wafmon.Traffic
 	Requests(q wafmon.RequestQuery) wafmon.RequestPage
 	Events(q wafmon.EventQuery) wafmon.EventPage
+	Matching(q wafmon.EventQuery) []wafmon.Event
 	Summary(site string, window time.Duration) wafmon.Summary
 }
 
@@ -50,6 +52,7 @@ func (s *server) wafMonRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/waf/requests", h(s.wafRequests))
 	mux.Handle("GET /api/waf/events", h(s.wafEvents))
 	mux.Handle("GET /api/waf/events/summary", h(s.wafEventsSummary))
+	mux.Handle("GET /api/waf/events/abuseipdb", h(s.wafEventsAbuseIPDB))
 }
 
 // wafParams reads query parameters and remembers the first bad one.
@@ -173,7 +176,44 @@ func (s *server) wafRequests(m WAFMonitor, w http.ResponseWriter, r *http.Reques
 
 func (s *server) wafEvents(m WAFMonitor, w http.ResponseWriter, r *http.Request) {
 	p := newWAFParams(w, r)
-	q := wafmon.EventQuery{Site: p.site(), IP: p.ip(), Q: p.text("q"), Limit: p.limit(), Before: p.seq("before")}
+	q := wafEventFilters(p)
+	q.Limit = p.limit()
+	q.Before = p.seq("before")
+	if p.done {
+		return
+	}
+	writeJSON(w, http.StatusOK, m.Events(q))
+}
+
+// wafEventsAbuseIPDB streams the events that match the filters as an AbuseIPDB
+// bulk-report CSV. It takes the same filters as the events list and no paging: the
+// export is the whole filtered set, so the file matches what the table would show
+// if it were not paged.
+func (s *server) wafEventsAbuseIPDB(m WAFMonitor, w http.ResponseWriter, r *http.Request) {
+	p := newWAFParams(w, r)
+	q := wafEventFilters(p)
+	if p.done {
+		return
+	}
+	// Built in memory first, so a failure never leaves a 200 and a half file behind
+	// the error the browser would otherwise save as the download.
+	var buf bytes.Buffer
+	if err := wafmon.WriteAbuseIPDB(&buf, m.Matching(q)); err != nil {
+		s.writeInternal(w, r, err)
+		return
+	}
+	name := "waf-events-abuseipdb-" + time.Now().UTC().Format("20060102") + ".csv"
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", contentDisposition(name))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+}
+
+// wafEventFilters reads the filters the events list and its export share. Paging
+// is left to the caller: the list adds limit and before, the export has neither.
+func wafEventFilters(p *wafParams) wafmon.EventQuery {
+	q := wafmon.EventQuery{Site: p.site(), IP: p.ip(), Q: p.text("q")}
 	if v := p.get("rule"); v != "" {
 		if !wafRulePattern.MatchString(v) {
 			p.fail("rule", "rule must be a numeric rule id")
@@ -192,10 +232,7 @@ func (s *server) wafEvents(m WAFMonitor, w http.ResponseWriter, r *http.Request)
 		}
 		q.Action = v
 	}
-	if p.done {
-		return
-	}
-	writeJSON(w, http.StatusOK, m.Events(q))
+	return q
 }
 
 func (s *server) wafEventsSummary(m WAFMonitor, w http.ResponseWriter, r *http.Request) {

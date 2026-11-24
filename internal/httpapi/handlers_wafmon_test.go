@@ -33,6 +33,12 @@ func (f *fakeWAFMon) Events(q wafmon.EventQuery) wafmon.EventPage {
 	return wafmon.EventPage{Events: []wafmon.Event{}, Total: 0}
 }
 
+func (f *fakeWAFMon) Matching(q wafmon.EventQuery) []wafmon.Event {
+	f.evQ = q
+	return []wafmon.Event{{Seq: 7, Site: "a.test", IP: "198.51.100.4", Action: wafmon.ActionBlocked, RuleID: "942100",
+		Message: "SQL Injection Attack Detected via libinjection", Time: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)}}
+}
+
 func (f *fakeWAFMon) Summary(site string, w time.Duration) wafmon.Summary {
 	f.summary, f.window = site, w
 	return wafmon.Summary{TopRules: []wafmon.RuleRow{}, BySite: []wafmon.SiteCount{}, ByAction: map[string]int{}}

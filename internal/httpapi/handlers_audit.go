@@ -28,6 +28,9 @@ type auditResponse struct {
 	// Limit is the page size that was applied, so a client paging through the
 	// trail knows how many it asked for.
 	Limit int `json:"limit"`
+	// NextBefore is the `before` value of the next, older page, or 0 on the last
+	// one. It is the id of the oldest entry on this page.
+	NextBefore int64 `json:"next_before"`
 }
 
 const (
@@ -35,7 +38,9 @@ const (
 	auditMaxLimit     = 500
 )
 
-// handleAudit returns the newest audit entries, newest first.
+// handleAudit returns the newest audit entries, newest first. With ?before= it
+// returns the page of entries older than that id, so a client can walk back
+// through the trail without the list shifting under it as new writes land.
 func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit, ok := auditLimit(r)
 	if !ok {
@@ -43,10 +48,17 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			"limit must be a whole number between 1 and "+itoa(auditMaxLimit))
 		return
 	}
+	before, ok := auditBefore(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errBadRequest, "before must be a positive entry id")
+		return
+	}
 
+	// One extra row says whether an older page exists, without a second query.
 	rows, err := s.deps.Store.DB().QueryContext(r.Context(),
 		`SELECT id, at, actor, action, target, result, detail
-		   FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
+		   FROM audit_log WHERE (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`,
+		before, before, limit+1)
 	if err != nil {
 		s.writeInternal(w, r, err)
 		return
@@ -81,7 +93,25 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		s.writeInternal(w, r, err)
 		return
 	}
+	if len(resp.Entries) > limit {
+		resp.Entries = resp.Entries[:limit]
+		resp.NextBefore = resp.Entries[limit-1].ID
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// auditBefore reads the optional ?before= cursor. ok is false for a value that is
+// present but not a positive id; absent means the newest page.
+func auditBefore(r *http.Request) (before int64, ok bool) {
+	raw := r.URL.Query().Get("before")
+	if raw == "" {
+		return 0, true
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
 }
 
 // auditLimit reads the optional ?limit= parameter. ok is false for a value that

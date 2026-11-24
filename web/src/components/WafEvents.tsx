@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router"
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react"
+import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react"
 import { Fragment, useEffect, useId, useMemo, useState } from "react"
 
 import { ErrorState } from "@/components/ErrorState"
@@ -9,11 +9,14 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { api } from "@/lib/api"
 import { useSites } from "@/lib/queries"
 import { toMillis, type WafAction, type WafEvent } from "@/lib/waf"
 import { useWafEvents, useWafEventSummary } from "@/lib/wafQueries"
 
 const SEVERITIES = ["CRITICAL", "ERROR", "WARNING", "NOTICE"]
+const PAGE_SIZE_CHOICES = [25, 50, 100]
+const DEFAULT_PAGE_SIZE = 50
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)
@@ -54,6 +57,8 @@ export function WafEvents() {
   const [ip, setIp] = useState("")
   const [text, setText] = useState("")
   const [open, setOpen] = useState<number | null>(null)
+  const [size, setSize] = useState(DEFAULT_PAGE_SIZE)
+  const sizeId = useId()
 
   const dRule = useDebounced(rule.trim(), 300)
   const dIp = useDebounced(ip.trim(), 300)
@@ -63,11 +68,28 @@ export function WafEvents() {
     () => ({ site, action, severity, rule: dRule, ip: dIp, q: dText }),
     [site, action, severity, dRule, dIp, dText],
   )
-  const events = useWafEvents(filters)
+
+  // The cursors of the pages above the current one, kept for the filters and size
+  // they were read with: a change to either starts again from the newest page.
+  const pageKey = JSON.stringify([filters, size])
+  const [trail, setTrail] = useState<{ key: string; cursors: number[] }>({ key: pageKey, cursors: [] })
+  const cursors = trail.key === pageKey ? trail.cursors : []
+  const before = cursors.length > 0 ? cursors[cursors.length - 1] : undefined
+
+  const events = useWafEvents(filters, before, size)
   const summary = useWafEventSummary(site, "1h")
 
-  const rows = useMemo(() => events.data?.pages.flatMap((p) => p.events) ?? [], [events.data])
-  const total = events.data?.pages[0]?.total ?? 0
+  const rows = events.data?.events ?? []
+  const total = events.data?.total ?? 0
+  const hasNewer = cursors.length > 0
+  const hasOlder = (events.data?.next_before ?? 0) > 0
+  const firstShown = cursors.length * size + 1
+
+  const olderPage = () => {
+    if (!events.data || !hasOlder) return
+    setTrail({ key: pageKey, cursors: [...cursors, events.data.next_before] })
+  }
+  const newerPage = () => setTrail({ key: pageKey, cursors: cursors.slice(0, -1) })
 
   const exclude = (domain: string, ruleId: number, uri?: string) =>
     void navigate({
@@ -194,6 +216,14 @@ export function WafEvents() {
           <RefreshCw aria-hidden="true" />
           Refresh
         </Button>
+        {total > 0 && (
+          <Button asChild variant="outline">
+            <a href={api.wafEventsAbuseIPDBUrl(filters)} download>
+              <Download aria-hidden="true" />
+              Export to AbuseIPDB
+            </a>
+          </Button>
+        )}
       </div>
 
       {events.isPending ? (
@@ -241,22 +271,32 @@ export function WafEvents() {
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <nav aria-label="WAF event pages" className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-muted-foreground text-xs" aria-live="polite">
-              Showing {rows.length} of {total} events.
+              Showing {firstShown}–{firstShown + rows.length - 1} of {total} events.
             </p>
-            {events.hasNextPage && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={events.isFetchingNextPage}
-                onClick={() => void events.fetchNextPage()}
+            <div className="flex items-center gap-2">
+              <Label htmlFor={sizeId} className="text-xs">Per page</Label>
+              <Select
+                id={sizeId}
+                className="w-20"
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
               >
-                {events.isFetchingNextPage ? "Loading…" : "Load older"}
+                {PAGE_SIZE_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+              <Button type="button" variant="outline" size="sm" disabled={!hasNewer} onClick={newerPage}>
+                Newer
               </Button>
-            )}
-          </div>
+              <Button type="button" variant="outline" size="sm" disabled={!hasOlder} onClick={olderPage}>
+                Older
+              </Button>
+            </div>
+          </nav>
         </div>
       )}
     </div>

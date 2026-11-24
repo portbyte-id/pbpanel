@@ -28,8 +28,8 @@ import { useBuffered } from "@/lib/useBuffered"
 
 /** The most lines the viewer holds; the server caps one tail at 5000, a followed one keeps adding. */
 const MAX_VIEW_LINES = 10_000
-/** Rows drawn for a search; the match list itself can be longer. */
-const MAX_RESULT_ROWS = 2_000
+/** Matches shown per page of a search; the whole list is kept and paged through. */
+const RESULT_PAGE_SIZE = 100
 
 const LAST_MB_CHOICES = [1, 4, 16, 64, 256, 1024]
 const LIMIT_CHOICES = [100, 1000, 5000, 10_000]
@@ -354,6 +354,7 @@ export function SearchPanel({ source }: { source: LogSource }) {
   const [lastMB, setLastMB] = useState(DEFAULT_LAST_MB)
   const [limit, setLimit] = useState(DEFAULT_LIMIT)
   const [state, setState] = useState<SearchState>({ phase: "idle" })
+  const [resultPage, setResultPage] = useState(0)
   const [ran, setRan] = useState<{ limit: number; lastMB: number }>({
     limit: DEFAULT_LIMIT,
     lastMB: DEFAULT_LAST_MB,
@@ -369,6 +370,7 @@ export function SearchPanel({ source }: { source: LogSource }) {
     running.current?.close()
     clear()
     setRan({ limit, lastMB })
+    setResultPage(0)
     setState({ phase: "running" })
     running.current = runSearch(
       source.id,
@@ -397,7 +399,10 @@ export function SearchPanel({ source }: { source: LogSource }) {
   const isRunning = state.phase === "running"
   const qError = state.phase === "failed" && state.field === "q" ? state.message : null
   const otherError = state.phase === "failed" && state.field !== "q" ? state.message : null
-  const shown = matches.slice(0, MAX_RESULT_ROWS)
+  const pageCount = Math.max(1, Math.ceil(matches.length / RESULT_PAGE_SIZE))
+  const currentPage = Math.min(resultPage, pageCount - 1)
+  const firstRow = currentPage * RESULT_PAGE_SIZE
+  const shown = matches.slice(firstRow, firstRow + RESULT_PAGE_SIZE)
 
   return (
     <div className="flex flex-col gap-4">
@@ -528,11 +533,35 @@ export function SearchPanel({ source }: { source: LogSource }) {
               </tbody>
             </table>
           </div>
-          {matches.length > MAX_RESULT_ROWS && (
-            <p className="text-muted-foreground text-xs">
-              Showing the first {MAX_RESULT_ROWS} of {matches.length} matches. Narrow the search to see
-              the rest.
-            </p>
+          {matches.length > RESULT_PAGE_SIZE && (
+            <nav aria-label="Search result pages" className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-muted-foreground text-xs" aria-live="polite">
+                Showing {firstRow + 1}–{firstRow + shown.length} of {matches.length} matches.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage === 0}
+                  onClick={() => setResultPage(currentPage - 1)}
+                >
+                  Previous
+                </Button>
+                <span className="text-xs tabular-nums">
+                  Page {currentPage + 1} of {pageCount}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage >= pageCount - 1}
+                  onClick={() => setResultPage(currentPage + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </nav>
           )}
         </div>
       )}

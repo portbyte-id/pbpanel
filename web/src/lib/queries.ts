@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   type QueryClient,
   queryOptions,
   useMutation,
@@ -43,7 +44,7 @@ import {
 export const queryKeys = {
   me: ["me"] as const,
   settings: ["settings"] as const,
-  audit: (limit?: number) => ["audit", limit ?? null] as const,
+  audit: (limit?: number, before?: number) => ["audit", limit ?? null, before ?? null] as const,
   sites: ["sites"] as const,
   site: (domain: string) => ["sites", domain] as const,
   siteFile: (domain: string) => ["sites", domain, "file"] as const,
@@ -120,15 +121,15 @@ export function useSettings() {
   return useQuery(settingsQuery())
 }
 
-export function auditQuery(limit?: number) {
+export function auditQuery(limit?: number, before?: number) {
   return queryOptions({
-    queryKey: queryKeys.audit(limit),
-    queryFn: () => api.audit(limit),
+    queryKey: queryKeys.audit(limit, before),
+    queryFn: () => api.audit(limit, before),
   })
 }
 
-export function useAudit(limit?: number) {
-  return useQuery(auditQuery(limit))
+export function useAudit(limit?: number, before?: number) {
+  return useQuery({ ...auditQuery(limit, before), placeholderData: keepPreviousData })
 }
 
 /**

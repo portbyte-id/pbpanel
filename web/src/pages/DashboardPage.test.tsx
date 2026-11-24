@@ -118,7 +118,7 @@ function setup(over: { certs?: CertView[]; sites?: SiteDetail[]; auditFails?: bo
   if (over.auditFails) {
     vi.mocked(api.audit).mockRejectedValue(new ApiError(500, "internal_error", "audit store down"))
   } else {
-    vi.mocked(api.audit).mockResolvedValue({ entries: [], limit: 100 })
+    vi.mocked(api.audit).mockResolvedValue({ entries: [], limit: 100, next_before: 0 })
   }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(

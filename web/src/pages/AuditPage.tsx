@@ -1,17 +1,32 @@
 import { ErrorState } from "@/components/ErrorState"
 import { SkeletonRows } from "@/components/ui/skeleton"
-import { useState } from "react"
+import { useId, useState } from "react"
 
 import { JobsDrawer } from "@/components/JobsDrawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Select } from "@/components/ui/select"
 import { type AuditEntry } from "@/lib/api"
 import { useAudit } from "@/lib/queries"
 
-const PAGE_SIZE = 100
+const PAGE_SIZE_CHOICES = [25, 50, 100, 200]
+const DEFAULT_PAGE_SIZE = 50
 
 /**
- * The audit trail: newest first, straight from `GET /api/audit`.
+ * Where the reader is in the trail: the page size, and the `before` cursor of
+ * every page above the current one. The first page has no cursor, so Newer
+ * just pops the stack and returns to the exact page it came from.
+ */
+interface Paging {
+  size: number
+  cursors: number[]
+}
+
+/**
+ * The audit trail: newest first, straight from `GET /api/audit`, a page at a
+ * time. Paging is by cursor, not offset, so a write that lands while the reader
+ * is on an older page does not shift the rows they are reading.
  *
  * The action column is the HTTP method and path the middleware recorded, so a
  * reader can tell a failed login attempt from a rejected settings write without
@@ -19,8 +34,12 @@ const PAGE_SIZE = 100
  * free-form by design and the writer has already redacted it.
  */
 export function AuditPage() {
-  const { data, isPending, error, refetch } = useAudit(PAGE_SIZE)
+  const sizeId = useId()
+  const [paging, setPaging] = useState<Paging>({ size: DEFAULT_PAGE_SIZE, cursors: [] })
   const [jobId, setJobId] = useState<string | null>(null)
+
+  const before = paging.cursors.length > 0 ? paging.cursors[paging.cursors.length - 1] : undefined
+  const { data, isPending, isPlaceholderData, error, refetch } = useAudit(paging.size, before)
 
   if (isPending) {
     return <SkeletonRows label="Loading audit log…" />
@@ -30,8 +49,17 @@ export function AuditPage() {
   }
 
   const entries = data?.entries ?? []
+  const page = paging.cursors.length + 1
+  const hasNewer = paging.cursors.length > 0
+  const hasOlder = (data?.next_before ?? 0) > 0
 
-  if (entries.length === 0) {
+  const olderPage = () => {
+    if (!data || !hasOlder) return
+    setPaging((p) => ({ ...p, cursors: [...p.cursors, data.next_before] }))
+  }
+  const newerPage = () => setPaging((p) => ({ ...p, cursors: p.cursors.slice(0, -1) }))
+
+  if (entries.length === 0 && !hasNewer) {
     return (
       <p className="text-muted-foreground text-sm">
         No audited actions yet. Changing a setting, signing in or out, and a rejected request all
@@ -42,12 +70,30 @@ export function AuditPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-muted-foreground text-xs">
-        Showing the newest {entries.length} of at most {data?.limit ?? PAGE_SIZE} entries.
-      </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={sizeId}>Entries per page</Label>
+          <Select
+            id={sizeId}
+            className="w-28"
+            value={paging.size}
+            onChange={(e) => setPaging({ size: Number(e.target.value), cursors: [] })}
+          >
+            {PAGE_SIZE_CHOICES.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <p className="text-muted-foreground text-xs" aria-live="polite">
+          Page {page} · {entries.length} {entries.length === 1 ? "entry" : "entries"}, newest first
+        </p>
+      </div>
 
-      <div className="overflow-x-auto rounded-lg border">
+      <div className={`overflow-x-auto rounded-lg border ${isPlaceholderData ? "opacity-60" : ""}`}>
         <table className="w-full text-sm">
+          <caption className="sr-only">Audit trail, newest first</caption>
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs">
             <tr>
               <th scope="col" className="px-3 py-1.5 font-medium">Time</th>
@@ -65,6 +111,15 @@ export function AuditPage() {
           </tbody>
         </table>
       </div>
+
+      <nav aria-label="Audit pages" className="flex items-center justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={!hasNewer} onClick={newerPage}>
+          Newer
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={!hasOlder} onClick={olderPage}>
+          Older
+        </Button>
+      </nav>
 
       <JobsDrawer jobId={jobId} onClose={() => setJobId(null)} />
     </div>

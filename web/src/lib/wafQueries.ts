@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
 import { api } from "@/lib/api"
@@ -70,15 +70,20 @@ export function useWafEventSummary(site: string, range: TrafficRange) {
   })
 }
 
-/** Audit events, newest first; `fetchNextPage` loads older ones through `before`. */
-export function useWafEvents(filters: Omit<WafEventQuery, "before">) {
-  const key = JSON.stringify(filters)
-  return useInfiniteQuery({
-    queryKey: wafKeys.events(key),
-    queryFn: ({ pageParam }) => api.wafEvents({ ...filters, limit: 50, before: pageParam }),
-    initialPageParam: undefined as number | undefined,
-    // A page with fewer events than asked for was the last one.
-    getNextPageParam: (last) => (last.events.length >= 50 && last.next_before > 0 ? last.next_before : undefined),
+/**
+ * One page of audit events, newest first. `before` is the sequence number the page
+ * starts below; undefined asks for the newest page. The previous page stays on
+ * screen while the next one loads, so paging does not flash empty.
+ */
+export function useWafEvents(
+  filters: Omit<WafEventQuery, "before" | "limit">,
+  before: number | undefined,
+  limit: number,
+) {
+  return useQuery({
+    queryKey: wafKeys.events(JSON.stringify({ filters, before: before ?? null, limit })),
+    queryFn: () => api.wafEvents({ ...filters, limit, before }),
+    placeholderData: keepPreviousData,
     retry: false,
   })
 }
