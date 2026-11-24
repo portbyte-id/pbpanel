@@ -64,6 +64,49 @@ func TestWriteAbuseIPDBGroupsByAddress(t *testing.T) {
 	}
 }
 
+// TestWriteAbuseIPDBNamesTheEngines proves a comment says which engine produced
+// the events: one engine by name, both when a host runs both, and ModSecurity
+// for an event from before the engine field existed.
+func TestWriteAbuseIPDBNamesTheEngines(t *testing.T) {
+	t0 := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		events []Event
+		want   string
+	}{
+		{
+			name:   "both engines",
+			events: []Event{{IP: "198.51.100.4", Engine: EngineModSecurity, Time: t0}, {IP: "198.51.100.4", Engine: EngineOpenAppsec, Time: t0}},
+			want:   "ModSecurity + open-appsec WAF: 2 requests",
+		},
+		{
+			name:   "open-appsec alone",
+			events: []Event{{IP: "198.51.100.4", Engine: EngineOpenAppsec, Time: t0}},
+			want:   "open-appsec WAF: 1 request",
+		},
+		{
+			name:   "no engine, as an old event reads",
+			events: []Event{{IP: "198.51.100.4", Time: t0}},
+			want:   "ModSecurity WAF: 1 request",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := WriteAbuseIPDB(&buf, tc.events); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := csv.NewReader(&buf).ReadAll()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 2 || !strings.HasPrefix(rows[1][3], tc.want) {
+				t.Fatalf("comment = %q, want it to start %q", rows[1][3], tc.want)
+			}
+		})
+	}
+}
+
 // TestWriteAbuseIPDBWithNoEventsIsJustTheHeader proves an empty export is still a
 // valid file to upload, not an error.
 func TestWriteAbuseIPDBWithNoEventsIsJustTheHeader(t *testing.T) {
