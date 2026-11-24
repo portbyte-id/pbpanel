@@ -79,7 +79,16 @@ export function AppLayout() {
         {/* Only <main> scrolls; the header and footer stay pinned to the frame. */}
         <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 outline-none sm:px-6">
           {/* Pages are centred in a readable column; the file manager and logs need the width, so they fill it. */}
-          <div className={FULL_WIDTH_PATHS.some((p) => path.startsWith(p)) ? "w-full" : "mx-auto w-full max-w-[84rem]"}>
+          {/* /files fills <main> exactly so only its listing scrolls; it needs a definite height here. */}
+          <div
+            className={
+              path.startsWith("/files")
+                ? "h-full w-full"
+                : FULL_WIDTH_PATHS.some((p) => path.startsWith(p))
+                  ? "w-full"
+                  : "mx-auto w-full max-w-[84rem]"
+            }
+          >
             {current && <p className="text-muted-foreground mb-3 text-sm md:hidden">{current.description}</p>}
             <Outlet />
           </div>
