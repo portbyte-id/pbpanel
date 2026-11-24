@@ -238,9 +238,10 @@ func writeGlobalBlock(b *strings.Builder, g Global) {
 
 // writeErrorPage sends a blocked request to the panel's page instead of nginx's
 // bare 403. The status stays 403, and the page location is internal and skips
-// ModSecurity, as the challenge page does. A 403 the site's own application
-// returns is replaced too.
-func writeErrorPage(b *strings.Builder, p nginx.Paths, modsec bool) {
+// the site's engine, as the challenge page does: a page served to a visitor who
+// has just been refused must not be refused again by the same engine. A 403 the
+// site's own application returns is replaced too.
+func writeErrorPage(b *strings.Builder, p nginx.Paths, modsec, appsec bool) {
 	b.WriteString("# Blocked requests get the panel's page (see Settings > WAF > Block page).\n")
 	// Each status keeps its own code: a rate limit stays a 429.
 	fmt.Fprintf(b, "error_page 403 =403 %s;\n", BlockedPagePath)
@@ -254,6 +255,9 @@ func writeErrorPage(b *strings.Builder, p nginx.Paths, modsec bool) {
 	b.WriteString("    add_header X-Content-Type-Options \"nosniff\" always;\n")
 	if modsec {
 		b.WriteString("    modsecurity off;\n")
+	}
+	if appsec {
+		b.WriteString("    cp-nano-nginx-attachment off;\n")
 	}
 	b.WriteString("}\n")
 }

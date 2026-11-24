@@ -137,9 +137,15 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 		if errors.Is(err, waf.ErrModuleMissing) {
 			return WAFResult{}, invalid("mode", "%s", trimPrefix(err))
 		}
+		if errors.Is(err, waf.ErrOpenAppsecMissing) {
+			return WAFResult{}, invalid("engine", "%s", trimPrefix(err))
+		}
 		if errors.Is(err, waf.ErrNoChallenge) || errors.Is(err, waf.ErrNoTurnstile) {
 			return WAFResult{}, invalid("challenge.enabled", "%s", trimPrefix(err))
 		}
+		return WAFResult{}, err
+	}
+	if err := m.requireAppsec(c); err != nil {
 		return WAFResult{}, err
 	}
 
@@ -189,6 +195,13 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 		return WAFResult{}, restore(err)
 	}
 	files = append(files, shared...)
+	// The policy is rendered from the settings just stored, so a change that
+	// switches the engine on, off, or to another mode lands in the same apply.
+	policy, err := m.openAppsecPolicyFile(ctx, "")
+	if err != nil {
+		return WAFResult{}, restore(err)
+	}
+	files = append(files, policy)
 	settings, err := m.staleSettingsFiles(ctx)
 	if err != nil {
 		return WAFResult{}, restore(err)
@@ -201,7 +214,11 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 		}
 	}
 
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "firewall " + s.Domain})
+	services, err := m.wafServices(ctx, "", c.UsesOpenAppsec())
+	if err != nil {
+		return WAFResult{}, restore(err)
+	}
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "firewall " + s.Domain})
 	if err != nil {
 		return WAFResult{}, restore(err)
 	}
@@ -210,6 +227,38 @@ func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAF
 		return WAFResult{}, err
 	}
 	return WAFResult{Config: c, Status: st, Apply: res}, nil
+}
+
+// wafServices is the services one firewall change has to drive: nginx first,
+// then the open-appsec agent when the change leaves a site inspecting with it.
+//
+// Order matters and is the one step 0 found: a lone agent restart silently stops
+// enforcement until nginx reloads (plan §0.4), so nginx is reloaded *before* the
+// agent is told about a policy, never after. The agent has no policy when no site
+// uses it, so it is left out of the change entirely.
+func (m *Manager) wafServices(ctx context.Context, except string, usesOpenAppsec bool) ([]confedit.Service, error) {
+	services := []confedit.Service{m.svc}
+	if !usesOpenAppsec || m.appsec == nil {
+		return services, nil
+	}
+	any, err := m.waf.AnyOpenAppsec(ctx, except)
+	if err != nil {
+		return nil, err
+	}
+	if any {
+		services = append(services, m.appsec)
+	}
+	return services, nil
+}
+
+// requireAppsec refuses an open-appsec config on a host where the agent is not
+// wired in. It runs before anything is stored or written, so the previous state
+// is untouched.
+func (m *Manager) requireAppsec(c waf.Config) error {
+	if !c.UsesOpenAppsec() || m.appsec != nil {
+		return nil
+	}
+	return invalid("engine", "%s", "open-appsec is not installed on this host; install it from the Store first")
 }
 
 // wafInvalid turns the firewall's validation error into the sites one, so the
@@ -284,11 +333,71 @@ func (m *Manager) wafSiteFiles(ctx context.Context, domain string) (waf.Rendered
 
 // WAFSharedFiles are the firewall files no single site owns. The boot reconcile
 // writes them with the rest.
+//
+// The engine renders the module loaders and the block page; the open-appsec
+// policy is added here because it names hosts, which live in this package's
+// table. Every site with the engine on becomes one specificRules entry, with its
+// domain and aliases.
 func (m *Manager) WAFSharedFiles(ctx context.Context) ([]confedit.File, error) {
 	if m.waf == nil {
 		return nil, nil
 	}
-	return m.waf.SharedFiles(ctx, "")
+	files, err := m.waf.SharedFiles(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	policy, err := m.openAppsecPolicyFile(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	return append(files, policy), nil
+}
+
+// openAppsecPolicyFile renders the agent's local policy from every site that
+// inspects with open-appsec, a site named in except left out. It is a Delete
+// entry when no site uses the engine, so the file goes with the module that
+// needs it.
+//
+// The result is deterministic: the same sites render the same bytes, so an
+// unrelated change does not rewrite the policy and, with it, reload the agent.
+func (m *Manager) openAppsecPolicyFile(ctx context.Context, except string) (confedit.File, error) {
+	file := confedit.File{Path: m.waf.OpenAppsecPolicyFile(), Delete: true}
+	any, err := m.waf.AnyOpenAppsec(ctx, except)
+	if err != nil {
+		return confedit.File{}, err
+	}
+	if !any {
+		return file, nil
+	}
+	sites, err := m.list(ctx, m.st.DB())
+	if err != nil {
+		return confedit.File{}, err
+	}
+	all, err := m.waf.All(ctx)
+	if err != nil {
+		return confedit.File{}, err
+	}
+	entries := make([]waf.OpenAppsecPolicy, 0, len(sites))
+	for _, s := range sites {
+		if s.Domain == except {
+			continue
+		}
+		c, ok := all[s.Domain]
+		if !ok || !c.UsesOpenAppsec() {
+			continue
+		}
+		hosts := append([]string{s.Domain}, s.Aliases...)
+		entries = append(entries, waf.OpenAppsecPolicy{Hosts: hosts, Mode: c.Mode, Confidence: c.OpenAppsec.Confidence})
+	}
+	// The module exists because a site uses the engine, so an empty list here
+	// means the two reads disagree. An empty policy would leave every host
+	// inactive while the per-server directive still claims inspection; refusing
+	// is the only honest answer.
+	if len(entries) == 0 {
+		return confedit.File{}, fmt.Errorf("sites: a site uses open-appsec but none was found; refusing to write a policy that would inspect nothing")
+	}
+	file.Delete, file.Content = false, waf.RenderOpenAppsecPolicy(entries)
+	return file, nil
 }
 
 // WAFGlobalResult is what SetWAFGlobal did.
@@ -372,13 +481,25 @@ func (m *Manager) SetWAFGlobal(ctx context.Context, in waf.Global) (WAFGlobalRes
 		return WAFGlobalResult{}, restore(err)
 	}
 	files = append(files, shared...)
+	// The global firewall does not touch an engine's settings, but every site's
+	// block was rendered again above, so the policy is re-rendered with it: the
+	// two are one change or neither.
+	policy, err := m.openAppsecPolicyFile(ctx, "")
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	files = append(files, policy)
 	settings, err := m.staleSettingsFiles(ctx)
 	if err != nil {
 		return WAFGlobalResult{}, restore(err)
 	}
 	files = append(files, settings...)
 
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: []confedit.Service{m.svc}, Reason: "firewall: global"})
+	services, err := m.wafServices(ctx, "", true)
+	if err != nil {
+		return WAFGlobalResult{}, restore(err)
+	}
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "firewall: global"})
 	if err != nil {
 		return WAFGlobalResult{}, restore(err)
 	}

@@ -181,6 +181,15 @@ type Options struct {
 	// WAF is the per-site firewall. Nil leaves every site's firewall block empty
 	// and the firewall routes answering 503.
 	WAF *waf.Engine
+	// Appsec is the open-appsec agent as a config service. Nil means the engine
+	// cannot be used: a change that asks for it is refused before anything is
+	// written, rather than loading a module whose agent is not there.
+	//
+	// When it is set, every change to an open-appsec site lists it after nginx,
+	// so an apply writes the nginx files and the policy, validates both, reloads
+	// nginx, then hands the policy to the agent — and a failure at any point
+	// rolls all of it back.
+	Appsec confedit.Service
 	// Settings renders panel-main.conf and panel-http.conf. The first firewall
 	// change on a host that predates the firewall uses it to bring them current,
 	// because they carry the include lines that read the firewall's files.
@@ -199,6 +208,8 @@ type Manager struct {
 	fs  FS
 	now func() time.Time
 	waf *waf.Engine
+	// appsec is Options.Appsec, the open-appsec agent as a config service.
+	appsec confedit.Service
 	// settings is Options.Settings.
 	settings func(ctx context.Context) ([]confedit.File, error)
 
@@ -210,7 +221,7 @@ func New(o Options) (*Manager, error) {
 	if o.Store == nil || o.Applier == nil || o.Service == nil {
 		return nil, errors.New("sites: store, applier and service are required")
 	}
-	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, tls: o.TLS, fs: o.FS, now: o.Now, waf: o.WAF, settings: o.Settings}
+	m := &Manager{st: o.Store, ap: o.Applier, svc: o.Service, p: o.Paths, php: o.PHP, tls: o.TLS, fs: o.FS, now: o.Now, waf: o.WAF, appsec: o.Appsec, settings: o.Settings}
 	if m.fs == nil {
 		m.fs = OSFS{}
 	}
@@ -616,14 +627,34 @@ func (m *Manager) Delete(ctx context.Context, domain string) (DeleteResult, erro
 	}
 	if m.waf != nil {
 		files = append(files, m.waf.RemovedFiles(s.Domain)...)
-		// The module loader goes too when this was the last site that needed it.
+		// The module loader goes too when this was the last site that needed it,
+		// and the open-appsec policy loses this host, both in the same change: a
+		// policy naming a deleted host would keep inspecting a site that is gone.
 		shared, err := m.waf.SharedFiles(ctx, s.Domain)
 		if err != nil {
 			return DeleteResult{}, err
 		}
 		files = append(files, shared...)
+		policy, err := m.openAppsecPolicyFile(ctx, s.Domain)
+		if err != nil {
+			return DeleteResult{}, err
+		}
+		files = append(files, policy)
 	}
 	services := []confedit.Service{m.svc}
+	// A deleted site's host leaves the open-appsec policy, so the agent is told
+	// about the new one in the same change, after nginx has reloaded.
+	if m.waf != nil {
+		was, err := m.waf.Get(ctx, s.Domain)
+		if err != nil {
+			return DeleteResult{}, err
+		}
+		if svcs, err := m.wafServices(ctx, s.Domain, was.UsesOpenAppsec()); err != nil {
+			return DeleteResult{}, err
+		} else {
+			services = svcs
+		}
+	}
 	if s.PHPVersion != nil && m.php != nil && s.PHPPool != "" {
 		// nginx lets go of the socket first, then FPM drops the pool. The
 		// master stays up even when this was its last site (step 2.7).

@@ -85,7 +85,7 @@ func blockBody(p nginx.Paths, domain string, c Config, secret string, g Global) 
 		writeGlobalBlock(&b, g)
 	}
 	if g.ErrorPage.Enabled {
-		writeErrorPage(&b, p, c.UsesModSecurity())
+		writeErrorPage(&b, p, c.UsesModSecurity(), c.UsesOpenAppsec())
 	}
 	if len(c.IPRules.Allow)+len(c.IPRules.Deny) > 0 {
 		fmt.Fprintf(&b, "if (%s) { return 403; }\n", ipdeny)
@@ -103,8 +103,11 @@ func blockBody(p nginx.Paths, domain string, c Config, secret string, g Global) 
 		b.WriteString("modsecurity_transaction_id \"$request_id\";\n")
 		fmt.Fprintf(&b, "modsecurity_rules_file %s;\n", p.WAFRulesFile(domain))
 	}
+	if c.UsesOpenAppsec() {
+		writeOpenAppsecBlock(&b)
+	}
 	if c.Challenge.Enabled && secret != "" {
-		writeChallengeBlock(&b, p, domain, c.Challenge, secret, c.UsesModSecurity())
+		writeChallengeBlock(&b, p, domain, c.Challenge, secret, c.UsesModSecurity(), c.UsesOpenAppsec())
 	}
 	return []byte(b.String())
 }
@@ -118,12 +121,16 @@ func blockBody(p nginx.Paths, domain string, c Config, secret string, g Global) 
 // The locations are exact and ^~ prefix matches, so a site's own regex
 // locations, a `location ~ /\.` that denies dotfiles for one, cannot take them.
 //
-// With ModSecurity on, the same locations turn the engine off for themselves:
+// With either engine on, the same locations turn the engine off for themselves:
 // the puzzle fetch and the answer are the requests a visitor has to make to get
 // through, and a rule that flags either one holds them at a check they cannot
 // pass. An exemption in the rules file is not enough for the guard page, which
 // nginx reaches through an internal redirect carrying the original URI.
-func writeChallengeBlock(b *strings.Builder, p nginx.Paths, domain string, ch Challenge, secret string, modsec bool) {
+//
+// Both engines are exempted the same way, each with its own per-location
+// directive: ModSecurity's `modsecurity off` and open-appsec's
+// `cp-nano-nginx-attachment off`.
+func writeChallengeBlock(b *strings.Builder, p nginx.Paths, domain string, ch Challenge, secret string, modsec, appsec bool) {
 	_, _, _, verdict := challengeNames(domain)
 	b.WriteString("# Challenge page: a visitor without a valid clearance cookie is checked first.\n")
 	fmt.Fprintf(b, "secure_link $cookie_%s;\n", CookieName(domain))
@@ -142,6 +149,9 @@ func writeChallengeBlock(b *strings.Builder, p nginx.Paths, domain string, ch Ch
 	if modsec {
 		b.WriteString("    modsecurity off;\n")
 	}
+	if appsec {
+		b.WriteString("    cp-nano-nginx-attachment off;\n")
+	}
 	b.WriteString("}\n")
 	fmt.Fprintf(b, "location ^~ %s {\n", guard.Prefix)
 	fmt.Fprintf(b, "    proxy_pass http://unix:%s;\n", p.GuardSocket())
@@ -157,6 +167,9 @@ func writeChallengeBlock(b *strings.Builder, p nginx.Paths, domain string, ch Ch
 	b.WriteString("    add_header Cache-Control \"no-store\" always;\n")
 	if modsec {
 		b.WriteString("    modsecurity off;\n")
+	}
+	if appsec {
+		b.WriteString("    cp-nano-nginx-attachment off;\n")
 	}
 	b.WriteString("}\n")
 }

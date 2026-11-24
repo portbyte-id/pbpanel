@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,28 @@ func wafAvailability(built bool) waf.Availability {
 		return waf.Availability{Flavor: "pqc", Reason: "no nginx build serves yet; build one on the Nginx page"}
 	}
 	return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+}
+
+// openAppsecStatus reports whether the open-appsec agent is installed and
+// running: the control script exists and its unit is active. Step 2 owns the
+// install, the version and the Store card; this is the minimum a firewall change
+// needs to refuse loading a module whose agent is not there, and it is read on
+// every use so an agent installed later applies without a panel restart.
+func openAppsecStatus(run nginx.Runner) func(ctx context.Context) (bool, string) {
+	return func(ctx context.Context) (bool, string) {
+		if _, err := os.Stat(waf.OpenAppsecCtl); err != nil {
+			return false, "the open-appsec agent is not installed"
+		}
+		out, err := run.Run(ctx, "systemctl", "is-active", waf.OpenAppsecUnit)
+		state := strings.TrimSpace(string(out))
+		if err != nil || state != "active" {
+			if state == "" {
+				state = "unknown"
+			}
+			return false, fmt.Sprintf("%s is %s", waf.OpenAppsecUnit, state)
+		}
+		return true, ""
+	}
 }
 
 // guardKeys builds the challenge page's keyring from data/secret.key.
@@ -295,9 +318,13 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 		},
 	})
 	wafEngine.WithOpenAppsec(appsecMgr.Available)
+	// The agent is also a config service like nginx: a change writes the policy
+	// and reloads nginx, then hands the policy to the agent. Its availability
+	// above decides whether a site may pick the engine at all.
+	appsecSvc := waf.NewOpenAppsecService(run, wafEngine.OpenAppsecPolicyFile(), openAppsecStatus(run))
 	mgr, err := sites.New(sites.Options{
 		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
-		WAF: wafEngine,
+		WAF: wafEngine, Appsec: appsecSvc,
 		Settings: func(ctx context.Context) ([]confedit.File, error) {
 			s, err := global.Settings(ctx)
 			if err != nil {
