@@ -2,7 +2,15 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { AppForm, formatEnv, nodeMajors, parseEnv, parseLines } from "@/components/AppDialog"
+import {
+  AppForm,
+  formatEnv,
+  joinCommandLine,
+  nodeMajors,
+  parseEnv,
+  parseLines,
+  splitCommandLine,
+} from "@/components/AppDialog"
 import { appendLog } from "@/components/AppLogs"
 import { APPS_ROOT } from "@/components/PathPicker"
 import { ApiError, api, type FMEntry, type FMListing, type NodeVersion, type PanelApp } from "@/lib/api"
@@ -10,6 +18,22 @@ import { domainsOf, formatUptime, isRunning, typeLabel } from "@/pages/AppsPage"
 import { validNodeRequest } from "@/pages/RuntimesPage"
 
 const node = (version: string): NodeVersion => ({ version, path: `/n/${version}`, used_by: [] })
+
+describe("execution command line", () => {
+  it("splits on spaces and honours quotes", () => {
+    expect(splitCommandLine(String.raw`/bin/web --title "my app" 'a b' x\ y`).argv).toEqual([
+      "/bin/web", "--title", "my app", "a b", "x y",
+    ])
+    expect(splitCommandLine("").argv).toEqual([])
+    expect(splitCommandLine(`/bin/web ""`).argv).toEqual(["/bin/web", ""])
+    expect(splitCommandLine(`/bin/web "oops`).error).toMatch(/quote/)
+  })
+
+  it("round-trips through join", () => {
+    const argv = ["/bin/web", "--title", "my app", "it's", ""]
+    expect(splitCommandLine(joinCommandLine(argv)).argv).toEqual(argv)
+  })
+})
 
 describe("parseLines", () => {
   it("keeps one argument per line, inner spaces included, and drops blank lines", () => {
@@ -132,8 +156,8 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), " web ")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
-    await user.type(screen.getByLabelText("Arguments"), "--listen{Enter}:3000")
+    await user.type(screen.getByLabelText("Execution command"), "/www/services/sites/web/bin/web --listen :3000")
+    expect(screen.queryByLabelText("Arguments")).not.toBeInTheDocument()
     await user.type(screen.getByLabelText("Environment"), "MODE=prod{Enter}# comment{Enter}A=b")
     await user.type(screen.getByLabelText("Port"), "3000")
     await user.click(screen.getByRole("button", { name: "Create app" }))
@@ -156,7 +180,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), "web")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
+    await user.type(screen.getByLabelText("Execution command"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Port"), "3000")
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.type(screen.getByLabelText("Other domains"), "www.web.test, b.test")
@@ -173,7 +197,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm()
 
     await user.type(screen.getByLabelText("Name"), "web")
-    await user.type(screen.getByLabelText("Program path"), "/www/services/sites/web/bin/web")
+    await user.type(screen.getByLabelText("Execution command"), "/www/services/sites/web/bin/web")
     await user.type(screen.getByLabelText("Domain"), "web.test")
     await user.click(screen.getByRole("button", { name: "Create app" }))
 
@@ -186,7 +210,7 @@ describe("AppForm", () => {
     const onSubmit = renderForm({ nodeVersions: [node("22.11.0"), node("20.18.0")] })
 
     await user.selectOptions(screen.getByLabelText("Kind"), "node")
-    expect(screen.queryByLabelText("Program path")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Execution command")).not.toBeInTheDocument()
     await user.type(screen.getByLabelText("Name"), "api")
     await user.type(screen.getByLabelText("Entry script"), "server.js")
     await user.click(screen.getByRole("button", { name: "Create app" }))
@@ -208,7 +232,7 @@ describe("AppForm", () => {
     const user = userEvent.setup()
     const onSubmit = renderForm()
     await user.type(screen.getByLabelText("Name"), "web")
-    await user.type(screen.getByLabelText("Program path"), "/bin/web")
+    await user.type(screen.getByLabelText("Execution command"), "/bin/web")
 
     await user.type(screen.getByLabelText("Environment"), "oops")
     await user.click(screen.getByRole("button", { name: "Create app" }))
@@ -303,7 +327,7 @@ describe("AppForm", () => {
       await waitFor(() =>
         expect(screen.queryByRole("dialog", { name: "Choose the program" })).not.toBeInTheDocument(),
       )
-      expect(screen.getByLabelText("Program path")).toHaveValue(`${bin}/notes.txt`)
+      expect(screen.getByLabelText("Execution command")).toHaveValue(`${bin}/notes.txt`)
 
       await user.type(screen.getByLabelText("Port"), "3000")
       await user.click(screen.getByRole("button", { name: "Create app" }))
