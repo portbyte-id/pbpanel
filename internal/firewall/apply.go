@@ -131,11 +131,11 @@ func (m *Manager) families() []famCmds { return families(m.ipv6) }
 
 // snapshot is the owned-chain state of one family, enough to put it back.
 type snapshot struct {
-	Existed bool   `json:"existed"`
-	Hooked  bool   `json:"hooked"`
+	Existed bool `json:"existed"`
+	Hooked  bool `json:"hooked"`
 	// DockerHooked is whether DOCKER-USER jumps to ChainForward.
 	DockerHooked bool   `json:"dockerHooked"`
-	Lines   string `json:"lines"` // the -A lines of the owned chains, as iptables-save printed them
+	Lines        string `json:"lines"` // the -A lines of the owned chains, as iptables-save printed them
 }
 
 func (m *Manager) snapshot(ctx context.Context, fc famCmds) (snapshot, error) {
