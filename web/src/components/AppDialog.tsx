@@ -94,6 +94,7 @@ const textarea =
  */
 export function AppForm({
   app,
+  defaultType = "go",
   nodeVersions,
   onSubmit,
   onCancel,
@@ -102,6 +103,8 @@ export function AppForm({
 }: {
   /** Set when editing: the name is then fixed. */
   app: PanelApp | null
+  /** The type a new app starts on. Ignored when editing. */
+  defaultType?: AppType
   nodeVersions: NodeVersion[]
   /** `bind` is set only when the operator asked for a domain: the app is then put behind a proxy site. */
   onSubmit: (input: AppInput, bind?: AppDomain) => void
@@ -113,7 +116,7 @@ export function AppForm({
   const [domain, setDomain] = useState("")
   const [aliases, setAliases] = useState("")
   const [name, setName] = useState(app?.name ?? "")
-  const [type, setType] = useState<AppType>(app?.type ?? "go")
+  const [type, setType] = useState<AppType>(app?.type ?? defaultType)
   const [command, setCommand] = useState(app?.command ?? "")
   const [args, setArgs] = useState((app?.args ?? []).join("\n"))
   const [workdir, setWorkdir] = useState(app?.workdir ?? "")
@@ -528,10 +531,12 @@ export function AppDialog({
   open,
   onOpenChange,
   app,
+  defaultType,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   app: PanelApp | null
+  defaultType?: AppType
 }) {
   const save = useSaveApp()
   const createSite = useCreateSite()
@@ -581,6 +586,7 @@ export function AppDialog({
             // Remounted when the runtimes arrive, so the Node picker starts on one.
             key={(runtimes.data?.node ?? []).map((n) => n.version).join(",")}
             app={app}
+            defaultType={defaultType}
             nodeVersions={runtimes.data?.node ?? []}
             pending={save.isPending || createSite.isPending}
             error={save.error}
