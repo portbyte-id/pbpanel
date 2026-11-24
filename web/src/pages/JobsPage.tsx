@@ -15,6 +15,7 @@ import {
   type JobRecord,
   type JobState,
 } from "@/lib/jobs"
+import { JobProgressBar } from "@/components/JobProgressBar"
 import { useJobs } from "@/lib/queries"
 import { matchesQuery } from "@/lib/table"
 
@@ -148,6 +149,7 @@ function JobTable({
                 </td>
                 <td className="px-3 py-1.5">
                   <StateBadge state={job.state} />
+                  {job.progress && <JobProgressBar progress={job.progress} className="mt-1 max-w-xs" />}
                   {job.error && (
                     <p className="text-destructive mt-1 max-w-xs truncate text-xs" title={job.error}>
                       {job.error}

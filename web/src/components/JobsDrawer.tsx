@@ -9,7 +9,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { JobProgressBar } from "@/components/JobProgressBar"
 import { openJobStream, type JobEvent, type JobLine, type JobStreamStatus } from "@/lib/jobs"
+import { useJobs } from "@/lib/queries"
 
 interface DrawerLine extends JobLine {
   /** A stable key: the sequence number, plus an ordinal for a replayed duplicate. */
@@ -64,6 +66,10 @@ export function JobsDrawer({
     return () => stream.close()
   }, [jobId])
 
+  // The live stream carries output, not progress; the job list does, and it is
+  // already polled while a job runs.
+  const progress = useJobs({ active: true }).data?.find((job) => job.id === jobId)?.progress
+
   // Follow the tail as lines arrive, which is what a log drawer is for.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" })
@@ -79,6 +85,8 @@ export function JobsDrawer({
           </DialogTitle>
           <DialogDescription className="font-mono text-xs">{jobId}</DialogDescription>
         </DialogHeader>
+
+        {progress && <JobProgressBar progress={progress} />}
 
         {truncated !== null && (
           <p className="text-muted-foreground text-xs">

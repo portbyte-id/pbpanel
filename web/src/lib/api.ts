@@ -806,6 +806,53 @@ export interface ApiClientOptions {
   onUnauthorized?: () => void
 }
 
+/** The release check (internal/update `Info`). Imported by queries.ts and the footer. */
+export interface UpdateInfo {
+  current: string
+  latest: string
+  available: boolean
+  installable: boolean
+  /** The release notes as GitHub stores them: Markdown. */
+  changelog: string
+  release_url: string
+  published_at: string
+  binary_size: number
+  checked_at: string
+  /** Why the check failed. The running version is still reported. */
+  error?: string
+}
+
+/** Phases an upgrade passes through (internal/update `Phase*`). */
+export type UpgradePhase =
+  | "idle"
+  | "queued"
+  | "checking"
+  | "downloading"
+  | "installing"
+  | "restarting"
+  | "health"
+  | "done"
+  | "up_to_date"
+  | "rolled_back"
+  | "failed"
+  | "interrupted"
+
+/** One upgrade as the panel's status file records it (internal/update `Status`). */
+export interface UpgradeStatus {
+  id: string
+  tag: string
+  phase: UpgradePhase
+  message: string
+  /** Bytes of the binary downloaded so far, while downloading. */
+  done: number
+  /** The binary's size, when the server said; 0 when it did not. */
+  total: number
+  error?: string
+  log: string[]
+  started_at: string
+  updated_at: string
+}
+
 export class ApiClient {
   readonly #fetch: typeof globalThis.fetch
   readonly #baseUrl: string
@@ -1819,6 +1866,23 @@ export class ApiClient {
   }
 
   /** The jobs the panel knows about, newest first. `active` keeps queued and running ones. */
+  /** The version check. `refresh` asks GitHub again instead of reusing the server's cached answer. */
+  async updateInfo(refresh = false): Promise<UpdateInfo> {
+    return this.request<UpdateInfo>(`/api/update${refresh ? "?refresh=1" : ""}`)
+  }
+
+  async upgradeStatus(): Promise<UpgradeStatus> {
+    return this.request<UpgradeStatus>("/api/update/upgrade")
+  }
+
+  /** Queues the upgrade to `tag` as its own unit; the panel restarts during it. */
+  async startUpgrade(tag: string): Promise<UpgradeStatus> {
+    return this.request<UpgradeStatus>("/api/update/upgrade", {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    })
+  }
+
   async jobs(options: { active?: boolean } = {}): Promise<JobRecord[]> {
     const query = options.active ? "?state=active" : ""
     return (await this.request<{ jobs: JobRecord[] }>(`/api/jobs${query}`)).jobs

@@ -130,6 +130,14 @@ function parseJSON<T>(raw: string): T | null {
   }
 }
 
+/** The running step of a job (internal/jobs `Progress`). */
+export interface JobProgress {
+  label: string
+  done: number
+  /** 0 when the server does not know the total. */
+  total: number
+}
+
 /** A job as `GET /api/jobs` lists it (internal/jobs `Job`). */
 export type JobState = "queued" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
 
@@ -146,6 +154,8 @@ export interface JobRecord {
   last_seq: number
   dropped: number
   truncated: boolean
+  /** Present while a running job reports a step's progress; absent otherwise. */
+  progress?: JobProgress
 }
 
 export const JOB_STATE_LABELS: Record<JobState, string> = {

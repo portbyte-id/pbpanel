@@ -8,6 +8,7 @@ import { MobileNav } from "@/components/layout/MobileNav"
 import { navItemFor } from "@/components/layout/nav"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { UserMenu } from "@/components/layout/UserMenu"
+import { VersionControl } from "@/components/layout/VersionControl"
 import { useMe } from "@/lib/queries"
 
 /** Pages that use the whole content width instead of the centred column. */
@@ -94,7 +95,9 @@ export function AppLayout() {
           </div>
         </main>
         <footer className="border-border bg-background text-muted-foreground z-30 flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t px-4 py-2 text-xs">
-          <span>Server Panel</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <VersionControl />
+          </div>
           <span>{new Date().getFullYear()}</span>
         </footer>
       </div>

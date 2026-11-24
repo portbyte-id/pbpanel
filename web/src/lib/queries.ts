@@ -30,6 +30,7 @@ import {
 } from "@/lib/api"
 import type { CronJobInput } from "@/lib/cron"
 import { isActiveJob } from "@/lib/jobs"
+import { isUpgradeActive } from "@/lib/update"
 import type { DockerAction } from "@/lib/docker"
 import {
   HISTORY_CAP,
@@ -77,6 +78,8 @@ export const queryKeys = {
   logSources: ["logs", "sources"] as const,
   docker: ["docker"] as const,
   dockerInfo: ["docker", "info"] as const,
+  update: ["update"] as const,
+  upgrade: ["update", "upgrade"] as const,
   dockerContainers: ["docker", "containers"] as const,
   dockerStats: ["docker", "stats"] as const,
   dockerImages: ["docker", "images"] as const,
@@ -939,6 +942,59 @@ export function useSiteDetails() {
 
 export function useLogSources() {
   return useQuery({ queryKey: queryKeys.logSources, queryFn: () => api.logSources() })
+}
+
+/* --- Updates ------------------------------------------------------------- */
+
+/**
+ * The running version and the newest release. The server caches GitHub for six
+ * hours, so the page asks at most once per session and again on a manual refresh.
+ */
+export function useUpdateInfo() {
+  return useQuery({
+    queryKey: queryKeys.update,
+    queryFn: () => api.updateInfo(),
+    staleTime: 30 * 60_000,
+    refetchInterval: 30 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/** Asks GitHub again, past the server's cache, and shows the answer at once. */
+export function useCheckForUpdates() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.updateInfo(true),
+    onSuccess: (info) => {
+      client.setQueryData(queryKeys.update, info)
+    },
+  })
+}
+
+/**
+ * The latest upgrade's progress. It polls once a second while an upgrade is in
+ * flight. The panel restarts during an upgrade, so a poll can fail for a few
+ * seconds; the last good status stays on screen until the panel answers again.
+ */
+export function useUpgradeStatus() {
+  return useQuery({
+    queryKey: queryKeys.upgrade,
+    queryFn: () => api.upgradeStatus(),
+    refetchInterval: (query) => (isUpgradeActive(query.state.data?.phase) ? 1000 : false),
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+}
+
+export function useStartUpgrade() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (tag: string) => api.startUpgrade(tag),
+    onSuccess: (status) => {
+      client.setQueryData(queryKeys.upgrade, status)
+    },
+  })
 }
 
 /* --- Docker -------------------------------------------------------------- */
