@@ -10,13 +10,11 @@ import {
   Globe,
   ListChecks,
   LockKeyhole,
-  Network,
   ScrollText,
   Server,
   Settings,
   ShieldAlert,
   ShieldCheck,
-  Terminal,
 } from "lucide-react"
 
 /**
@@ -79,9 +77,8 @@ export const navGroups: NavGroup[] = [
     items: [
       { label: "Sites", icon: Globe, path: "/sites", description: "Domains served by nginx", keywords: "domains vhost" },
       { label: "Files", icon: FolderTree, path: "/files", description: "Browse, edit and upload files", keywords: "file manager upload" },
-      { label: "Nginx", icon: Network, path: "/nginx", description: "Web server settings and configuration", keywords: "config reload" },
-      { label: "PHP", icon: Terminal, path: "/php", description: "PHP versions, pools and ini settings", keywords: "fpm" },
       { label: "TLS", icon: LockKeyhole, path: "/tls", description: "Certificates and renewals", keywords: "ssl https acme letsencrypt" },
+      { label: "Runtimes", icon: Cpu, path: "/runtimes", description: "Nginx, PHP and Node.js: versions, builds and settings", keywords: "nginx php node fpm ini config reload docker image nvm" },
     ],
   },
   {
@@ -93,7 +90,6 @@ export const navGroups: NavGroup[] = [
       { label: "Docker", icon: Container, path: "/docker", description: "Containers, images and volumes, with live resource use", keywords: "containers images volumes stats compose" },
       { label: "Traffic", icon: Activity, path: "/traffic", description: "Live requests, errors and firewall events", keywords: "waf requests monitor modsecurity" },
       { label: "Logs", icon: ScrollText, path: "/logs", description: "Live and recent log files, and the WAF audit", keywords: "tail waf audit modsecurity" },
-      { label: "Runtimes", icon: Cpu, path: "/runtimes", description: "Installed language runtimes and images", keywords: "docker image php node" },
     ],
   },
   {

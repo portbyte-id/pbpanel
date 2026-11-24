@@ -53,9 +53,10 @@ test("login, change a setting, log out", async ({ page }) => {
   // Files was the example until M3, and Apps until M5; TLS is still one.
   const tls = page.getByRole("button", { name: /TLS — not built yet/i })
   await expect(tls).toBeDisabled()
-  // PHP was one of them until M2; it is a page now.
-  await page.getByRole("link", { name: "PHP" }).click()
-  await expect(page).toHaveURL(/\/php/)
+  // PHP was one of them until M2; it lives under Runtimes now.
+  await page.getByRole("link", { name: "Runtimes" }).click()
+  await page.getByRole("tab", { name: "PHP" }).click()
+  await expect(page).toHaveURL(/\/runtimes\?tab=php/)
 
   // 8. Log out. The session is revoked server-side, so the guard sends us back
   //    to the login page even on a fresh navigation.

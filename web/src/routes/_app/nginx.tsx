@@ -1,10 +1,12 @@
-import { createRoute } from "@tanstack/react-router"
+import { createRoute, redirect } from "@tanstack/react-router"
 
-import { NginxPage } from "@/pages/NginxPage"
 import { appRoute } from "@/routes/_app"
 
+/** The nginx page moved into Runtimes; old links and bookmarks land there. */
 export const nginxRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/nginx",
-  component: NginxPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/runtimes", search: { tab: "nginx" }, replace: true })
+  },
 })

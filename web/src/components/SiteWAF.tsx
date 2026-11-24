@@ -165,8 +165,8 @@ function WafForm({
                   {status.reason ||
                     "It is built into the post-quantum nginx flavor, together with the OWASP Core Rule Set."}{" "}
                   Switch the web server to that flavor on the{" "}
-                  <Link to="/nginx" className="underline underline-offset-4">
-                    Nginx page
+                  <Link to="/runtimes" className="underline underline-offset-4">
+                    Runtimes page
                   </Link>{" "}
                   to turn it on. The native protections below work with any flavor.
                 </p>

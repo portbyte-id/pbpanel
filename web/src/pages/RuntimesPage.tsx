@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { NginxPage } from "@/pages/NginxPage"
+import { PHPPage } from "@/pages/PHPPage"
 import { ApiError } from "@/lib/api"
 import { useInstallNode, useRuntimes, useUninstallNode } from "@/lib/queries"
 
@@ -14,8 +17,38 @@ export function validNodeRequest(v: string): boolean {
   return /^\d{1,2}(\.\d{1,3}){0,2}$/.test(v.trim())
 }
 
+export const RUNTIME_TABS = ["nginx", "php", "node"] as const
+export type RuntimeTab = (typeof RUNTIME_TABS)[number]
+
+/** Narrow a `?tab=` value to a known tab, so a stale link falls back to nginx. */
+export function runtimeTab(v: unknown): RuntimeTab {
+  return RUNTIME_TABS.find((t) => t === v) ?? "nginx"
+}
+
+/** Everything the sites and apps run on: nginx, PHP and Node.js, one tab each. */
+export function RuntimesPage({ tab = "nginx", onTabChange }: { tab?: RuntimeTab; onTabChange?: (t: RuntimeTab) => void }) {
+  return (
+    <Tabs value={tab} onValueChange={(v) => onTabChange?.(runtimeTab(v))}>
+      <TabsList>
+        <TabsTrigger value="nginx">Nginx</TabsTrigger>
+        <TabsTrigger value="php">PHP</TabsTrigger>
+        <TabsTrigger value="node">Node.js</TabsTrigger>
+      </TabsList>
+      <TabsContent value="nginx">
+        <NginxPage />
+      </TabsContent>
+      <TabsContent value="php">
+        <PHPPage />
+      </TabsContent>
+      <TabsContent value="node">
+        <NodePanel />
+      </TabsContent>
+    </Tabs>
+  )
+}
+
 /** The Node.js versions the apps can run on, installed through nvm. */
-export function RuntimesPage() {
+function NodePanel() {
   const id = useId()
   const { data, isPending, error } = useRuntimes()
   const install = useInstallNode()

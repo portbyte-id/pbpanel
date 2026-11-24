@@ -22,7 +22,7 @@ async function login(page: Page) {
 test("type an nginx release and see the compiled patch level", async ({ page }) => {
   await login(page)
 
-  await page.getByRole("link", { name: "Nginx" }).click()
+  await page.getByRole("link", { name: "Runtimes" }).click()
   await page.getByRole("tab", { name: "Build" }).click()
 
   // 1. The serving build is named by the release it compiled, not by its series.
