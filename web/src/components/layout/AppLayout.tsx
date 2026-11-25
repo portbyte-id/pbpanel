@@ -7,6 +7,7 @@ import { CommandPalette } from "@/components/layout/CommandPalette"
 import { MobileNav } from "@/components/layout/MobileNav"
 import { navItemFor } from "@/components/layout/nav"
 import { Sidebar } from "@/components/layout/Sidebar"
+import { NotifyBell } from "@/components/layout/NotifyBell"
 import { UserMenu } from "@/components/layout/UserMenu"
 import { VersionControl } from "@/components/layout/VersionControl"
 import { useMe } from "@/lib/queries"
@@ -74,6 +75,7 @@ export function AppLayout() {
               <span className="hidden sm:inline">Go to…</span>
               <kbd className="pointer-coarse:hidden bg-muted text-muted-foreground rounded px-1 font-sans text-xs leading-4">Ctrl K</kbd>
             </button>
+            <NotifyBell />
             <UserMenu username={me?.username ?? "admin"} />
           </div>
         </header>

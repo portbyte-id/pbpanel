@@ -91,6 +91,16 @@ func (u *Ubuntu) InstallPackages(ctx context.Context, pkgs []string) error {
 	return u.run.Run(ctx, "apt-get", args...)
 }
 
+// PurgePackages removes pkgs with their configuration files, and the libraries only
+// they needed. It does not refresh the package index.
+func (u *Ubuntu) PurgePackages(ctx context.Context, pkgs []string) error {
+	if len(pkgs) == 0 {
+		return errors.New("osdep: PurgePackages: no packages")
+	}
+	args := append([]string{"purge", "-y", "--autoremove"}, pkgs...)
+	return u.run.Run(ctx, "apt-get", args...)
+}
+
 // EnsureUser makes name exist with exactly this uid and gid. An existing user with
 // a different uid or gid is an error rather than a silent change: those numbers
 // already own files, and moving them is the operator's decision, not an install step.

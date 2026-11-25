@@ -13,6 +13,10 @@ import (
 // BuiltinSSLRenew is the built-in that renews the certificates close to expiry.
 const BuiltinSSLRenew = "tls.renew"
 
+// BuiltinNotifySweep is the built-in that polls the conditions the notification
+// engine raises: firewall off, detached site features, certificates near expiry.
+const BuiltinNotifySweep = "notify.sweep"
+
 // BuiltinFunc is what a built-in job runs. It writes its report to out, which
 // becomes the run's output; a non-nil error fails the run.
 type BuiltinFunc func(ctx context.Context, out io.Writer) error
@@ -31,6 +35,7 @@ type defaultJob struct {
 // at 03:17 as root, because it writes certificate files and reloads nginx.
 var defaultJobs = []defaultJob{
 	{name: "ssl-renew", builtin: BuiltinSSLRenew, schedule: "17 3 * * *", user: "root", timeout: 2 * time.Hour},
+	{name: "notify-sweep", builtin: BuiltinNotifySweep, schedule: "*/5 * * * *", user: "root", timeout: 2 * time.Minute},
 }
 
 // EnsureDefaults creates the default built-in jobs that do not exist yet. It is

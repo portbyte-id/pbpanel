@@ -161,6 +161,30 @@ func TestInstallPackagesStopsOnFailure(t *testing.T) {
 	}
 }
 
+func TestPurgePackagesArgv(t *testing.T) {
+	r := &fakeRunner{}
+	u := newTestUbuntu(t, ubuntuOSRelease, basePasswd, baseGroup, r)
+
+	if err := u.PurgePackages(context.Background(), []string{"clamav", "clamdscan"}); err != nil {
+		t.Fatalf("PurgePackages: %v", err)
+	}
+	want := []string{"apt-get purge -y --autoremove clamav clamdscan"}
+	if got := r.names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestPurgePackagesRejectsEmpty(t *testing.T) {
+	r := &fakeRunner{}
+	u := newTestUbuntu(t, ubuntuOSRelease, basePasswd, baseGroup, r)
+	if err := u.PurgePackages(context.Background(), nil); err == nil {
+		t.Fatal("PurgePackages(nil) returned no error")
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("PurgePackages(nil) ran %v", r.names())
+	}
+}
+
 func TestEnsureUserCreatesGroupAndUser(t *testing.T) {
 	r := &fakeRunner{}
 	u := newTestUbuntu(t, ubuntuOSRelease, "root:x:0:0:root:/root:/bin/bash\n", "root:x:0:\n", r)

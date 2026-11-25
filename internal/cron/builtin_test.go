@@ -40,7 +40,7 @@ func builtinRig(t *testing.T) (*rig, *stubBuiltin) {
 	t.Helper()
 	stub := &stubBuiltin{}
 	r := newRig(t, func(o *Options) {
-		o.Builtins = map[string]BuiltinFunc{BuiltinSSLRenew: stub.run}
+		o.Builtins = map[string]BuiltinFunc{BuiltinSSLRenew: stub.run, BuiltinNotifySweep: stub.run}
 	})
 	if err := r.svc.EnsureDefaults(context.Background()); err != nil {
 		t.Fatalf("EnsureDefaults: %v", err)
@@ -116,8 +116,8 @@ func TestEnsureDefaultsKeepsOperatorEdits(t *testing.T) {
 		again.TimeoutSeconds != 600 || again.Overlap != OverlapQueue {
 		t.Fatalf("second start changed the job: %+v", again)
 	}
-	if jobs, _ := r.svc.List(context.Background()); len(jobs) != 1 {
-		t.Fatalf("%d jobs after two seeds, want 1", len(jobs))
+	if jobs, _ := r.svc.List(context.Background()); len(jobs) != 2 {
+		t.Fatalf("%d jobs after two seeds, want 2 (ssl-renew and notify-sweep)", len(jobs))
 	}
 }
 
@@ -136,7 +136,7 @@ func TestEnsureDefaultsRefusesAForeignJobWithTheName(t *testing.T) {
 	r, _ := builtinRig(t)
 	ctx := context.Background()
 	// Delete refuses a built-in, so the seeded row is removed directly.
-	if _, err := r.db.DB().ExecContext(ctx, `DELETE FROM cron_jobs WHERE name = 'ssl-renew'`); err != nil {
+	if _, err := r.db.DB().ExecContext(ctx, `DELETE FROM cron_jobs WHERE name IN ('ssl-renew', 'notify-sweep')`); err != nil {
 		t.Fatalf("removing the seeded job: %v", err)
 	}
 	r.create(t, argvSpec("ssl-renew"))
@@ -145,7 +145,13 @@ func TestEnsureDefaultsRefusesAForeignJobWithTheName(t *testing.T) {
 		t.Fatal("EnsureDefaults accepted a name held by an argv job")
 	}
 	jobs, _ := r.svc.List(ctx)
-	if len(jobs) != 1 || jobs[0].Kind != KindArgv {
+	var argv int
+	for _, j := range jobs {
+		if j.Name == "ssl-renew" && j.Kind == KindArgv {
+			argv++
+		}
+	}
+	if argv != 1 {
 		t.Fatalf("jobs = %+v, want the argv job untouched", jobs)
 	}
 }

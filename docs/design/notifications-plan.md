@@ -1,6 +1,6 @@
 # Notifications and alerts: plan
 
-Status: **plan, not started; decisions unratified.** Migration number reserved: `0022`.
+Status: **all eight steps built on branch `notify-plan`. Host gate passed 2026-11-25 (36 checks; TLS renewal failure, critical-through-quiet and the Telegram/Discord senders not covered). Decisions D1-D13 ratified 2026-11-25 one by one. Telegram and Discord request shapes are still "(assumed)". Migration `0022` in use.**
 
 Written after reading the dashboard alerts (`web/src/lib/alerts.ts`, `web/src/pages/DashboardPage.tsx`),
 the job manager (`internal/jobs/jobs.go`, `events.go`), the cron service (`internal/cron/builtin.go`,
@@ -74,9 +74,9 @@ no producer can fail or slow down because notify is broken, disabled or not wire
 
 ## 3. Decisions
 
-The operator ratifies each row; until then the recommendation is what the steps assume.
+Ratified 2026-11-25, each row asked and accepted as its recommendation (D1-D13).
 
-| # | Decision | Recommendation (unratified) |
+| # | Decision | Ratified 2026-11-25 |
 |---|---|---|
 | D1 | Durability of `Emit` | **Synchronous insert of the event row (2 s budget, detached from the caller's cancellation), asynchronous delivery from a DB-backed queue.** A restart loses nothing queued; a producer never waits on the network |
 | D2 | Where channel credentials live | **`notify_channels.secret`, sealed with secretbox** (aad `notify_channels:secret:<id>`), not the settings registry (plain text). A host without `secret.key` gets bell-only notify: channel create answers 503 with the reason |
@@ -424,6 +424,20 @@ On the current Ubuntu sandbox (re-confirm the IP), root SSH, panel installed fro
 9. **Bell:** `GET /api/notify/summary` counts match; the SSE stream yields the event of step 4.
 10. Optional, `SKIP` without tokens: Telegram and Discord test sends with operator-supplied
     credentials passed as environment to the script (never committed).
+
+### Host gate result (2026-11-25)
+
+Run with `SMOKE_HOST=root.10.11.106 sh scripts/smoke/10-notifications.sh` against the Ubuntu 26.04 sandbox,
+built from `notify-plan` and installed with `pbp upgrade --local` (schema 22). Result: **SMOKE PASSED, 36 checks**.
+Covered: test sends; the HMAC signature (checked with Python's hmac, not the panel's code); the secret at rest, in
+the API, the audit log and the journal; cron.failed open, dedupe and resolve; firewall.disabled raised and resolved
+through notify-sweep (the sandbox starts with the firewall off, so the step runs from that state and puts it back);
+quiet hours; retry across a receiver outage and a panel restart with no duplicate event; the bell count and the live
+stream.
+Not covered, reported as SKIP: tls.renew_failed (needs a staging certificate that fails to renew); a critical event
+through quiet hours (no safe critical producer here); Telegram and Discord (no credentials). The Telegram and Discord
+request shapes are still marked "(assumed)" in the code.
+Sandbox after the run: no notify channels or smoke jobs left, helpers stopped, firewall off as found, health ok.
 
 ## 7. Risks
 

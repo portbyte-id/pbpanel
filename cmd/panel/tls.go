@@ -14,6 +14,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/cron"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/install"
+	"github.com/portbyte-id/server-panel/internal/notify"
 	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
@@ -37,7 +38,7 @@ type tlsStack struct {
 //
 // The Deps' Sites and PanelCerts are filled in by the caller once the nginx
 // stack and the listener exist; the renewer's Apply reads them lazily.
-func newTLS(st *store.Store, reg *settings.Registry, layout install.Layout, auditW *audit.Writer, logger *slog.Logger) (*tlsStack, error) {
+func newTLS(st *store.Store, reg *settings.Registry, layout install.Layout, auditW *audit.Writer, logger *slog.Logger, notifySvc *notify.Service) (*tlsStack, error) {
 	key, err := os.ReadFile(layout.SecretKeyPath())
 	if err != nil {
 		return nil, fmt.Errorf("reading the secret key: %w", err)
@@ -93,6 +94,12 @@ func newTLS(st *store.Store, reg *settings.Registry, layout install.Layout, audi
 		Store: certStore, Issuer: issuer, Apply: deps.Apply,
 		DaysBefore: func() int { return intSetting(context.Background(), reg, settings.KeyTLSRenewDaysBefore, 30) },
 		Audit: func(ctx context.Context, domain, outcome, detail string) {
+			switch outcome {
+			case tls.OutcomeFailed:
+				notifySvc.Emit(ctx, notify.Event{Kind: notify.KindTLSRenewFailed, Key: notify.KindTLSRenewFailed + ":" + domain, Subject: "Certificate renewal failed for " + domain, Body: detail, Source: "tls"})
+			case tls.OutcomeRenewed:
+				notifySvc.Clear(ctx, notify.Event{Kind: notify.KindTLSRenewFailed, Key: notify.KindTLSRenewFailed + ":" + domain, Subject: "Certificate renewed for " + domain, Source: "tls"})
+			}
 			result := audit.Failure
 			if outcome == tls.OutcomeRenewed {
 				result = audit.Success

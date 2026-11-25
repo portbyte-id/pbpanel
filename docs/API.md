@@ -365,3 +365,27 @@ Nested payloads (request and response bodies) are documented per module:
 - [design/m7-api.md](design/m7-api.md) — sysinfo, services, logs, cron
 - Site, nginx, PHP and TLS routes: `internal/httpapi/handlers_*.go`, one file per module.
 <!-- END AUTO-GENERATED -->
+
+## Notifications
+
+The bell, the channels and the delivery log (`docs/design/notifications-plan.md` §4.5). Every route
+needs a session. Without a notify service (no `data/secret.key` for channel writes, or a failed start)
+the routes answer 503. A channel never comes back with its secrets: `secret_set` names the stored
+fields. A write that omits a secret keeps its stored value; `""` clears it.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/notify/events?limit=&before=&unread=1` | the event list, newest first |
+| `GET /api/notify/summary` | `{unread, open_critical, open_warning}` for the badge |
+| `POST /api/notify/events/read` | `{"ids":[...]}` or `{"all":true}`; answers `{updated}` |
+| `GET /api/notify/stream` | SSE; `event: notification` with the event JSON; a comment every 15 s |
+| `GET /api/notify/kinds` | the known kinds with default severity and label |
+| `GET /api/notify/channels`, `POST` | list, or create (201); 422 names the bad field, 409 a taken name |
+| `GET/PUT/DELETE /api/notify/channels/{id}` | read, update (200), delete (204) |
+| `POST /api/notify/channels/{id}/test` | fixed test send, bypasses filters; answers `{ok, error}` and is logged as a delivery |
+| `GET /api/notify/deliveries?channel=&state=&limit=&before=` | the delivery log, with channel and event names |
+| `POST /api/notify/deliveries/{id}/retry` | a failed delivery back in the queue; 409 if it is not failed |
+
+Channel write body: `name`, `type` (`smtp`, `webhook`, `telegram`, `discord`), `enabled`, `min_severity`,
+`kinds`, `quiet_start`/`quiet_end` (`HH:MM`, local time), `send_resolved`, `config` (non-secret fields),
+`secret` (secret fields only: `password`, `hmac_secret`, `bot_token`, `webhook_url`).

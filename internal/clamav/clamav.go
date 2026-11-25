@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/portbyte-id/server-panel/internal/osdep"
 )
 
 // Packages are the Ubuntu packages that make up the service: the scanner and its
@@ -131,7 +133,7 @@ func (ExecRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 type Options struct {
 	// Run runs commands. Nil means ExecRunner.
 	Run Runner
-	// Install installs distribution packages. Nil means apt-get via Run.
+	// Install installs distribution packages. Nil means osdep's package install via Run.
 	Install func(ctx context.Context, pkgs []string) error
 	// Stat checks a path. Nil means os.Stat.
 	Stat func(name string) (os.FileInfo, error)
@@ -198,18 +200,27 @@ func New(o Options) *Manager {
 		m.socketPoll = 2 * time.Second
 	}
 	if m.install == nil {
-		m.install = m.aptInstall
+		m.install = m.installPackages
 	}
 	return m
 }
 
-func (m *Manager) aptInstall(ctx context.Context, pkgs []string) error {
-	if out, err := m.run.Run(ctx, Command{Name: "apt-get", Args: []string{"update"}}); err != nil {
-		return fmt.Errorf("clamav: apt-get update: %w: %s", err, tail(string(out), 10))
+// pkgRunner adapts the manager's Runner to osdep.Runner, so the distribution calls
+// run through the same seam. The output tail rides on the error, so a failed
+// package command still says why.
+type pkgRunner struct{ run Runner }
+
+func (p pkgRunner) Run(ctx context.Context, name string, args ...string) error {
+	out, err := p.run.Run(ctx, Command{Name: name, Args: args})
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, tail(string(out), 10))
 	}
-	args := append([]string{"install", "-y", "--no-install-recommends"}, pkgs...)
-	if out, err := m.run.Run(ctx, Command{Name: "apt-get", Args: args}); err != nil {
-		return fmt.Errorf("clamav: apt-get install: %w: %s", err, tail(string(out), 10))
+	return nil
+}
+
+func (m *Manager) installPackages(ctx context.Context, pkgs []string) error {
+	if err := osdep.NewUbuntu(pkgRunner{m.run}).InstallPackages(ctx, pkgs); err != nil {
+		return fmt.Errorf("clamav: install: %w", err)
 	}
 	return nil
 }
@@ -407,9 +418,8 @@ func (m *Manager) Uninstall(ctx context.Context, progress func(string)) error {
 	}
 	say("removing " + strings.Join(Packages, ", "))
 	// --autoremove takes the libraries and base package only ClamAV needed.
-	args := append([]string{"purge", "-y", "--autoremove"}, Packages...)
-	if out, err := m.run.Run(ctx, Command{Name: "apt-get", Args: args}); err != nil {
-		return fmt.Errorf("clamav: apt-get purge: %w: %s", err, tail(string(out), 10))
+	if err := osdep.NewUbuntu(pkgRunner{m.run}).PurgePackages(ctx, Packages); err != nil {
+		return fmt.Errorf("clamav: purge: %w", err)
 	}
 	if m.Status(ctx).Installed {
 		return fmt.Errorf("clamav: the packages were purged but %s is still present", ScanBinary)

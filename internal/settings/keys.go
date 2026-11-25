@@ -30,6 +30,7 @@ const (
 	groupCron     = "Cron"
 	groupLogs     = "Logs"
 	groupRuntimes = "Runtimes"
+	groupNotify   = "Notifications"
 )
 
 // Prebuilt runtime settings. nginx can be taken from a build a CI job already
@@ -515,5 +516,99 @@ func defaultKeys() []key {
 			},
 			check: validateRuntimesURL,
 		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyEnabled,
+				Type:        TypeBool,
+				Default:     "true",
+				Description: "Deliver notifications to channels. Off: events still reach the bell, and nothing is sent.",
+				Group:       groupNotify,
+			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyDedupeWindow,
+				Type:        TypeDuration,
+				Default:     "6h",
+				Description: "A condition that is already reported on a channel is not sent again within this window. A higher severity is sent at once.",
+				Group:       groupNotify,
+			},
+			check: positiveDuration,
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyRatePerHour,
+				Type:        TypeInt,
+				Default:     "30",
+				Description: "Most notifications one channel sends per hour. Above it, deliveries are logged as suppressed.",
+				Group:       groupNotify,
+			},
+			check: rangeInt(1, 10000),
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyEventsKeep,
+				Type:        TypeInt,
+				Default:     "1000",
+				Description: "Newest events kept in the notification list. Older ones are removed.",
+				Group:       groupNotify,
+			},
+			check: rangeInt(10, 100000),
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyEventsRetainAge,
+				Type:        TypeDuration,
+				Default:     "720h",
+				Description: "Events older than this are removed from the notification list, whatever the count.",
+				Group:       groupNotify,
+			},
+			check: positiveDuration,
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyPanelURL,
+				Type:        TypeString,
+				Default:     "",
+				Optional:    true,
+				Description: "Address of this panel as seen from outside, used for links in messages. Must be https. Empty uses the panel domain when one is set.",
+				Group:       groupNotify,
+			},
+			check: validateNotifyPanelURL,
+		},
+		{
+			meta: Meta{
+				Name:        KeyNotifyLabel,
+				Type:        TypeString,
+				Default:     "",
+				Optional:    true,
+				Description: "Name of this host in messages. Empty uses the machine's host name.",
+				Group:       groupNotify,
+			},
+		},
 	}
+}
+
+// Notifications keys (docs/design/notifications-plan.md §4.4). The notify
+// package reads them on each event, so a change applies without a restart.
+const (
+	KeyNotifyEnabled         = "notify.enabled"
+	KeyNotifyDedupeWindow    = "notify.dedupe_window"
+	KeyNotifyRatePerHour     = "notify.rate.per_hour"
+	KeyNotifyEventsKeep      = "notify.events.keep"
+	KeyNotifyEventsRetainAge = "notify.events.retain_age"
+	KeyNotifyPanelURL        = "notify.panel_url"
+	KeyNotifyLabel           = "notify.label"
+)
+
+// validateNotifyPanelURL accepts an empty value or a plain https URL with a host.
+func validateNotifyPanelURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("must be a plain https URL such as https://panel.example.com:8443")
+	}
+	return nil
 }
