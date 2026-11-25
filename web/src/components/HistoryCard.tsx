@@ -2,16 +2,17 @@ import { Link } from "@tanstack/react-router"
 import { useMemo, type ReactNode } from "react"
 
 import { Panel } from "@/components/Panel"
-import { RangePicker } from "@/components/RangePicker"
 import { TimeSeriesChart, type ChartSeries } from "@/components/TimeSeriesChart"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import {
   classifyHistory,
+  customProblem,
   hasNoData,
+  spanName,
   useDisksHistory,
   useHostHistory,
-  useRangeParam,
   type Col,
+  type HistorySpan,
   type HistoryState,
 } from "@/lib/metrics"
 import { formatBytes, formatPercent, formatRate } from "@/lib/sysinfo"
@@ -65,12 +66,13 @@ export function sumColumns(cols: Col[]): Col {
 
 /**
  * The History card: the host's CPU, load, memory, disks and network over the
- * picked range, kept in the URL. A point the daemon did not record is a gap.
+ * span the page picked. A point the daemon did not record is a gap. A custom
+ * window that cannot be asked for is explained here and not sent to the daemon.
  */
-export function HistoryCard() {
-  const [range, setRange] = useRangeParam()
-  const host = useHostHistory(range)
-  const disks = useDisksHistory(range)
+export function HistoryCard({ span }: { span: HistorySpan }) {
+  const problem = typeof span === "string" ? null : customProblem(span)
+  const host = useHostHistory(span, problem === null)
+  const disks = useDisksHistory(span, problem === null)
   const state = classifyHistory(host)
   const h = host.data
   const d = disks.data
@@ -174,7 +176,8 @@ export function HistoryCard() {
   const stale = host.isPlaceholderData
 
   let body: ReactNode
-  if (state.kind === "loading") body = <div className="px-4 py-4"><SkeletonRows label="Loading history…" /></div>
+  if (problem) body = <p role="alert" className="text-destructive px-4 py-4 text-sm">{problem}</p>
+  else if (state.kind === "loading") body = <div className="px-4 py-4"><SkeletonRows label="Loading history…" /></div>
   else if (state.kind !== "ready") body = <HistoryNotice state={state} />
   else if (empty) {
     body = (
@@ -202,7 +205,7 @@ export function HistoryCard() {
   }
 
   return (
-    <Panel title="History" action={<RangePicker value={range} onChange={setRange} />}>
+    <Panel title="History" note={spanName(span)}>
       {body}
     </Panel>
   )

@@ -8,6 +8,7 @@ import { cronRoute } from "@/routes/_app/cron"
 import { notificationsRoute } from "@/routes/_app/notifications"
 import { dockerRoute } from "@/routes/_app/docker"
 import { dashboardRoute } from "@/routes/_app/dashboard"
+import { monitoringRoute } from "@/routes/_app/monitoring"
 import { appIndexRoute } from "@/routes/_app/index"
 import { firewallRoute } from "@/routes/_app/firewall"
 import { filesRoute } from "@/routes/_app/files"
@@ -39,6 +40,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     appIndexRoute,
     dashboardRoute,
+    monitoringRoute,
     servicesRoute,
     jobsRoute,
     sitesRoute,

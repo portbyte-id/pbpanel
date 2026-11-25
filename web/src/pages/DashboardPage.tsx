@@ -5,7 +5,6 @@ import { useMemo, useState, type ReactNode } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
-import { HistoryCard } from "@/components/HistoryCard"
 import { OpenAlertsCard } from "@/components/OpenAlerts"
 import { Panel } from "@/components/Panel"
 import { ServiceTrend } from "@/components/ServiceTrend"
@@ -69,7 +68,6 @@ export function DashboardPage() {
     <div className="flex flex-col gap-3">
       <HealthBar alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} live={live} />
       <MetricsSection live={live} />
-      <HistoryCard />
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <ServicesSection limit={8} />
         <div className="flex flex-col gap-3">
