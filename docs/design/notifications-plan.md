@@ -429,7 +429,7 @@ On the current Ubuntu sandbox (re-confirm the IP), root SSH, panel installed fro
 
 Run with `SMOKE_HOST=root.10.11.106 sh scripts/smoke/10-notifications.sh` against the Ubuntu 26.04 sandbox,
 built from `notify-plan` and installed with `pbp upgrade --local` (schema 22). Result: **SMOKE PASSED, 36 checks**.
-Covered: test sends; the HMAC signature (checked with Python`s hmac, not the panel`s code); the secret at rest, in
+Covered: test sends; the HMAC signature (checked with Python's hmac, not the panel's code); the secret at rest, in
 the API, the audit log and the journal; cron.failed open, dedupe and resolve; firewall.disabled raised and resolved
 through notify-sweep (the sandbox starts with the firewall off, so the step runs from that state and puts it back);
 quiet hours; retry across a receiver outage and a panel restart with no duplicate event; the bell count and the live
