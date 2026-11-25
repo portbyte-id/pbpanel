@@ -81,6 +81,7 @@ func (s *server) routes() http.Handler {
 	s.wafMonRoutes(mux)
 	s.wafGeoRoutes(mux)
 	s.appsecRoutes(mux)
+	s.clamavRoutes(mux)
 	s.sshAuthRoutes(mux)
 	s.dockerRoutes(mux)
 	s.updateRoutes(mux)

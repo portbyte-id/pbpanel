@@ -233,6 +233,56 @@ starts. With it, a job of kind `appsec.install` runs and the response is
 refused — the job fails with the reason — while any site's firewall has the
 open-appsec engine.
 
+### Store: ClamAV
+
+The open-source antivirus scanner, installed from the distribution's packages
+(`clamav`, `clamav-daemon`, `clamav-freshclam`) and removed from the Store, as
+jobs. Answers 503 on a panel built without it. Ubuntu only, like the rest of the
+package layer.
+
+| Method | Path |
+|--------|------|
+| `GET` | `/api/clamav` |
+| `POST` | `/api/clamav/install` |
+| `POST` | `/api/clamav/uninstall` |
+| `POST` | `/api/clamav/scan` |
+
+`GET /api/clamav` returns the state, read from the scanner and systemd rather than
+from files:
+
+```json
+{
+  "installed": true,
+  "version": "1.4.3",
+  "signature_version": "27800",
+  "signature_date": "Tue Nov 25 08:00:00 2026",
+  "daemon_active": true,
+  "updater_active": true,
+  "scanning": false,
+  "reason": "",
+  "packages": ["clamav", "clamav-daemon", "clamav-freshclam"]
+}
+```
+
+`reason` is one sentence on what is wrong or missing, empty when healthy.
+`scanning` is true while a scan started from the panel is running.
+
+`POST /api/clamav/install` starts a job of kind `clamav.install`: apt install,
+the first `freshclam` download (about 300 MB, with its output in the job log),
+then the updater and daemon are started and the job waits for the daemon's
+socket. `POST /api/clamav/uninstall` starts `clamav.uninstall`, which purges the
+packages and the signatures and is refused while a scan runs. Both answer
+`202 {"job": {…}, …state}`.
+
+`POST /api/clamav/scan` takes `{"path": "/var/www/site"}`, validates the path
+through the file manager (`400` invalid, `404` missing, `403` protected) and
+starts a job of kind `clamav.scan`. It answers `409 conflict` when ClamAV is not
+installed or another scan is running; scans never overlap. The scan uses the
+daemon (`clamdscan --fdpass --multiscan`) when it is running and `clamscan`
+otherwise. The job's output lists each infected file as `<path>: <signature>`.
+**A scan that finds infected files fails the job**, so a clean run is the only
+green one; nothing is quarantined or deleted.
+
 ### Apps and runtimes
 
 | Method | Path |

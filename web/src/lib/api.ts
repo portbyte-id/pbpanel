@@ -13,6 +13,7 @@
 
 import type { CronJob, CronJobInput, CronRun, RunResponse } from "@/lib/cron"
 import type { AppsecActionResponse, AppsecAvailability } from "@/lib/appsec"
+import type { ClamavActionResponse, ClamavAvailability } from "@/lib/clamav"
 import type { JobRecord } from "@/lib/jobs"
 import type {
   DockerAction,
@@ -1125,6 +1126,36 @@ export class ApiClient {
   /** POST /api/appsec/uninstall. Refused while any site's firewall runs the engine. */
   async uninstallAppsec(): Promise<AppsecActionResponse> {
     return this.request<AppsecActionResponse>("/api/appsec/uninstall", { method: "POST" })
+  }
+
+  /* --- ClamAV ------------------------------------------------------------- */
+
+  /** GET /api/clamav: the Store card's state. 503 `unavailable` on a build without it. */
+  async clamav(): Promise<ClamavAvailability> {
+    return this.request<ClamavAvailability>("/api/clamav")
+  }
+
+  /** POST /api/clamav/install: apt packages, first signatures, daemon and updater, as a job. */
+  async installClamav(): Promise<ClamavActionResponse> {
+    return this.request<ClamavActionResponse>("/api/clamav/install", { method: "POST" })
+  }
+
+  /** POST /api/clamav/uninstall: purges the packages and their signatures, as a job. */
+  async uninstallClamav(): Promise<ClamavActionResponse> {
+    return this.request<ClamavActionResponse>("/api/clamav/uninstall", { method: "POST" })
+  }
+
+  /**
+   * POST /api/clamav/scan: scans a file or folder as a job. The job fails when
+   * infected files are found, and its output lists them. 409 when ClamAV is not
+   * installed or another scan is running.
+   */
+  async clamavScan(path: string): Promise<JobRef> {
+    const res = await this.request<{ job: JobRef }>("/api/clamav/scan", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    })
+    return res.job
   }
 
   /**

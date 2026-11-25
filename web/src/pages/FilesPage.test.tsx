@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FilesPage } from "@/pages/FilesPage"
-import { api, type FMEntry, type FMListing } from "@/lib/api"
+import { api, ApiError, type FMEntry, type FMListing } from "@/lib/api"
 import { uploadQueue } from "@/lib/uploadQueue"
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -20,6 +20,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       fmRename: vi.fn(),
       fmOpenFile: vi.fn(),
       fmSaveFile: vi.fn(),
+      clamavScan: vi.fn(),
     },
   }
 })
@@ -183,6 +184,43 @@ describe("FilesPage", () => {
     await waitFor(() =>
       expect(api.fmDelete).toHaveBeenCalledWith([{ path: "/a.txt" }], { permanent: false }),
     )
+  })
+
+  it("scans a file or folder with ClamAV from the context menu", async () => {
+    vi.mocked(api.clamavScan).mockReset()
+    vi.mocked(api.clamavScan).mockResolvedValue({ id: "job-1", kind: "clamav.scan", state: "running" })
+    renderPage([entry({ name: "a.txt", path: "/a.txt" }), dir("site", "/site")])
+    await screen.findByLabelText("Select all")
+    const user = userEvent.setup()
+
+    fireEvent.contextMenu(screen.getByText("site").closest("tr")!, { clientX: 40, clientY: 60 })
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Scan with ClamAV" }))
+    await waitFor(() => expect(api.clamavScan).toHaveBeenCalledWith("/site"))
+
+    fireEvent.contextMenu(screen.getByText("a.txt").closest("tr")!, { clientX: 40, clientY: 60 })
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Scan with ClamAV" }))
+    await waitFor(() => expect(api.clamavScan).toHaveBeenCalledWith("/a.txt"))
+  })
+
+  it("shows the server's sentence when a scan cannot start", async () => {
+    vi.mocked(api.clamavScan).mockReset()
+    vi.mocked(api.clamavScan).mockRejectedValue(
+      new ApiError(409, "conflict", "clamav: ClamAV is not installed; install it from the Store"),
+    )
+    renderPage([entry({ name: "a.txt", path: "/a.txt" })])
+    await screen.findByLabelText("Select all")
+    const user = userEvent.setup()
+
+    fireEvent.contextMenu(screen.getByText("a.txt").closest("tr")!, { clientX: 40, clientY: 60 })
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Scan with ClamAV" }))
+    expect(await screen.findByText(/install it from the Store/)).toBeInTheDocument()
+  })
+
+  it("does not offer a scan on a symlink", async () => {
+    renderPage([entry({ name: "link", path: "/link", kind: "symlink", target_kind: "file" })])
+    await screen.findByLabelText("Select all")
+    fireEvent.contextMenu(screen.getByText("link").closest("tr")!, { clientX: 40, clientY: 60 })
+    expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: "Scan with ClamAV" })).not.toBeInTheDocument()
   })
 
   it("closes the context menu on Escape", async () => {

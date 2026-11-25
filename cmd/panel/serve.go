@@ -13,6 +13,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/appsec"
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
+	"github.com/portbyte-id/server-panel/internal/clamav"
 	"github.com/portbyte-id/server-panel/internal/geoip"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
@@ -201,6 +202,7 @@ func serve(ctx context.Context, _ []string) error {
 		UI:             ui,
 		Nginx:          nginxDeps,
 		Appsec:         appsecService(nginxStack),
+		Clamav:         clamav.New(clamav.Options{}),
 		OpenAppsec:     appsecAvailable,
 		WAFEngineInUse: openAppsecInUse,
 		Files:          files,

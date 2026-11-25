@@ -82,6 +82,10 @@ type Deps struct {
 	// without the engine's package looks like.
 	Appsec AppsecService
 
+	// Clamav is ClamAV: the Store card, its install and uninstall jobs, and the
+	// scan action the file manager offers. Nil leaves /api/clamav answering 503.
+	Clamav ClamavService
+
 	// OpenAppsec carries the engine's state into the firewall status and overview
 	// JSON: the availability verdict, the agent's version and the tracking warning
 	// the interface renders verbatim. Nil leaves those fields out.

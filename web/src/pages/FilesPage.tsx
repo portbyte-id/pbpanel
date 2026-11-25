@@ -178,6 +178,20 @@ export function FilesPage() {
   }
 
   /**
+   * Scans one file or folder with ClamAV as a job. The job opens in the drawer; it
+   * fails when infected files are found, with each one listed in its output. A host
+   * without ClamAV answers 409 and the page shows that sentence.
+   */
+  const scanEntry = async (entry: FMEntry) => {
+    try {
+      const job = await api.clamavScan(entry.path)
+      setJobId(job.id)
+    } catch (err) {
+      setError(fmErrorText(err, "The scan could not be started."))
+    }
+  }
+
+  /**
    * Runs one context-menu action on a row. A row that is part of the selection
    * acts on the whole selection; any other row acts on itself alone.
    */
@@ -202,6 +216,9 @@ export function FilesPage() {
       case "extract":
         setExtractError(null)
         setExtracting(entry)
+        break
+      case "scan":
+        void scanEntry(entry)
         break
       case "download":
         window.open(api.fmDownloadUrl(entry.path), "_blank", "noopener")
@@ -568,6 +585,7 @@ export type EntryAction =
   | "rename"
   | "archive"
   | "extract"
+  | "scan"
   | "download"
   | "download-folder"
   | "select"
@@ -628,6 +646,9 @@ function menuItems(entry: FMEntry, selected: boolean, count: number): MenuItem[]
   if (entry.kind === "file" && isArchiveName(entry.name)) {
     items.push({ key: "extract", label: "Extract…" })
   }
+  // A symlink is not scanned: clamscan does not follow one by default, so the
+  // action would report a clean link whatever it pointed at.
+  if (entry.kind === "file" || entry.kind === "dir") items.push({ key: "scan", label: "Scan with ClamAV" })
   items.push(
     dirLike
       ? { key: "download-folder", label: "Download as .tar.gz" }

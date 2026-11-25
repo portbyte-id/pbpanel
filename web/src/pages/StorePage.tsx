@@ -1,11 +1,13 @@
 import { StoreAppsecCard } from "@/components/StoreAppsecCard"
+import { StoreClamavCard } from "@/components/StoreClamavCard"
 
 /**
- * The Store: engines and runtimes the panel can install for a host.
+ * The Store: engines and tools the panel can install for a host.
  *
- * Today it holds one entry, the second firewall engine. The card is the only
- * place the open-appsec agent is installed from, and it is where the engine
- * picker sends an operator whose host cannot run the engine yet.
+ * Two entries: the second firewall engine, and ClamAV. The open-appsec card is
+ * the only place that agent is installed from, and it is where the engine picker
+ * sends an operator whose host cannot run the engine yet. The ClamAV card is
+ * where the scanner behind the Files page's Scan action comes from.
  */
 export function StorePage() {
   return (
@@ -19,6 +21,16 @@ export function StorePage() {
           </p>
         </div>
         <StoreAppsecCard />
+      </section>
+
+      <section aria-label="Security tools" className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-md font-semibold tracking-tight">Security tools</h2>
+          <p className="text-muted-foreground text-sm">
+            Scan uploaded files and site folders for malware, on demand, from the Files page.
+          </p>
+        </div>
+        <StoreClamavCard />
       </section>
     </div>
   )

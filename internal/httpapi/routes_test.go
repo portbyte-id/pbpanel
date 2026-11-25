@@ -106,6 +106,11 @@ func protectedRoutes() []protectedRoute {
 		{name: "appsec status", method: http.MethodGet, path: "/api/appsec", okStatus: http.StatusServiceUnavailable},
 		{name: "appsec install", method: http.MethodPost, path: "/api/appsec/install", body: map[string]string{"acknowledge": "x"}, okStatus: http.StatusServiceUnavailable},
 		{name: "appsec uninstall", method: http.MethodPost, path: "/api/appsec/uninstall", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		// ClamAV's Store card, its jobs and the scan action; no service is wired here.
+		{name: "clamav status", method: http.MethodGet, path: "/api/clamav", okStatus: http.StatusServiceUnavailable},
+		{name: "clamav install", method: http.MethodPost, path: "/api/clamav/install", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "clamav uninstall", method: http.MethodPost, path: "/api/clamav/uninstall", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
+		{name: "clamav scan", method: http.MethodPost, path: "/api/clamav/scan", body: map[string]string{"path": "/tmp"}, okStatus: http.StatusServiceUnavailable},
 	}
 }
 
