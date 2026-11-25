@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react"
 import {
   Activity,
+  Bell,
   CalendarClock,
   Container,
   Cpu,
@@ -89,6 +90,7 @@ export const navGroups: NavGroup[] = [
       { label: "Firewall", icon: ShieldCheck, path: "/firewall", description: "Open ports and rules", keywords: "iptables ports" },
       { label: "SSH", icon: ShieldAlert, path: "/ssh", description: "SSH login attempts, failed and succeeded", keywords: "sshd auth login security brute force attempts journal" },
       { label: "Cron", icon: CalendarClock, path: "/cron", description: "Scheduled jobs and their run history", keywords: "schedule" },
+      { label: "Notifications", icon: Bell, path: "/notifications", description: "Alerts, channels and the delivery log", keywords: "alerts email webhook telegram discord bell" },
       { label: "Docker", icon: Container, path: "/docker", description: "Containers, images and volumes, with live resource use", keywords: "containers images volumes stats compose" },
       {
         label: "WAF",
