@@ -1,6 +1,6 @@
 # Notifications and alerts: plan
 
-Status: **steps 1-5 built on branch `notify-plan`; step 6 partly wired (engine and dispatcher run in the daemon, producers not yet); steps 6 producers, 7, 8 and the host gate not done; decisions D1-D13 still unratified.** Telegram and Discord request shapes are still "(assumed)" (the doc check could not run). Migration `0022` in use.
+Status: **steps 1-5 built on branch `notify-plan`; step 6 partly wired (engine and dispatcher run in the daemon, producers not yet); steps 6 producers, 7, 8 and the host gate not done; decisions D1-D13 ratified 2026-11-25 one by one, each as recommended.** Telegram and Discord request shapes are still "(assumed)" (the doc check could not run). Migration `0022` in use.
 
 Written after reading the dashboard alerts (`web/src/lib/alerts.ts`, `web/src/pages/DashboardPage.tsx`),
 the job manager (`internal/jobs/jobs.go`, `events.go`), the cron service (`internal/cron/builtin.go`,
@@ -74,9 +74,9 @@ no producer can fail or slow down because notify is broken, disabled or not wire
 
 ## 3. Decisions
 
-The operator ratifies each row; until then the recommendation is what the steps assume.
+Ratified 2026-11-25, each row asked and accepted as its recommendation (D1-D13).
 
-| # | Decision | Recommendation (unratified) |
+| # | Decision | Ratified 2026-11-25 |
 |---|---|---|
 | D1 | Durability of `Emit` | **Synchronous insert of the event row (2 s budget, detached from the caller's cancellation), asynchronous delivery from a DB-backed queue.** A restart loses nothing queued; a producer never waits on the network |
 | D2 | Where channel credentials live | **`notify_channels.secret`, sealed with secretbox** (aad `notify_channels:secret:<id>`), not the settings registry (plain text). A host without `secret.key` gets bell-only notify: channel create answers 503 with the reason |
