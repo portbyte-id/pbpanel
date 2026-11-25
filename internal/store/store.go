@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"strings"
 	"time"
@@ -50,12 +51,29 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func openDB(path string) (*sql.DB, error) {
+// OpenFS opens a SQLite database at path whose schema is the migrations in
+// fsys, with its own schema_migrations ledger. It is how a second database
+// (metrics.db) reuses the pool, WAL and migration code without sharing a schema
+// with panel.db. pragmas are extra "name(value)" connection settings applied to
+// every pooled connection, for example "synchronous(NORMAL)".
+func OpenFS(path string, fsys fs.FS, pragmas ...string) (*Store, error) {
+	db, err := openDB(path, pragmas...)
+	if err != nil {
+		return nil, err
+	}
+	if err := migrate(context.Background(), db, fsys); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
+func openDB(path string, pragmas ...string) (*sql.DB, error) {
 	if strings.ContainsRune(path, '?') {
 		return nil, fmt.Errorf("store: database path %q contains '?', which the driver reads as the start of a query string", path)
 	}
 
-	db, err := sql.Open("sqlite", dsn(path))
+	db, err := sql.Open("sqlite", dsn(path, pragmas...))
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
@@ -153,9 +171,12 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) (err error) 
 // file: URI: the driver strips everything from the first '?' when the DSN has
 // no file: prefix, so a plain path keeps working with Windows drive letters
 // and backslashes.
-func dsn(path string) string {
+func dsn(path string, pragmas ...string) string {
 	q := url.Values{}
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS))
+	for _, p := range pragmas {
+		q.Add("_pragma", p)
+	}
 	// Immediate transactions take the write lock at BEGIN, so a transaction
 	// never has to upgrade a read lock halfway through and fail with
 	// SQLITE_BUSY, which the busy timeout cannot rescue.

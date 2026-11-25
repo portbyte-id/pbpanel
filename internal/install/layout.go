@@ -92,6 +92,10 @@ func (l Layout) DataDir() string { return filepath.Join(l.PanelDir(), "data") }
 // DBPath is the SQLite database (decision 6).
 func (l Layout) DBPath() string { return filepath.Join(l.DataDir(), "panel.db") }
 
+// MetricsDBPath is the metrics history database: samples live apart from panel.db so
+// deleting the file is a valid reset.
+func (l Layout) MetricsDBPath() string { return filepath.Join(l.DataDir(), "metrics.db") }
+
 // SecretKeyPath is the panel's random key file.
 func (l Layout) SecretKeyPath() string { return filepath.Join(l.DataDir(), "secret.key") }
 
