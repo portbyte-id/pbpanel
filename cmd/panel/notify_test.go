@@ -120,7 +120,7 @@ func TestJobsHookFailureThenSuccess(t *testing.T) {
 	svc, repo, _ := notifyFixture(t)
 	hook := jobsNotifyHook(svc)
 
-	hook(jobs.Job{Kind: "app.install", State: jobs.StateFailed, Err: "apt exited 100"})
+	hook(jobs.Job{Kind: "app.install", State: jobs.StateFailed, Err: "install step exited 100"})
 	hook(jobs.Job{Kind: "app.install", State: jobs.StateSucceeded})
 	events, err := repo.ListEvents(context.Background(), notify.EventFilter{})
 	if err != nil || len(events) != 2 || events[0].Kind != notify.KindJobFailed || !events[0].Resolved {
