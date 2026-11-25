@@ -112,6 +112,9 @@ type AppState struct {
 	// State is supervisord's state name (RUNNING, STOPPED, FATAL, ...), or
 	// "unknown" or "not loaded", which is what apps.Status.State carries.
 	State string
+	// PID is the program's main process, 0 when it has none. Usage reads its CPU
+	// and memory from /proc/<pid>.
+	PID int
 }
 
 // Apps is the app manager as the service grid sees it. *apps.Manager has the
@@ -142,6 +145,10 @@ type ServicesOptions struct {
 	// StopTimeout is how long Docker waits for a container to exit after SIGTERM
 	// before killing it. Zero means 10 seconds.
 	StopTimeout time.Duration
+	// Files reads cgroup and /proc files for Usage. Nil means the host's.
+	Files FileReader
+	// Now is the clock Usage measures CPU intervals with. Nil means time.Now.
+	Now func() time.Time
 }
 
 // unitPattern is a systemd unit name. A name from the provider is passed to
@@ -178,6 +185,9 @@ type Services struct {
 	units       func(context.Context) ([]string, error)
 	apps        Apps
 	stopTimeout time.Duration
+	files       FileReader
+	now         func() time.Time
+	usage       usageState
 }
 
 // NewServices builds Services.
@@ -188,6 +198,13 @@ func NewServices(o ServicesOptions) (*Services, error) {
 	s := &Services{cmd: o.Cmd, eng: o.Engine, containers: o.Containers, units: o.Units, apps: o.Apps, stopTimeout: o.StopTimeout}
 	if s.stopTimeout <= 0 {
 		s.stopTimeout = 10 * time.Second
+	}
+	s.files, s.now = o.Files, o.Now
+	if s.files == nil {
+		s.files = OSFiles{}
+	}
+	if s.now == nil {
+		s.now = time.Now
 	}
 	return s, nil
 }

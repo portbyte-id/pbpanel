@@ -258,7 +258,7 @@ func (a sysinfoApps) List(ctx context.Context) ([]sysinfo.AppState, error) {
 	}
 	out := make([]sysinfo.AppState, 0, len(list))
 	for _, s := range list {
-		out = append(out, sysinfo.AppState{Name: s.Name, State: s.State})
+		out = append(out, sysinfo.AppState{Name: s.Name, State: s.State, PID: s.PID})
 	}
 	return out, nil
 }
