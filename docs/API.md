@@ -415,3 +415,25 @@ reaches back to the start of the range is used, and `step` is raised so that no 
 seconds. Anything else is `400`. For a site, a minute with no requests while the daemon was recording
 is `0`; a minute the daemon did not record is `null`. Percentiles are interpolated inside a fixed
 histogram bin and are good to about 20%.
+
+### Alert rules
+
+Threshold alerts evaluated against the one-minute history after every flush. Rules and their state
+live in `panel.db` (migration 0024), so a history reset does not touch them. An alert goes
+`ok -> pending -> firing -> clearing -> ok`: it fires once its value has stayed past `threshold` for
+`for_seconds`, and clears once it has stayed past `clear_threshold` for `clear_for_seconds`. A
+notification (`metrics.threshold`) goes out on the fire and on the clear, and not in between.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/alerts` | `{rules: [{id, kind, target, threshold, clear_threshold, for_seconds, clear_for_seconds, severity, enabled, builtin, states: [{target, state, since, value}]}], kinds}` |
+| `POST /api/alerts/rules` | create (201); omitted `target` is `*`, `enabled` defaults to true, `for_seconds` and `clear_for_seconds` to 300 |
+| `PUT /api/alerts/rules/{id}` | change a rule; omitted fields keep their value. A built-in rule keeps its `kind` and `target` |
+| `DELETE /api/alerts/rules/{id}` | delete (204); a built-in rule answers 409: switch it off instead |
+
+`kind` is one of `disk_pct`, `mem_pct`, `swap_pct`, `load_per_core`, `cpu_pct`, `service_down` (the
+value is the percent of the minute the service was not running), `cert_days` (days left, so it fires
+at or below the threshold and `clear_threshold` must be at least `threshold`) and `site_5xx_pct`
+(judged only on minutes with 50 or more requests). The host-wide kinds always target `host`. A bad
+value answers `422` with the name of the field. Switching a firing rule off, deleting it, or losing the
+target's data resolves its alerts first.

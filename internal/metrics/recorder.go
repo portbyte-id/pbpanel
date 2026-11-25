@@ -113,6 +113,10 @@ type Options struct {
 	Tick func(d time.Duration) (<-chan time.Time, func())
 	// OnError hears about a failed flush or sweep, rate-limited. Nil drops it.
 	OnError func(error)
+	// AfterFlush runs after every periodic flush, whether or not it succeeded:
+	// the alert evaluator hangs here, and a failing flush is exactly when a full
+	// disk needs to be heard about. Nil does nothing.
+	AfterFlush func(ctx context.Context)
 }
 
 type hostAgg struct {
@@ -215,6 +219,14 @@ func NewRecorder(o Options) (*Recorder, error) {
 		r.ret = DefaultRetention()
 	}
 	return r, nil
+}
+
+// SetAfterFlush installs the hook that runs after each periodic flush. It is a
+// setter because the evaluator needs the recorder to exist first.
+func (r *Recorder) SetAfterFlush(fn func(ctx context.Context)) {
+	r.mu.Lock()
+	r.o.AfterFlush = fn
+	r.mu.Unlock()
 }
 
 // SetEnabled turns persistence on or off live. Turning it off discards what is
@@ -500,6 +512,12 @@ func (r *Recorder) Run(ctx context.Context) {
 			r.pollServices(ctx)
 		case <-flushC:
 			_ = r.Flush(ctx)
+			r.mu.Lock()
+			after := r.o.AfterFlush
+			r.mu.Unlock()
+			if after != nil {
+				after(ctx)
+			}
 		}
 	}
 }

@@ -8,8 +8,11 @@ import (
 
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/metrics"
+	"github.com/portbyte-id/server-panel/internal/notify"
 	"github.com/portbyte-id/server-panel/internal/settings"
+	"github.com/portbyte-id/server-panel/internal/store"
 	"github.com/portbyte-id/server-panel/internal/sysinfo"
+	"github.com/portbyte-id/server-panel/internal/tls"
 	"github.com/portbyte-id/server-panel/internal/wafmon"
 )
 
@@ -18,6 +21,7 @@ import (
 // its routes answer 503; the rest of the panel is unaffected.
 type metricsStack struct {
 	Service *metrics.Service
+	Alerts  *metrics.Alerts
 	db      *metrics.DB
 	rec     *metrics.Recorder
 }
@@ -25,7 +29,7 @@ type metricsStack struct {
 // newMetrics opens metrics.db and wires the recorder to the sampler, the service
 // grid and the access-log collector. Any of them may be nil: the history then
 // simply has nothing from that source.
-func newMetrics(ctx context.Context, reg *settings.Registry, layout install.Layout, sampler *sysinfo.Sampler, services *sysinfo.Services, waf *wafmon.Collector, siteList siteLister, logger *slog.Logger) *metricsStack {
+func newMetrics(ctx context.Context, st *store.Store, reg *settings.Registry, layout install.Layout, emit notify.Emitter, certs func(context.Context) ([]tls.Cert, error), sampler *sysinfo.Sampler, services *sysinfo.Services, waf *wafmon.Collector, siteList siteLister, logger *slog.Logger) *metricsStack {
 	db, err := metrics.Open(layout.MetricsDBPath(), func(format string, args ...any) {
 		logger.Warn("metrics history was reset", "detail", format, "args", args)
 	})
@@ -85,6 +89,15 @@ func newMetrics(ctx context.Context, reg *settings.Registry, layout install.Layo
 		return nil
 	}
 
+	alerts := newAlerts(st, reg, db, rec, emit, certs, logger)
+	if alerts != nil {
+		rec.SetAfterFlush(func(ctx context.Context) {
+			if err := alerts.Evaluate(ctx); err != nil {
+				logger.Warn("alert evaluation failed", "error", err)
+			}
+		})
+	}
+
 	// A change applies at once: the recorder reads nothing from the registry
 	// itself, so the daemon pushes the new values in.
 	reg.Subscribe(func(c settings.Change) {
@@ -97,7 +110,7 @@ func newMetrics(ctx context.Context, reg *settings.Registry, layout install.Layo
 			rec.SetRetention(metricsRetention(context.Background(), reg))
 		}
 	})
-	return &metricsStack{Service: svc, db: db, rec: rec}
+	return &metricsStack{Service: svc, Alerts: alerts, db: db, rec: rec}
 }
 
 // start runs the recorder until ctx ends, then closes the database. The returned
@@ -138,4 +151,36 @@ func boolSetting(ctx context.Context, reg *settings.Registry, name string, fallb
 		return fallback
 	}
 	return v
+}
+
+// newAlerts builds the threshold evaluator over panel.db's rules and the history.
+// A failure leaves the history running without alerts.
+func newAlerts(st *store.Store, reg *settings.Registry, db *metrics.DB, rec *metrics.Recorder, emit notify.Emitter, certs func(context.Context) ([]tls.Cert, error), logger *slog.Logger) *metrics.Alerts {
+	obs := metrics.DBObserver{DB: db, Recorder: rec}
+	if certs != nil {
+		obs.Certs = func(ctx context.Context) ([]metrics.CertExpiry, error) {
+			list, err := certs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]metrics.CertExpiry, 0, len(list))
+			for _, c := range list {
+				out = append(out, metrics.CertExpiry{Domain: c.Domain, NotAfter: c.NotAfter})
+			}
+			return out, nil
+		}
+	}
+	a, err := metrics.NewAlerts(metrics.AlertsOptions{
+		Rules:   metrics.NewRuleStore(st),
+		Observe: obs,
+		Emit:    emit,
+		Enabled: func() bool {
+			return rec.Status().Enabled && boolSetting(context.Background(), reg, settings.KeyMetricsAlertsEnabled, true)
+		},
+	})
+	if err != nil {
+		logger.Error("metric alerts are not available", "error", err)
+		return nil
+	}
+	return a
 }
