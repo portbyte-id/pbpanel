@@ -123,6 +123,7 @@ func WithMaxLines(n int) Option {
 type Manager struct {
 	store    *store.Store
 	maxLines int
+	onFinish func(Job)
 	now      func() time.Time
 
 	mu   sync.Mutex
@@ -278,6 +279,9 @@ func (m *Manager) run(r *run, fn Func) error {
 	r.mu.Unlock()
 
 	r.final, r.finishErr = m.finish(r.id, state, code, msg)
+	if m.onFinish != nil && r.finishErr == nil {
+		m.onFinish(r.final)
+	}
 
 	r.mu.Lock()
 	for ch := range r.subs {
@@ -625,4 +629,10 @@ func newID() (string, error) {
 		return "", fmt.Errorf("jobs: generate id: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// WithOnFinish calls fn with each job's final state once the outcome is saved.
+// It runs on the job's goroutine, so fn must return quickly.
+func WithOnFinish(fn func(Job)) Option {
+	return func(m *Manager) { m.onFinish = fn }
 }

@@ -17,6 +17,8 @@ import (
 // Options configures a Service.
 type Options struct {
 	Store *store.Store
+	// OnRunFinished is called after a run's outcome is saved. It runs on the run's goroutine.
+	OnRunFinished func(job Job, status Status, errText string)
 	// Clock drives scheduling, run timestamps and timeouts; nil means RealClock.
 	Clock Clock
 	// Executor starts the processes; nil means OSExecutor.
@@ -50,18 +52,19 @@ type Options struct {
 
 // Service owns the cron jobs, their schedule and their run history.
 type Service struct {
-	db         *sql.DB
-	clock      Clock
-	exec       Executor
-	lookup     func(string) (Account, error)
-	allowShell func() bool
-	logRoot    string
-	scriptDir  string
-	defRetain  int
-	loc        *time.Location
-	tailBytes  int
-	maxLog     int64
-	builtins   map[string]BuiltinFunc
+	db            *sql.DB
+	onRunFinished func(Job, Status, string)
+	clock         Clock
+	exec          Executor
+	lookup        func(string) (Account, error)
+	allowShell    func() bool
+	logRoot       string
+	scriptDir     string
+	defRetain     int
+	loc           *time.Location
+	tailBytes     int
+	maxLog        int64
+	builtins      map[string]BuiltinFunc
 
 	base   context.Context
 	cancel context.CancelFunc
@@ -84,7 +87,7 @@ func New(o Options) (*Service, error) {
 		return nil, errors.New("cron: Store is required")
 	}
 	s := &Service{
-		db: o.Store.DB(), clock: o.Clock, exec: o.Executor, lookup: o.LookupUser,
+		db: o.Store.DB(), clock: o.Clock, exec: o.Executor, lookup: o.LookupUser, onRunFinished: o.OnRunFinished,
 		allowShell: o.AllowShell, logRoot: o.LogRoot, scriptDir: o.ScriptDir,
 		defRetain: o.DefaultRetention, loc: o.Location, tailBytes: o.OutputTailBytes,
 		maxLog: o.MaxLogBytes, states: make(map[int64]*jobState),

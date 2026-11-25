@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/portbyte-id/server-panel/internal/cron"
 	"github.com/portbyte-id/server-panel/internal/install"
+	"github.com/portbyte-id/server-panel/internal/jobs"
 	"github.com/portbyte-id/server-panel/internal/notify"
 	"github.com/portbyte-id/server-panel/internal/secretbox"
 	"github.com/portbyte-id/server-panel/internal/settings"
@@ -63,4 +65,42 @@ func notifyPanelURL(ctx context.Context, reg *settings.Registry) string {
 		return "https://" + domain
 	}
 	return "https://" + domain + ":" + port
+}
+
+// jobsNotifyHook reports a job that failed, and clears the report when a later
+// job of the same kind succeeds. Canceled and interrupted jobs report nothing.
+func jobsNotifyHook(svc *notify.Service) func(jobs.Job) {
+	return func(j jobs.Job) {
+		ctx := context.Background()
+		key := notify.KindJobFailed + ":" + j.Kind
+		switch j.State {
+		case jobs.StateFailed:
+			svc.Emit(ctx, notify.Event{Kind: notify.KindJobFailed, Key: key,
+				Subject: "Background job " + j.Kind + " failed", Body: j.Err, Source: "jobs"})
+		case jobs.StateSucceeded:
+			svc.Clear(ctx, notify.Event{Kind: notify.KindJobFailed, Key: key,
+				Subject: "Background job " + j.Kind + " succeeded", Source: "jobs"})
+		}
+	}
+}
+
+// cronNotifyHook reports a scheduled run that failed or timed out, and clears
+// the report when the job next succeeds. The renewal built-in is skipped: its
+// failure is reported as tls.renew_failed (§5, step 6).
+func cronNotifyHook(svc *notify.Service) func(cron.Job, cron.Status, string) {
+	return func(job cron.Job, status cron.Status, errText string) {
+		if job.Builtin == cron.BuiltinSSLRenew {
+			return
+		}
+		ctx := context.Background()
+		key := notify.KindCronFailed + ":" + job.Name
+		switch status {
+		case cron.StatusFailed, cron.StatusTimeout:
+			svc.Emit(ctx, notify.Event{Kind: notify.KindCronFailed, Key: key,
+				Subject: "Scheduled job " + job.Name + " " + string(status), Body: errText, Source: "cron"})
+		case cron.StatusSucceeded:
+			svc.Clear(ctx, notify.Event{Kind: notify.KindCronFailed, Key: key,
+				Subject: "Scheduled job " + job.Name + " succeeded", Source: "cron"})
+		}
+	}
 }

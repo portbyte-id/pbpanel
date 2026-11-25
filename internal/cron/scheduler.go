@@ -228,6 +228,9 @@ func (s *Service) execute(ctx context.Context, cancel context.CancelFunc, job Jo
 		`UPDATE cron_runs SET finished_at=?, exit_code=?, status=?, log_path=?, output_tail=?, truncated=?, error=? WHERE id=?`,
 		s.stamp(), f.exitCode, f.status, f.logPath, f.tail, boolInt(f.truncated), f.errText, runID)
 	s.prune(dctx, job)
+	if s.onRunFinished != nil {
+		s.onRunFinished(job, f.status, f.errText)
+	}
 
 	if s.release(job.ID, runID) {
 		s.runQueued(dctx, job.ID)

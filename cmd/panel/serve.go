@@ -14,6 +14,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
 	"github.com/portbyte-id/server-panel/internal/clamav"
+	"github.com/portbyte-id/server-panel/internal/cron"
 	"github.com/portbyte-id/server-panel/internal/geoip"
 	"github.com/portbyte-id/server-panel/internal/httpapi"
 	"github.com/portbyte-id/server-panel/internal/jobs"
@@ -77,7 +78,8 @@ func serve(ctx context.Context, _ []string) error {
 		func() time.Duration { return durationSetting(ctx, reg, "login.lockout", fallbackLockout) },
 	)
 
-	jobsMgr, err := jobs.New(st)
+	notifySvc, notifyAdmin := newNotify(ctx, st, reg, layout, logger)
+	jobsMgr, err := jobs.New(st, jobs.WithOnFinish(jobsNotifyHook(notifySvc)))
 	if err != nil {
 		return fmt.Errorf("serve: jobs: %w", err)
 	}
@@ -139,7 +141,7 @@ func serve(ctx context.Context, _ []string) error {
 		tlsState sites.TLSState
 		tlsDeps  *httpapi.TLSDeps
 	)
-	if tlsSvc, err = newTLS(st, reg, layout, auditW, logger); err != nil {
+	if tlsSvc, err = newTLS(st, reg, layout, auditW, logger, notifySvc); err != nil {
 		logger.Error("TLS is not available", "error", err)
 		tlsSvc = nil
 	} else {
@@ -169,7 +171,10 @@ func serve(ctx context.Context, _ []string) error {
 	if nginxStack != nil {
 		siteList = nginxStack.Sites
 	}
-	m7 := newM7(st, reg, layout, appsSvc, siteList, cronBuiltins(tlsSvc), logger)
+	sweep := &notifySweep{}
+	builtins := cronBuiltins(tlsSvc)
+	builtins[cron.BuiltinNotifySweep] = sweep.run
+	m7 := newM7(st, reg, layout, appsSvc, siteList, builtins, logger, notifySvc)
 
 	// Traffic and WAF events come from the logs nginx writes; the collector only
 	// reads them, so it runs whether or not nginx is up.
@@ -193,8 +198,8 @@ func serve(ctx context.Context, _ []string) error {
 			return listener.Certs()
 		}
 	}
-	// The engine runs even without a secret key; only storing a channel is refused.
-	_, notifyAdmin := newNotify(ctx, st, reg, layout, logger)
+	fwSvc := newFirewall(ctx, st, reg, logger)
+	sweep.bind(notifySvc, sweepSource{firewall: firewallSource(fwSvc), sites: siteSource(siteList), certs: certSource(tlsSvc)})
 	handler, err := httpapi.New(httpapi.Deps{
 		Store:          st,
 		Settings:       reg,
@@ -209,7 +214,7 @@ func serve(ctx context.Context, _ []string) error {
 		OpenAppsec:     appsecAvailable,
 		WAFEngineInUse: openAppsecInUse,
 		Files:          files,
-		Firewall:       newFirewall(ctx, st, reg, logger),
+		Firewall:       fwSvc,
 		Apps:           appsSvc,
 		Runtimes:       runtimesSvc,
 		TLS:            tlsDeps,

@@ -20,6 +20,7 @@ import (
 	"github.com/portbyte-id/server-panel/internal/install"
 	"github.com/portbyte-id/server-panel/internal/logs"
 	"github.com/portbyte-id/server-panel/internal/nginx"
+	"github.com/portbyte-id/server-panel/internal/notify"
 	"github.com/portbyte-id/server-panel/internal/php"
 	"github.com/portbyte-id/server-panel/internal/settings"
 	"github.com/portbyte-id/server-panel/internal/sites"
@@ -78,7 +79,7 @@ type siteLister interface {
 
 // newM7 wires the three features. Building touches neither Docker nor the host's
 // /proc: a daemon on an odd host still starts, and the failing part says why.
-func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsSvc httpapi.AppsService, siteList siteLister, builtins map[string]cron.BuiltinFunc, logger *slog.Logger) *m7Stack {
+func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsSvc httpapi.AppsService, siteList siteLister, builtins map[string]cron.BuiltinFunc, logger *slog.Logger, notifySvc *notify.Service) *m7Stack {
 	m := &m7Stack{}
 
 	// One Docker client for the three features. docker.New does not dial, so a
@@ -128,11 +129,12 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 	}
 	cronLogs := filepath.Join(layout.LogsDir(), "cron")
 	if svc, err := cron.New(cron.Options{
-		Store:      st,
-		AllowShell: allowShell,
-		LogRoot:    cronLogs,
-		ScriptDir:  filepath.Join(layout.DataDir(), "cron"),
-		Builtins:   builtins,
+		Store:         st,
+		AllowShell:    allowShell,
+		LogRoot:       cronLogs,
+		ScriptDir:     filepath.Join(layout.DataDir(), "cron"),
+		Builtins:      builtins,
+		OnRunFinished: cronNotifyHook(notifySvc),
 	}); err != nil {
 		logger.Error("scheduled jobs are not available", "error", err)
 	} else {
