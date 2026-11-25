@@ -1,6 +1,6 @@
 # Site and panel backups: plan
 
-Status: **plan complete; X1 (age) ratified 2026-11-25; S3 deferred 2026-11-25; step 0 run on sandbox `.106` (results in §5); other decisions unratified.** Migration number reserved: `0023`. Scope:
+Status: **plan complete; X1 (age), VACUUM INTO copy and scrypt logN 17 ratified 2026-11-25; S3 deferred 2026-11-25; step 0 run on sandbox `.106` (results in §5); other decisions unratified.** Migration number reserved: `0023`. Scope:
 Ubuntu first; EL (Rocky/RHEL) stays in **M9**.
 
 Written after reading `internal/store` (`store.go`, `migrate.go`, all of `migrations/0001`-`0021`),
@@ -483,9 +483,9 @@ Before step 1 starts, ratify in this order:
    safety, since the archive is encrypted, but the panel.db copy is cleaner with it done.
 3. **R8**: an operator OK for the restore CLI to clear the confirmed firewall ruleset on a panel
    restore (`--keep-network` opts out).
-4. **D1, D2, D4, D5, D7**: step 0 ran on `.106`; §5 has the numbers. To ratify or amend: D2's gzip
-   comparison is corrected; the online copy is `VACUUM INTO`; D5 recommends scrypt logN 17. **D3 (S3)**:
-   deferred.
+4. **Ratified 2026-11-25**: the online copy is `VACUUM INTO` (§1, §4.2, D7); keyring scrypt work factor
+   is logN 17 (D5). **D1, D2, D4, D7** are confirmed by the step 0 numbers in §5 (D2's gzip figures
+   corrected). **D3 (S3)**: deferred.
 
 Revision log for this pass:
 
