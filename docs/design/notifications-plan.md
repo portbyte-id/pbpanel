@@ -1,6 +1,6 @@
 # Notifications and alerts: plan
 
-Status: **steps 1-5 built on branch `notify-plan`; step 6 partly wired (engine and dispatcher run in the daemon, producers not yet); steps 6 producers, 7, 8 and the host gate not done; decisions D1-D13 ratified 2026-11-25 one by one, each as recommended.** Telegram and Discord request shapes are still "(assumed)" (the doc check could not run). Migration `0022` in use.
+Status: **all eight steps built on branch `notify-plan`. Host gate passed 2026-11-25 (36 checks; TLS renewal failure, critical-through-quiet and the Telegram/Discord senders not covered). Decisions D1-D13 ratified 2026-11-25 one by one. Telegram and Discord request shapes are still "(assumed)". Migration `0022` in use.**
 
 Written after reading the dashboard alerts (`web/src/lib/alerts.ts`, `web/src/pages/DashboardPage.tsx`),
 the job manager (`internal/jobs/jobs.go`, `events.go`), the cron service (`internal/cron/builtin.go`,
@@ -424,6 +424,20 @@ On the current Ubuntu sandbox (re-confirm the IP), root SSH, panel installed fro
 9. **Bell:** `GET /api/notify/summary` counts match; the SSE stream yields the event of step 4.
 10. Optional, `SKIP` without tokens: Telegram and Discord test sends with operator-supplied
     credentials passed as environment to the script (never committed).
+
+### Host gate result (2026-11-25)
+
+Run with `SMOKE_HOST=root.10.11.106 sh scripts/smoke/10-notifications.sh` against the Ubuntu 26.04 sandbox,
+built from `notify-plan` and installed with `pbp upgrade --local` (schema 22). Result: **SMOKE PASSED, 36 checks**.
+Covered: test sends; the HMAC signature (checked with Python`s hmac, not the panel`s code); the secret at rest, in
+the API, the audit log and the journal; cron.failed open, dedupe and resolve; firewall.disabled raised and resolved
+through notify-sweep (the sandbox starts with the firewall off, so the step runs from that state and puts it back);
+quiet hours; retry across a receiver outage and a panel restart with no duplicate event; the bell count and the live
+stream.
+Not covered, reported as SKIP: tls.renew_failed (needs a staging certificate that fails to renew); a critical event
+through quiet hours (no safe critical producer here); Telegram and Discord (no credentials). The Telegram and Discord
+request shapes are still marked "(assumed)" in the code.
+Sandbox after the run: no notify channels or smoke jobs left, helpers stopped, firewall off as found, health ok.
 
 ## 7. Risks
 
