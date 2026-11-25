@@ -267,7 +267,34 @@ func (m *Manager) Update(ctx context.Context, domain string, in UpdateInput) (Up
 	if err := m.store(ctx, next); err != nil {
 		return UpdateResult{}, err
 	}
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: patch.files(), Services: []confedit.Service{m.svc}, Reason: "edit site " + next.Domain})
+	files := patch.files()
+	services := []confedit.Service{m.svc}
+	// An alias is a name the site answers to, and the open-appsec policy names
+	// every one of them, so a change to the names re-renders the policy in the
+	// same apply. The module loader goes with it — the policy and the module are
+	// never written one without the other — and the agent reads the new policy
+	// after nginx has taken the new names.
+	if in.Aliases != nil && m.waf != nil {
+		shared, err := m.waf.SharedFiles(ctx, "")
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		policy, err := m.openAppsecPolicyFile(ctx, "")
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		files = append(append(files, shared...), policy)
+		c, err := m.waf.Get(ctx, next.Domain)
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		if svcs, err := m.wafServices(ctx, "", c.UsesOpenAppsec()); err != nil {
+			return UpdateResult{}, err
+		} else {
+			services = svcs
+		}
+	}
+	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "edit site " + next.Domain})
 	if err != nil {
 		if rbErr := m.store(context.WithoutCancel(ctx), prev); rbErr != nil {
 			err = errors.Join(err, fmt.Errorf("sites: restoring %s in the database: %w", prev.Domain, rbErr))

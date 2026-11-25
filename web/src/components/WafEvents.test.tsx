@@ -92,6 +92,83 @@ beforeEach(() => {
   })
 })
 
+describe("WafEvents open-appsec events", () => {
+  /** One event the open-appsec agent produced: no rule id, its own three fields. */
+  const appsecEvent = (seq: number, over: Partial<WafEvent> = {}): WafEvent => ({
+    seq,
+    time: "2026-11-25T10:00:00Z",
+    site: "a.test",
+    engine: "open-appsec",
+    ip: "198.51.100.9",
+    method: "POST",
+    uri: "/login",
+    status: 403,
+    request_id: `evt-${seq}`,
+    action: "blocked",
+    rule_id: 0,
+    message: "SQL Injection",
+    severity: "CRITICAL",
+    confidence: "Very High",
+    attack_type: "SQL Injection",
+    parameter: "id (url parameter)",
+    matches: [
+      { rule_id: 0, message: "SQL Injection", severity: "CRITICAL", data: "1' or '1'='1", tags: [], file: "", line: 0 },
+    ],
+    ...over,
+  })
+
+  it("names the engine on every event, both kinds in one list", async () => {
+    vi.mocked(api.wafEvents).mockResolvedValue(page([appsecEvent(5), event(4)], { total: 2 }))
+    renderEvents()
+
+    const table = await screen.findByRole("table", { name: /WAF audit events/ })
+    const rows = within(table).getAllByRole("row")
+    expect(within(rows[1]).getByText("open-appsec")).toBeInTheDocument()
+    expect(within(rows[2]).getByText("ModSecurity")).toBeInTheDocument()
+  })
+
+  it("reads a ModSecurity event with no engine field as ModSecurity", async () => {
+    // An older panel's events carry no engine; only ModSecurity produced them.
+    vi.mocked(api.wafEvents).mockResolvedValue(page([event(1)], { total: 1 }))
+    renderEvents()
+    const table = await screen.findByRole("table", { name: /WAF audit events/ })
+    expect(within(table).getByText("ModSecurity")).toBeInTheDocument()
+  })
+
+  it("shows the agent's confidence, attack type and matched parameter", async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.wafEvents).mockResolvedValue(page([appsecEvent(5)], { total: 1 }))
+    renderEvents()
+    await screen.findByRole("table", { name: /WAF audit events/ })
+
+    // The row's "rule / attack" column carries the attack type, since the agent
+    // has no rule ids.
+    const table = screen.getByRole("table", { name: /WAF audit events/ })
+    const row = within(table).getByRole("row", { name: /SQL Injection/ })
+    expect(within(row).getAllByText("SQL Injection").length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole("button", { name: /Show details of SQL Injection on \/login/ }))
+    const fields = screen.getByLabelText("open-appsec findings")
+    expect(within(fields).getByText("Very High")).toBeInTheDocument()
+    expect(within(fields).getByText("id (url parameter)")).toBeInTheDocument()
+    expect(within(fields).getByText("Confidence")).toBeInTheDocument()
+    expect(within(fields).getByText("Attack type")).toBeInTheDocument()
+    expect(within(fields).getByText("Matched parameter")).toBeInTheDocument()
+  })
+
+  it("offers no rule exclusion on an event the agent produced", async () => {
+    // A rule exclusion is ModSecurity's control, and the agent has no rule ids.
+    const user = userEvent.setup()
+    vi.mocked(api.wafEvents).mockResolvedValue(page([appsecEvent(5)], { total: 1 }))
+    renderEvents()
+    await screen.findByRole("table", { name: /WAF audit events/ })
+    await user.click(screen.getByRole("button", { name: /Show details of SQL Injection on \/login/ }))
+    expect(screen.queryByRole("button", { name: /Exclude this rule/ })).not.toBeInTheDocument()
+    // The match itself is still shown, with the sample the agent recorded.
+    expect(within(screen.getByRole("list", { name: "Matched rules" })).getByText(/1' or '1'='1/)).toBeInTheDocument()
+  })
+})
+
 describe("pathOf", () => {
   it("drops the query string", () => {
     expect(pathOf("/search?q=1")).toBe("/search")

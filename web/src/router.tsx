@@ -18,6 +18,7 @@ import { runtimesRoute } from "@/routes/_app/runtimes"
 import { servicesRoute } from "@/routes/_app/services"
 import { settingsRoute } from "@/routes/_app/settings"
 import { sshRoute } from "@/routes/_app/ssh"
+import { storeRoute } from "@/routes/_app/store"
 import { tlsRoute } from "@/routes/_app/tls"
 import { trafficRoute } from "@/routes/_app/traffic"
 import { wafRoute } from "@/routes/_app/waf"
@@ -56,6 +57,7 @@ const routeTree = rootRoute.addChildren([
     settingsRoute,
     auditRoute,
     sshRoute,
+    storeRoute,
   ]),
 ])
 

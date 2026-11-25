@@ -4,12 +4,20 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"strings"
 
 	"golang.org/x/sys/unix"
 )
+
+// stdinLines buffers stdin for every prompt. It is one reader for the whole
+// process on purpose: a buffered reader takes in more than the line it returns, so
+// a fresh one per prompt would swallow the answer to the next prompt and report
+// EOF. install asks for a password twice (the confirmation) and reads both
+// through this.
+var stdinLines = bufio.NewReader(os.Stdin)
 
 // readPassword reads one line from stdin with echo turned off, so a password
 // typed at the console is not left on the terminal or in the scrollback.
@@ -40,14 +48,35 @@ func readPassword() (string, bool) {
 		_ = unix.IoctlSetTermios(fd, termiosWrite, saved)
 	}()
 
-	return readLine(os.Stdin)
+	return readLine(stdinLines)
 }
 
-// readLine reads one line, without its newline, from r.
+// readLine reads one line from r, without its terminator. A trailing CR is
+// dropped as well, so a line ending in CRLF reads the same as one ending in LF.
+//
+// It reads a byte at a time rather than asking for a whole line, so no input past
+// the newline is consumed on the caller's behalf: a reader that already buffers
+// keeps the rest for the next call.
+//
+// A reader with nothing left returns ok=false, which is what a blank piped stdin
+// does. A last line with no newline is still a line.
 func readLine(r io.Reader) (string, bool) {
-	line, err := bufio.NewReader(r).ReadString('\n')
-	if err != nil && line == "" {
-		return "", false
+	br := bufio.NewReader(r)
+	var line []byte
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			// Anything other than EOF means the stream broke; what was read is
+			// still a line if there is anything, and otherwise there is none.
+			if len(line) == 0 && errors.Is(err, io.EOF) {
+				return "", false
+			}
+			break
+		}
+		if b == '\n' {
+			break
+		}
+		line = append(line, b)
 	}
-	return strings.TrimRight(line, "\r\n"), true
+	return strings.TrimSuffix(string(line), "\r"), true
 }

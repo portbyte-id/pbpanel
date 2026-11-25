@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/portbyte-id/server-panel/internal/appsec"
 	"github.com/portbyte-id/server-panel/internal/audit"
 	"github.com/portbyte-id/server-panel/internal/auth"
 	"github.com/portbyte-id/server-panel/internal/geoip"
@@ -34,6 +35,16 @@ const (
 	sweepEvery = time.Hour
 	stopGrace  = 15 * time.Second
 )
+
+// appsecService is the open-appsec agent as the HTTP layer takes it, or nil when
+// the nginx stack (and with it the manager) could not be built. The nil check is
+// explicit because a nil *appsec.Manager inside an interface is not nil.
+func appsecService(stack *nginxStack) httpapi.AppsecService {
+	if stack == nil || stack.Appsec == nil {
+		return nil
+	}
+	return stack.Appsec
+}
 
 // serve runs the daemon: it opens the store, wires every package into the HTTP
 // handler, listens on panel.bind:panel.port and stops cleanly on SIGTERM or
@@ -97,6 +108,13 @@ func serve(ctx context.Context, _ []string) error {
 	// Building the stack touches neither Docker nor the disk; a failure here is
 	// a wiring problem, and the nginx routes then answer 503.
 	var nginxDeps *httpapi.NginxDeps
+	// The open-appsec agent's hooks. They stay nil when the nginx stack could not
+	// be built, so the Store card and the firewall's engine fields answer 503, which
+	// is what a host without a build looks like.
+	var (
+		appsecAvailable func(ctx context.Context) appsec.Availability
+		openAppsecInUse func(ctx context.Context) (bool, error)
+	)
 	ed, err := newEditor(st, layout)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
@@ -136,6 +154,10 @@ func serve(ctx context.Context, _ []string) error {
 		if tlsDeps != nil {
 			tlsDeps.Sites = nginxStack.Sites
 		}
+		if nginxStack.Appsec != nil {
+			appsecAvailable = nginxStack.appsecAvailability
+			openAppsecInUse = nginxStack.openAppsecInUse
+		}
 	}
 
 	files := newFileManager(ctx, st, reg, layout, logger)
@@ -171,26 +193,29 @@ func serve(ctx context.Context, _ []string) error {
 		}
 	}
 	handler, err := httpapi.New(httpapi.Deps{
-		Store:    st,
-		Settings: reg,
-		Auth:     authSvc,
-		Audit:    auditW,
-		Jobs:     jobsMgr,
-		UI:       ui,
-		Nginx:    nginxDeps,
-		Files:    files,
-		Firewall: newFirewall(ctx, st, reg, logger),
-		Apps:     appsSvc,
-		Runtimes: runtimesSvc,
-		TLS:      tlsDeps,
-		Sysinfo:  m7.Sysinfo,
-		Logs:     m7.Logs,
-		Cron:     m7.Cron,
-		WAFMon:   wafCollector,
-		Geo:      geo,
-		SSHAuth:  m7.SSHAuth,
-		Docker:   newDockerMgmt(logger),
-		Update:   newUpdate(layout),
+		Store:          st,
+		Settings:       reg,
+		Auth:           authSvc,
+		Audit:          auditW,
+		Jobs:           jobsMgr,
+		UI:             ui,
+		Nginx:          nginxDeps,
+		Appsec:         appsecService(nginxStack),
+		OpenAppsec:     appsecAvailable,
+		WAFEngineInUse: openAppsecInUse,
+		Files:          files,
+		Firewall:       newFirewall(ctx, st, reg, logger),
+		Apps:           appsSvc,
+		Runtimes:       runtimesSvc,
+		TLS:            tlsDeps,
+		Sysinfo:        m7.Sysinfo,
+		Logs:           m7.Logs,
+		Cron:           m7.Cron,
+		WAFMon:         wafCollector,
+		Geo:            geo,
+		SSHAuth:        m7.SSHAuth,
+		Docker:         newDockerMgmt(logger),
+		Update:         newUpdate(layout),
 		Rebind: func(p int) error {
 			url, err := listener.ChangePort(p)
 			if err == nil {

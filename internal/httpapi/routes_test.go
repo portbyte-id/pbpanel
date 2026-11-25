@@ -100,6 +100,12 @@ func protectedRoutes() []protectedRoute {
 		{name: "cron run", method: http.MethodPost, path: "/api/cron/1/run", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
 		{name: "cron runs", method: http.MethodGet, path: "/api/cron/1/runs", okStatus: http.StatusServiceUnavailable},
 		{name: "cron run detail", method: http.MethodGet, path: "/api/cron/1/runs/2", okStatus: http.StatusServiceUnavailable},
+
+		// The Store's open-appsec card and its two jobs. No agent is wired here, so a
+		// request that gets past the session and CSRF checks answers 503.
+		{name: "appsec status", method: http.MethodGet, path: "/api/appsec", okStatus: http.StatusServiceUnavailable},
+		{name: "appsec install", method: http.MethodPost, path: "/api/appsec/install", body: map[string]string{"acknowledge": "x"}, okStatus: http.StatusServiceUnavailable},
+		{name: "appsec uninstall", method: http.MethodPost, path: "/api/appsec/uninstall", body: map[string]any{}, okStatus: http.StatusServiceUnavailable},
 	}
 }
 

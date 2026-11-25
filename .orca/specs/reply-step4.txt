@@ -1,0 +1,25 @@
+Good work, and the findings doc is genuinely valuable. One gap to close before this is done, plus one merge note.
+
+## The gap: the policy apply is unverifiable, but it does not have to be
+
+Your `Healthy` comment says "the policy's own load state is not reliable". That is right about `--status` and about `--apply-policy`'s exit code -- but I checked the host and **`/etc/cp/conf/policy.json` is readable and holds the compiled result**. That is the ground truth your own probe method already used (you read the rows out of it). So the panel can verify the apply instead of inferring it.
+
+Consequence today: if a rendered policy is rejected, `Reload` returns nil (there is no "Policy didn't change" text, and "New policy applied" is printed for policies that are then discarded), `Healthy` only checks the agent is running, and confedit commits. The operator is told the firewall changed while the agent is still enforcing the previous policy. That is the worst failure mode this feature has.
+
+Please make the apply verifiable:
+
+- After `--apply-policy`, read `/etc/cp/conf/policy.json` and confirm the document the panel just rendered is actually in force. The cheapest reliable check: the set of `assetName` values under the web application security rules equals exactly the set of hosts the policy names (your findings show `policy.json` carries an assetName plus a webAttackMitigationMode of Inactive / Detect / Prevent), and each asset's mode matches what was asked (detect maps to Learn or Detect, block maps to Prevent, default stays Inactive).
+- **Do not guess the field names.** Re-read `policy.json` on the host and code to the shape that is actually there.
+- If it does not match, `Reload` returns an error, so confedit rolls the whole change back -- nginx files and the stored settings -- exactly as an `nginx -t` failure does.
+- Allow for the agent's asynchrony: your probes used a 30 s settle. Poll with a bounded timeout rather than a fixed sleep, measure how long it actually needs, and report the number you settled on.
+- If the agent is not installed, or `policy.json` does not exist, that is a refusal before anything is written -- not a silent pass.
+
+Add a test for the rejected-policy path using a fake runner that leaves `policy.json` unchanged, asserting the change rolls back. Report exactly what signal you keyed on and how long you poll.
+
+## Merge note
+
+Do not merge `oa-step1-nginx` yourself. When step 1 lands, its `paths.go` gains `AttachmentModuleFile` and `AttachmentModuleOf`, and your `OpenAppsecModuleFile` constant duplicates it. Name the exact symbol and file in your report so I can reconcile at merge time; do not change it now.
+
+## Also
+
+Re-run the gate after the change, commit on top (a second commit is fine, e.g. `fix(waf): verify the open-appsec policy actually loaded`), and report the sha. Update the findings doc if the verification changes anything in it.

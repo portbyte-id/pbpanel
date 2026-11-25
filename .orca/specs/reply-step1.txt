@@ -1,0 +1,17 @@
+(a) No — no other worker owns it, and it is not a task in this wave. I verified your diagnosis independently: `git log -S 'func readLine'` shows e001d77 deleted the definition while 4d1e2df's call at password_unix.go:40 stayed, and the file is `//go:build linux`-gated so only Linux compiles it. It is a real pre-existing break on the branch.
+
+(b) Yes — add the missing readLine helper to cmd/panel/password_unix.go, and commit it as its own commit, separate from the nginx change.
+
+Contract it must satisfy, since the caller is readPassword (echo off, ECHO restored on defer):
+- signature: `readLine(r io.Reader) (string, bool)`
+- read one line up to and excluding the newline; strip a trailing CR so CRLF input is clean
+- return ("", false) at EOF when no bytes were read
+- use bufio.NewReader; do not over-read
+
+Add a test file (password_unix_test.go, same build tag) covering: a normal line, a CRLF line, a line with no trailing newline, and empty input at EOF.
+
+Two conditions:
+1. Do NOT fold this into the nginx commit. Separate commit, and give me the sha.
+2. Keep the gate honest in your report: state that `go build ./...` and `go test ./cmd/...` became green only after your readLine commit, with the before/after.
+
+Then proceed with the nginx commit as planned. If something in internal/nginx still fails for an unrelated reason, stop and tell me.

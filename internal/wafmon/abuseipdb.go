@@ -59,6 +59,7 @@ func WriteAbuseIPDB(w io.Writer, events []Event) error {
 		count, blocked int
 		first, last    time.Time
 		sites          map[string]bool
+		engines        map[string]bool
 		rules          map[string]*rule
 	}
 	groups := map[string]*group{}
@@ -68,7 +69,7 @@ func WriteAbuseIPDB(w io.Writer, events []Event) error {
 		}
 		g := groups[e.IP]
 		if g == nil {
-			g = &group{ip: e.IP, first: e.Time, last: e.Time, sites: map[string]bool{}, rules: map[string]*rule{}}
+			g = &group{ip: e.IP, first: e.Time, last: e.Time, sites: map[string]bool{}, engines: map[string]bool{}, rules: map[string]*rule{}}
 			groups[e.IP] = g
 		}
 		g.count++
@@ -83,6 +84,9 @@ func WriteAbuseIPDB(w io.Writer, events []Event) error {
 		}
 		if e.Site != "" {
 			g.sites[e.Site] = true
+		}
+		if e.Engine != "" {
+			g.engines[e.Engine] = true
 		}
 		hits := e.Matches
 		if len(hits) == 0 && e.RuleID != "" {
@@ -129,8 +133,8 @@ func WriteAbuseIPDB(w io.Writer, events []Event) error {
 			return rules[i].id < rules[j].id
 		})
 		var b strings.Builder
-		fmt.Fprintf(&b, "ModSecurity WAF: %d %s (%d blocked, %d detected) between %s and %s UTC",
-			g.count, plural(g.count, "request", "requests"), g.blocked, g.count-g.blocked,
+		fmt.Fprintf(&b, "%s WAF: %d %s (%d blocked, %d detected) between %s and %s UTC",
+			engineLabel(g.engines), g.count, plural(g.count, "request", "requests"), g.blocked, g.count-g.blocked,
 			g.first.UTC().Format("2006-01-02 15:04:05"), g.last.UTC().Format("2006-01-02 15:04:05"))
 		if len(g.sites) > 0 {
 			names := make([]string, 0, len(g.sites))
@@ -166,6 +170,22 @@ func WriteAbuseIPDB(w io.Writer, events []Event) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// engineLabel names the engines a comment covers. A report may hold events from
+// both engines now, so it says which, and an event from before the engine field
+// existed still reads as ModSecurity, which is all there was.
+func engineLabel(engines map[string]bool) string {
+	switch {
+	case len(engines) == 0:
+		return "ModSecurity"
+	case engines[EngineModSecurity] && engines[EngineOpenAppsec]:
+		return "ModSecurity + open-appsec"
+	case engines[EngineOpenAppsec]:
+		return "open-appsec"
+	default:
+		return "ModSecurity"
+	}
 }
 
 // reportable reports whether an address is a public one AbuseIPDB will accept.

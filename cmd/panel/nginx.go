@@ -9,9 +9,11 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/portbyte-id/server-panel/internal/appsec"
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/docker"
 	"github.com/portbyte-id/server-panel/internal/guard"
@@ -28,6 +30,11 @@ import (
 	"github.com/portbyte-id/server-panel/internal/webroots"
 )
 
+// openAppsecModule is the attachment's file name in a build's modules directory.
+// Step 1's build renames the vendor's libngx_module.so to this at install time
+// (§0.1), so this is what a build that carries the engine has.
+const openAppsecModule = "ngx_cp_attachment_module.so"
+
 // wafAvailability says whether ModSecurity can run: every nginx build ships the
 // module and the Core Rule Set, so it can as soon as a build serves.
 func wafAvailability(built bool) waf.Availability {
@@ -35,6 +42,28 @@ func wafAvailability(built bool) waf.Availability {
 		return waf.Availability{Flavor: "pqc", Reason: "no nginx build serves yet; build one on the Nginx page"}
 	}
 	return waf.Availability{Available: true, Flavor: "pqc", CRSVersion: nginx.CRSVersion}
+}
+
+// openAppsecStatus reports whether the open-appsec agent is installed and
+// running: the control script exists and its unit is active. Step 2 owns the
+// install, the version and the Store card; this is the minimum a firewall change
+// needs to refuse loading a module whose agent is not there, and it is read on
+// every use so an agent installed later applies without a panel restart.
+func openAppsecStatus(run nginx.Runner) func(ctx context.Context) (bool, string) {
+	return func(ctx context.Context) (bool, string) {
+		if _, err := os.Stat(waf.OpenAppsecCtl); err != nil {
+			return false, "the open-appsec agent is not installed"
+		}
+		out, err := run.Run(ctx, "systemctl", "is-active", waf.OpenAppsecUnit)
+		state := strings.TrimSpace(string(out))
+		if err != nil || state != "active" {
+			if state == "" {
+				state = "unknown"
+			}
+			return false, fmt.Sprintf("%s is %s", waf.OpenAppsecUnit, state)
+		}
+		return true, ""
+	}
 }
 
 // guardKeys builds the challenge page's keyring from data/secret.key.
@@ -181,6 +210,12 @@ type nginxStack struct {
 	Runtime *nginx.Runtime
 	// Guard answers the challenge page; nil without data/secret.key.
 	Guard *guard.Handler
+	// WAF is the firewall engine: the Store's uninstall reads it to tell whether a
+	// site still runs the open-appsec engine.
+	WAF *waf.Engine
+	// Appsec is the open-appsec agent: the Store card, its install and uninstall
+	// jobs, and the availability the firewall pages report.
+	Appsec *appsec.Manager
 	// Prebuilt reports whether the next nginx build may take a CI-built package.
 	Prebuilt func(ctx context.Context) bool
 
@@ -265,9 +300,31 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 	// Turnstile's keys are panel settings: without this source no site can use
 	// Turnstile, however the Settings page is filled in.
 	wafEngine.WithTurnstile(turnstileKeys(reg))
+	// The second engine: the serving build has to carry the attachment, and the
+	// agent has to be installed and running, before any site may pick it. The
+	// attachment lives in the build prefix beside nginx's own modules, so a build
+	// made before step 1 simply does not have it.
+	appsecMgr := appsec.New(appsec.Options{
+		ModulePresent: func(ctx context.Context) (bool, error) {
+			built, err := imgs.Present(ctx)
+			if err != nil || !built {
+				return false, err
+			}
+			_, err = os.Stat(filepath.FromSlash(paths.CurrentLink() + "/modules/" + openAppsecModule))
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+	})
+	wafEngine.WithOpenAppsec(appsecMgr.Available)
+	// The agent is also a config service like nginx: a change writes the policy
+	// and reloads nginx, then hands the policy to the agent. Its availability
+	// above decides whether a site may pick the engine at all.
+	appsecSvc := waf.NewOpenAppsecService(run, wafEngine.OpenAppsecPolicyFile(), openAppsecStatus(run))
 	mgr, err := sites.New(sites.Options{
 		Store: st, Applier: ed, Service: live, Paths: paths, PHP: phpMgr, TLS: tlsState,
-		WAF: wafEngine,
+		WAF: wafEngine, Appsec: appsecSvc,
 		Settings: func(ctx context.Context) ([]confedit.File, error) {
 			s, err := global.Settings(ctx)
 			if err != nil {
@@ -335,7 +392,7 @@ func newNginxStack(st *store.Store, reg *settings.Registry, layout install.Layou
 
 	return &nginxStack{
 		Editor: ed, Service: live, Global: global, Sites: mgr, Paths: paths, PHP: phpMgr, Images: imgs, Runtime: runtime,
-		Guard: guardHandler, Prebuilt: prebuiltOn,
+		Guard: guardHandler, WAF: wafEngine, Appsec: appsecMgr, Prebuilt: prebuiltOn,
 		Reconciler: &sites.Reconciler{
 			Sites: mgr, Global: global,
 			Recover: ed.Recover,
@@ -402,4 +459,31 @@ func (n *nginxStack) deps() *httpapi.NginxDeps {
 		PHP: n.PHP, PHPReconcile: n.phpReconcile, Images: n.Images, Container: n.Runtime,
 		Prebuilt: n.Prebuilt,
 	}
+}
+
+// appsecAvailability is the open-appsec state the HTTP layer carries in the
+// Store card and the firewall JSON.
+func (n *nginxStack) appsecAvailability(ctx context.Context) appsec.Availability {
+	return n.Appsec.Availability(ctx)
+}
+
+// openAppsecInUse reports whether any site's firewall runs the open-appsec
+// engine. The uninstall refuses while one does: removing the agent under a site
+// that names it leaves that site claiming to inspect requests while the
+// attachment fails open on every one of them.
+//
+// It reads the stored configs through the engine's own list, so a site's row is
+// the only thing consulted: a config that asks for the engine is what makes the
+// uninstall unsafe, whether or not its mode is currently inspecting.
+func (n *nginxStack) openAppsecInUse(ctx context.Context) (bool, error) {
+	all, err := n.WAF.All(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range all {
+		if c.Engine == waf.EngineOpenAppsec {
+			return true, nil
+		}
+	}
+	return false, nil
 }

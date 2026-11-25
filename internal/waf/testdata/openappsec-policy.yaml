@@ -1,0 +1,132 @@
+# Managed by PB panel (open-appsec policy). Rewritten on every firewall change.
+# schema: v1beta2
+# Hosts not listed below are inactive: only the sites in specificRules are
+# inspected, which is the second half of the per-server directive's promise.
+# Exceptions are absent on purpose: no open-appsec key is proven to work,
+# and a control that silently matches nothing is worse than no control.
+
+apiVersion: v1beta2
+
+policies:
+  default:
+    mode: inactive
+    threatPreventionPractices: [default-threat-prevention-practice]
+    accessControlPractices: [default-access-control-practice]
+    customResponses: default-web-user-response
+    triggers: [default-log-trigger]
+    sourceIdentifiers: ""
+    trustedSources: ""
+    exceptions: []
+  specificRules:
+    - name: pb-a.test
+      host: a.test
+      mode: prevent-learn
+      threatPreventionPractices: [default-threat-prevention-practice]
+      accessControlPractices: [default-access-control-practice]
+      triggers: [default-log-trigger]
+      sourceIdentifiers: ""
+      trustedSources: ""
+      exceptions: []
+    - name: pb-www.a.test
+      host: www.a.test
+      mode: prevent-learn
+      threatPreventionPractices: [default-threat-prevention-practice]
+      accessControlPractices: [default-access-control-practice]
+      triggers: [default-log-trigger]
+      sourceIdentifiers: ""
+      trustedSources: ""
+      exceptions: []
+    - name: pb-b.test
+      host: b.test
+      mode: detect-learn
+      threatPreventionPractices: [pb-threat-prevention-critical]
+      accessControlPractices: [default-access-control-practice]
+      triggers: [default-log-trigger]
+      sourceIdentifiers: ""
+      trustedSources: ""
+      exceptions: []
+
+threatPreventionPractices:
+  - name: default-threat-prevention-practice
+    practiceMode: inherited
+    webAttacks:
+      overrideMode: inherited
+      minimumConfidence: high
+    intrusionPrevention:
+      overrideMode: inherited
+      maxPerformanceImpact: medium
+      minSeverityLevel: medium
+      minCveYear: 2016
+      highConfidenceEventAction: inherited
+      mediumConfidenceEventAction: inherited
+      lowConfidenceEventAction: detect
+    fileSecurity:
+      overrideMode: inherited
+      minSeverityLevel: medium
+      highConfidenceEventAction: inherited
+      mediumConfidenceEventAction: inherited
+      lowConfidenceEventAction: detect
+    snortSignatures:
+      overrideMode: inherited
+      configmap: []
+      files: []
+  - name: pb-threat-prevention-critical
+    practiceMode: inherited
+    webAttacks:
+      overrideMode: inherited
+      minimumConfidence: critical
+    intrusionPrevention:
+      overrideMode: inherited
+      maxPerformanceImpact: medium
+      minSeverityLevel: medium
+      minCveYear: 2016
+      highConfidenceEventAction: inherited
+      mediumConfidenceEventAction: inherited
+      lowConfidenceEventAction: detect
+    fileSecurity:
+      overrideMode: inherited
+      minSeverityLevel: medium
+      highConfidenceEventAction: inherited
+      mediumConfidenceEventAction: inherited
+      lowConfidenceEventAction: detect
+    snortSignatures:
+      overrideMode: inherited
+      configmap: []
+      files: []
+
+accessControlPractices:
+  - name: default-access-control-practice
+    practiceMode: inherited
+    rateLimit:
+      overrideMode: inherited
+      rules: []
+
+logTriggers:
+  - name: default-log-trigger
+    accessControlLogging:
+      allowEvents: false
+      dropEvents: true
+    appsecLogging:
+      detectEvents: true
+      preventEvents: true
+      allWebRequests: false
+    extendedLogging:
+      urlPath: true
+      urlQuery: true
+      httpHeaders: false
+      requestBody: false
+    additionalSuspiciousEventsLogging:
+      enabled: true
+      minSeverity: high
+      responseBody: false
+      responseCode: true
+    logDestination:
+      cloud: false
+      logToAgent: true
+      stdout:
+        format: json
+
+customResponses:
+  - name: default-web-user-response
+    mode: response-code-only
+    httpResponseCode: 403

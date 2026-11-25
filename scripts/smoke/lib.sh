@@ -165,11 +165,11 @@ api_call() {
 	if [ "$SMOKE_DRY_RUN" = 1 ]; then printf '200'; return 0; fi
 	CSRF=$(cat "$SMOKE_TMP/csrf" 2>/dev/null)
 	if [ -n "${5:-}" ]; then
-		curl -sk --max-time 15 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
+		curl -sk --max-time "${SMOKE_API_TIMEOUT:-15}" -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
 			-X "$1" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
 			-d "$5" "https://$2:$3$4" 2>/dev/null || true
 	else
-		curl -sk --max-time 15 -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
+		curl -sk --max-time "${SMOKE_API_TIMEOUT:-15}" -b "$COOKIE_JAR" -o "$SMOKE_TMP/last.json" -w '%{http_code}' \
 			-X "$1" -H "X-CSRF-Token: $CSRF" "https://$2:$3$4" 2>/dev/null || true
 	fi
 }

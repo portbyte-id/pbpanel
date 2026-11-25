@@ -1,6 +1,8 @@
 package waf
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -19,7 +21,11 @@ func TestNormalizeDefaults(t *testing.T) {
 	if c.Mode != ModeOff || c.Paranoia != 1 || c.RateLimit.RequestsPerSecond != 10 {
 		t.Errorf("zero config normalized to %+v", c)
 	}
-	if c.PathBlocklist == nil || c.IPRules.Allow == nil || c.IPRules.Deny == nil || c.Exclusions == nil {
+	if c.Engine != EngineModSecurity || c.OpenAppsec.Confidence != ConfidenceHigh {
+		t.Errorf("zero config normalized to engine %q, confidence %q", c.Engine, c.OpenAppsec.Confidence)
+	}
+	if c.PathBlocklist == nil || c.IPRules.Allow == nil || c.IPRules.Deny == nil || c.Exclusions == nil ||
+		c.OpenAppsec.Exceptions == nil {
 		t.Errorf("lists must never be nil (they are JSON arrays): %+v", c)
 	}
 	if !c.IsDefault() {
@@ -82,6 +88,312 @@ func TestNormalizeCanonicalForm(t *testing.T) {
 	}
 	if e := got.Exclusions[0]; e.Path != "" || e.Arg != "" || e.Note != "a b" {
 		t.Errorf("exclusion = %+v", e)
+	}
+}
+
+func TestNormalizeEngine(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want EngineKind
+	}{
+		{"", EngineModSecurity},
+		{"modsecurity", EngineModSecurity},
+		{" ModSecurity ", EngineModSecurity},
+		{"open-appsec", EngineOpenAppsec},
+		{"OPEN-APPSEC", EngineOpenAppsec},
+	} {
+		c, err := Config{Engine: EngineKind(tc.in)}.Normalize()
+		if err != nil {
+			t.Errorf("%q: %v", tc.in, err)
+			continue
+		}
+		if c.Engine != tc.want {
+			t.Errorf("%q normalized to %q, want %q", tc.in, c.Engine, tc.want)
+		}
+	}
+	for _, in := range []string{"apache", "openappsec", "mod-sec", "open_appsec"} {
+		_, err := Config{Engine: EngineKind(in)}.Normalize()
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != "engine" {
+			t.Errorf("%q: got %v, want an engine validation error", in, err)
+		}
+	}
+}
+
+func TestNormalizeConfidence(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Confidence
+	}{
+		{"", ConfidenceHigh},
+		{"high", ConfidenceHigh},
+		{"Critical", ConfidenceCritical},
+		{" MEDIUM ", ConfidenceMedium},
+	} {
+		c := Default()
+		c.OpenAppsec.Confidence = Confidence(tc.in)
+		got, err := c.Normalize()
+		if err != nil {
+			t.Errorf("%q: %v", tc.in, err)
+			continue
+		}
+		if got.OpenAppsec.Confidence != tc.want {
+			t.Errorf("%q normalized to %q, want %q", tc.in, got.OpenAppsec.Confidence, tc.want)
+		}
+	}
+	for _, in := range []string{"low", "very_high", "mid"} {
+		c := Default()
+		c.OpenAppsec.Confidence = Confidence(in)
+		_, err := c.Normalize()
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != "open_appsec.confidence" {
+			t.Errorf("%q: got %v, want an open_appsec.confidence validation error", in, err)
+		}
+	}
+}
+
+func TestNormalizeOpenAppsecExceptions(t *testing.T) {
+	c := Default()
+	c.Engine = EngineOpenAppsec
+	c.Mode = ModeBlock
+	c.OpenAppsec.Exceptions = []OpenAppsecException{
+		{Kind: ExceptionParam, Param: " id ", Path: "/ignored", SourceIP: "ignored", Note: "  login\nform "},
+		{Kind: ExceptionPath, Path: " /api/v1 ", Param: "ignored", Note: "public api"},
+		{Kind: ExceptionSourceIP, SourceIP: "10.1.2.3/8", Path: "ignored", Note: "office"},
+		{Kind: ExceptionSourceIP, SourceIP: "2001:db8::1", Note: "v6"},
+		{Kind: ExceptionParam, Param: "id", Note: "login form"},
+	}
+	got, err := c.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := got.OpenAppsec.Exceptions
+	if len(ex) != 4 {
+		t.Fatalf("exceptions = %+v, want the exact duplicate dropped", ex)
+	}
+	// Sorted by kind then the field, the fields an entry does not use cleared,
+	// and the network masked the way the IP rules are.
+	want := []OpenAppsecException{
+		{Kind: ExceptionParam, Param: "id", Note: "login form"},
+		{Kind: ExceptionPath, Path: "/api/v1", Note: "public api"},
+		{Kind: ExceptionSourceIP, SourceIP: "10.0.0.0/8", Note: "office"},
+		{Kind: ExceptionSourceIP, SourceIP: "2001:db8::1/128", Note: "v6"},
+	}
+	for i := range want {
+		if ex[i] != want[i] {
+			t.Errorf("exceptions[%d] = %+v, want %+v", i, ex[i], want[i])
+		}
+	}
+	if got.OpenAppsec.Confidence != ConfidenceHigh {
+		t.Errorf("confidence = %q, want the default", got.OpenAppsec.Confidence)
+	}
+}
+
+// TestNormalizeOpenAppsecRejects pins the field name of every rejection, since
+// that is what the 422 shows the operator.
+func TestNormalizeOpenAppsecRejects(t *testing.T) {
+	cases := map[string]struct {
+		field  string
+		mutate func(*Config)
+	}{
+		"engine": {field: "engine", mutate: func(c *Config) { c.Engine = "apache" }},
+		"confidence": {field: "open_appsec.confidence", mutate: func(c *Config) {
+			c.OpenAppsec.Confidence = "low"
+		}},
+		"exception kind": {field: "open_appsec.exceptions[0].kind", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: "country"}}
+		}},
+		"exception path no slash": {field: "open_appsec.exceptions[0].path", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionPath, Path: "api"}}
+		}},
+		"exception path whole site": {field: "open_appsec.exceptions[0].path", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionPath, Path: "/"}}
+		}},
+		"exception path quote": {field: "open_appsec.exceptions[0].path", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionPath, Path: `/a"b`}}
+		}},
+		"exception ip junk": {field: "open_appsec.exceptions[0].source_ip", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionSourceIP, SourceIP: "nope"}}
+		}},
+		"exception ip mapped": {field: "open_appsec.exceptions[0].source_ip", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionSourceIP, SourceIP: "::ffff:1.2.3.4"}}
+		}},
+		"exception param empty": {field: "open_appsec.exceptions[0].param", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionParam}}
+		}},
+		"exception param quote": {field: "open_appsec.exceptions[0].param", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionParam, Param: `a" "b`}}
+		}},
+		"exception note long": {field: "open_appsec.exceptions[0].note", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = []OpenAppsecException{{Kind: ExceptionParam, Param: "id", Note: strings.Repeat("x", MaxNote+1)}}
+		}},
+		"too many exceptions": {field: "open_appsec.exceptions", mutate: func(c *Config) {
+			c.OpenAppsec.Exceptions = make([]OpenAppsecException, MaxExclusions+1)
+			for i := range c.OpenAppsec.Exceptions {
+				c.OpenAppsec.Exceptions[i] = OpenAppsecException{Kind: ExceptionParam, Param: "id"}
+			}
+		}},
+	}
+	for name, tc := range cases {
+		c := Default()
+		c.Engine = EngineOpenAppsec
+		tc.mutate(&c)
+		_, err := c.Normalize()
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != tc.field {
+			t.Errorf("%s: err = %v, want a %s validation error", name, err, tc.field)
+		}
+	}
+}
+
+// TestOpenAppsecKeepsModSecuritySettings: the two engines share one stored row,
+// so switching the engine must not lose what the other one had.
+func TestOpenAppsecKeepsModSecuritySettings(t *testing.T) {
+	c := Default()
+	c.Engine = EngineOpenAppsec
+	c.Mode = ModeBlock
+	c.Paranoia = 3
+	c.Exclusions = []Exclusion{{Kind: KindRule, RuleID: 942100, Note: "login form"}}
+	got, err := c.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Paranoia != 3 || len(got.Exclusions) != 1 || got.Exclusions[0].RuleID != 942100 {
+		t.Errorf("the ModSecurity settings were not kept: paranoia %d, exclusions %+v", got.Paranoia, got.Exclusions)
+	}
+	if !got.UsesOpenAppsec() || got.UsesModSecurity() {
+		t.Errorf("an open-appsec config still claims ModSecurity: %+v", got)
+	}
+	// And the open-appsec settings survive a switch back.
+	back := got
+	back.Engine = EngineModSecurity
+	back, err = back.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.OpenAppsec.Confidence != ConfidenceHigh {
+		t.Errorf("the open-appsec settings were not kept: %+v", back.OpenAppsec)
+	}
+}
+
+// TestOldRowsReadAsModSecurity: every row stored before the engine field existed
+// has no engine key and no open_appsec object, and has to read as it did then.
+func TestOldRowsReadAsModSecurity(t *testing.T) {
+	const old = `{"mode":"block","paranoia":2,"rate_limit":{"enabled":true,"requests_per_second":5,"burst":7},
+		"path_blocklist":["/.git"],"ip_rules":{"allow":[],"deny":["203.0.113.9"]},
+		"exclusions":[{"kind":"rule","rule_id":942100,"path":"","arg":"","note":"login"}],
+		"challenge":{"enabled":false,"provider":"pow","difficulty":16,"clearance_minutes":60,
+		"exempt_paths":[],"exempt_ips":[]}}`
+
+	c, err := func() (Config, error) {
+		c := Default()
+		if err := json.Unmarshal([]byte(old), &c); err != nil {
+			return Config{}, err
+		}
+		return c.Normalize()
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Engine != EngineModSecurity || !c.UsesModSecurity() || c.UsesOpenAppsec() {
+		t.Errorf("an old row read as %q (modsec %v, open-appsec %v)", c.Engine, c.UsesModSecurity(), c.UsesOpenAppsec())
+	}
+	if c.Paranoia != 2 || c.Mode != ModeBlock || len(c.Exclusions) != 1 || c.Exclusions[0].Note != "login" {
+		t.Errorf("an old row lost a setting: %+v", c)
+	}
+	if c.OpenAppsec.Confidence != ConfidenceHigh || c.OpenAppsec.Exceptions == nil {
+		t.Errorf("an old row did not get the open-appsec defaults: %+v", c.OpenAppsec)
+	}
+
+	// Round-trip: what the panel writes back still reads the same.
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := Default()
+	if err := json.Unmarshal(raw, &again); err != nil {
+		t.Fatal(err)
+	}
+	again, err = again.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Engine != EngineModSecurity || !again.UsesModSecurity() || again.Paranoia != 2 {
+		t.Errorf("the row did not round-trip: %+v", again)
+	}
+}
+
+func TestEngineAwareUses(t *testing.T) {
+	for _, tc := range []struct {
+		engine EngineKind
+		mode   Mode
+		modsec bool
+		appsec bool
+	}{
+		{EngineModSecurity, ModeOff, false, false},
+		{EngineModSecurity, ModeDetect, true, false},
+		{EngineModSecurity, ModeBlock, true, false},
+		{EngineOpenAppsec, ModeOff, false, false},
+		{EngineOpenAppsec, ModeDetect, false, true},
+		{EngineOpenAppsec, ModeBlock, false, true},
+		{"", ModeBlock, true, false},
+	} {
+		c := Default()
+		c.Engine, c.Mode = tc.engine, tc.mode
+		if got := c.UsesModSecurity(); got != tc.modsec {
+			t.Errorf("%q/%q: UsesModSecurity = %v, want %v", c.Engine, tc.mode, got, tc.modsec)
+		}
+		if got := c.UsesOpenAppsec(); got != tc.appsec {
+			t.Errorf("%q/%q: UsesOpenAppsec = %v, want %v", c.Engine, tc.mode, got, tc.appsec)
+		}
+		if want := !tc.modsec && !tc.appsec; c.IsDefault() != want {
+			t.Errorf("%q/%q: IsDefault = %v, want %v", c.Engine, tc.mode, c.IsDefault(), want)
+		}
+	}
+	// A chosen engine alone asks nginx for nothing.
+	c := Default()
+	c.Engine = EngineOpenAppsec
+	if !c.IsDefault() {
+		t.Fatal("picking an engine in mode off still renders directives")
+	}
+}
+
+func TestCheckRefusesOpenAppsec(t *testing.T) {
+	c := Default()
+	c.Engine = EngineOpenAppsec
+	c.Mode = ModeDetect
+
+	e := New(nil, testPaths, nil)
+	err := e.Check(context.Background(), c)
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		t.Fatalf("Check returned a sites-level error from the waf package: %v", err)
+	}
+	if !errors.Is(err, ErrOpenAppsecMissing) {
+		t.Fatalf("Check = %v, want ErrOpenAppsecMissing", err)
+	}
+	if !strings.Contains(err.Error(), "not available on this host") {
+		t.Errorf("the error does not say why: %v", err)
+	}
+
+	// With a source that says yes, a configured engine is accepted.
+	ok := New(nil, testPaths, nil).WithOpenAppsec(func(context.Context) (bool, string) { return true, "" })
+	if err := ok.Check(context.Background(), c); err != nil {
+		t.Errorf("Check refused an available engine: %v", err)
+	}
+	// and one that says no carries its reason.
+	no := New(nil, testPaths, nil).WithOpenAppsec(func(context.Context) (bool, string) {
+		return false, "the agent is not installed"
+	})
+	err = no.Check(context.Background(), c)
+	if !errors.Is(err, ErrOpenAppsecMissing) || !strings.Contains(err.Error(), "the agent is not installed") {
+		t.Errorf("Check = %v, want the source's reason", err)
+	}
+	// A ModSecurity config is not affected by the open-appsec state.
+	modsec := Default()
+	modsec.Mode = ModeBlock
+	if err := no.Check(context.Background(), modsec); !errors.Is(err, ErrModuleMissing) {
+		t.Errorf("a ModSecurity config with no build checks against the wrong engine: %v", err)
 	}
 }
 

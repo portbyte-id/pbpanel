@@ -11,7 +11,7 @@ import { Select } from "@/components/ui/select"
 import { SkeletonRows } from "@/components/ui/skeleton"
 import { api } from "@/lib/api"
 import { useSites } from "@/lib/queries"
-import { toMillis, type WafAction, type WafEvent } from "@/lib/waf"
+import { toMillis, ENGINE_LABEL, engineOf, type WafAction, type WafEvent } from "@/lib/waf"
 import { useWafEvents, useWafEventSummary } from "@/lib/wafQueries"
 
 const SEVERITIES = ["CRITICAL", "ERROR", "WARNING", "NOTICE"]
@@ -38,6 +38,18 @@ export function actionBadge(action: WafAction) {
     <Badge variant="destructive">Blocked</Badge>
   ) : (
     <Badge variant="warning">Detected</Badge>
+  )
+}
+
+/**
+ * The engine that produced an event. Absent from an older panel's events, which
+ * only ModSecurity could produce, so it reads as ModSecurity.
+ */
+export function engineBadge(e: Pick<WafEvent, "engine">) {
+  return engineOf(e) === "open-appsec" ? (
+    <Badge variant="info">{ENGINE_LABEL["open-appsec"]}</Badge>
+  ) : (
+    <Badge variant="secondary">{ENGINE_LABEL.modsecurity}</Badge>
   )
 }
 
@@ -250,10 +262,11 @@ export function WafEvents() {
                   </th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Time</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Site</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Engine</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Client</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Request</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Outcome</th>
-                  <th scope="col" className="px-3 py-1.5 font-medium">Rule</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">Rule / attack</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Message</th>
                   <th scope="col" className="px-3 py-1.5 font-medium">Severity</th>
                 </tr>
@@ -315,6 +328,13 @@ function EventRow({
   onExclude: (domain: string, ruleId: number, uri?: string) => void
 }) {
   const detailId = useId()
+  const engine = engineOf(e)
+  const openAppsec = engine === "open-appsec"
+  // open-appsec has no rule ids: a rule exclusion is a ModSecurity control, so
+  // the row offers none for an event the agent produced.
+  const label = openAppsec
+    ? `${e.attack_type || e.message || "an attack"} on ${e.uri}`
+    : `rule ${e.rule_id} on ${e.uri}`
   return (
     <Fragment>
       <tr className="hover:bg-accent/40 align-top">
@@ -323,7 +343,7 @@ function EventRow({
             type="button"
             aria-expanded={expanded}
             aria-controls={detailId}
-            aria-label={`${expanded ? "Hide" : "Show"} details of rule ${e.rule_id} on ${e.uri}`}
+            aria-label={`${expanded ? "Hide" : "Show"} details of ${label}`}
             onClick={onToggle}
             className="hover:bg-accent focus-visible:ring-ring/50 rounded p-1 outline-none focus-visible:ring-[3px]"
           >
@@ -338,19 +358,27 @@ function EventRow({
           {new Date(toMillis(e.time)).toLocaleString()}
         </td>
         <td className="px-3 py-1.5 text-xs">{e.site}</td>
+        <td className="px-3 py-1.5">{engineBadge(e)}</td>
         <td className="px-3 py-1.5 font-mono text-xs">{e.ip}</td>
         <td className="max-w-[20rem] px-3 py-1.5 font-mono text-xs break-all">
           <span className="text-muted-foreground">{e.method}</span> {e.uri}
         </td>
         <td className="px-3 py-1.5">{actionBadge(e.action)}</td>
-        <td className="px-3 py-1.5 font-mono text-xs">{e.rule_id}</td>
+        <td className="px-3 py-1.5 font-mono text-xs">
+          {openAppsec ? (
+            // The agent's "rule" is what it says fired; the id column would be 0.
+            <span className="font-sans">{e.attack_type || "—"}</span>
+          ) : (
+            e.rule_id
+          )}
+        </td>
         <td className="max-w-[22rem] px-3 py-1.5 text-xs">{e.message}</td>
         <td className="px-3 py-1.5 text-xs">{e.severity}</td>
       </tr>
       {expanded && (
         <tr id={detailId}>
           <td />
-          <td colSpan={8} className="bg-muted/30 px-3 py-3">
+          <td colSpan={9} className="bg-muted/30 px-3 py-3">
             <div className="flex flex-col gap-3">
               <p className="text-xs">
                 <span className="text-muted-foreground">Request id </span>
@@ -358,29 +386,59 @@ function EventRow({
                 <span className="text-muted-foreground"> · response </span>
                 {e.status}
               </p>
+
+              {/* open-appsec's own fields. They are what the agent knows that the
+                  ModSecurity shape has no place for. */}
+              {openAppsec && (
+                <dl
+                  aria-label="open-appsec findings"
+                  className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs sm:grid-cols-3"
+                >
+                  <div className="flex flex-col">
+                    <dt className="text-muted-foreground">Confidence</dt>
+                    <dd>{e.confidence || "—"}</dd>
+                  </div>
+                  <div className="flex flex-col">
+                    <dt className="text-muted-foreground">Attack type</dt>
+                    <dd>{e.attack_type || "—"}</dd>
+                  </div>
+                  <div className="flex flex-col">
+                    <dt className="text-muted-foreground">Matched parameter</dt>
+                    <dd className="font-mono">{e.parameter || "—"}</dd>
+                  </div>
+                </dl>
+              )}
+
               <ul aria-label="Matched rules" className="flex flex-col gap-2">
                 {e.matches.map((m, i) => (
                   <li key={`${m.rule_id}:${i}`} className="bg-card flex flex-col gap-1 rounded-md border p-2 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-medium">Rule {m.rule_id}</span>
+                      {openAppsec ? (
+                        <span className="font-medium">{m.message}</span>
+                      ) : (
+                        <span className="font-mono font-medium">Rule {m.rule_id}</span>
+                      )}
                       <span>{m.severity}</span>
                       {m.tags.map((t) => (
                         <Badge key={t} variant="outline">
                           {t}
                         </Badge>
                       ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="ml-auto"
-                        aria-label={`Exclude rule ${m.rule_id} on ${e.site}`}
-                        onClick={() => onExclude(e.site, m.rule_id, e.uri)}
-                      >
-                        Exclude this rule…
-                      </Button>
+                      {/* A rule exclusion is ModSecurity's control; the agent has
+                          no rule ids to exclude, so the row offers none. */}
+                      {!openAppsec && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="ml-auto"
+                          aria-label={`Exclude rule ${m.rule_id} on ${e.site}`}
+                          onClick={() => onExclude(e.site, m.rule_id, e.uri)}
+                        >
+                          Exclude this rule…
+                        </Button>
+                      )}
                     </div>
-                    <p>{m.message}</p>
                     {m.data && (
                       <pre className="bg-muted overflow-x-auto rounded p-1.5 font-mono whitespace-pre-wrap break-all">
                         {m.data}

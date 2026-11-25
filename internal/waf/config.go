@@ -1,7 +1,7 @@
 // Package waf is the per-site web application firewall: native nginx
 // protections (rate limit, path blocklist, IP rules) that work on any nginx
-// flavor, and ModSecurity v3 with the OWASP Core Rule Set, which the
-// post-quantum flavor bundles.
+// flavor, and the two inspection engines: ModSecurity v3 with the OWASP Core
+// Rule Set, which the post-quantum flavor bundles, and open-appsec.
 //
 // The package renders configuration and keeps each site's settings in the
 // database. It never writes a file itself: the sites manager puts the rendered
@@ -26,6 +26,16 @@ const (
 	ModeOff    Mode = "off"
 	ModeDetect Mode = "detect"
 	ModeBlock  Mode = "block"
+)
+
+// EngineKind is the inspection engine a site's firewall runs.
+type EngineKind string
+
+// Engines. The zero value is modsecurity: a row stored before the engine field
+// existed has no engine key, and must read as it did then.
+const (
+	EngineModSecurity EngineKind = "modsecurity"
+	EngineOpenAppsec  EngineKind = "open-appsec"
 )
 
 // Kind is how an exclusion narrows the rule set.
@@ -79,6 +89,55 @@ type Exclusion struct {
 	Note   string `json:"note"`
 }
 
+// Confidence is the lowest threat score that blocks a request. open-appsec
+// calls it minimumConfidence; it applies to the prevent-learn mode, so a lower
+// level blocks more.
+type Confidence string
+
+// Confidence levels.
+const (
+	ConfidenceCritical Confidence = "critical"
+	ConfidenceHigh     Confidence = "high"
+	ConfidenceMedium   Confidence = "medium"
+)
+
+// ExceptionKind is what an open-appsec exception narrows: a path prefix, a
+// source network or one request parameter.
+type ExceptionKind string
+
+// open-appsec exception kinds.
+const (
+	// ExceptionPath skips inspection for requests whose path starts with Path.
+	ExceptionPath ExceptionKind = "path"
+	// ExceptionSourceIP skips inspection for a source network.
+	ExceptionSourceIP ExceptionKind = "source_ip"
+	// ExceptionParam stops one request parameter from being inspected.
+	ExceptionParam ExceptionKind = "param"
+)
+
+// OpenAppsecException is one open-appsec exemption, so a false positive does not
+// need the whole engine switched off.
+type OpenAppsecException struct {
+	Kind ExceptionKind `json:"kind"`
+	Path string        `json:"path"`
+	// SourceIP is a network in the same CIDR or plain form the IP rules take.
+	SourceIP string `json:"source_ip"`
+	Param    string `json:"param"`
+	Note     string `json:"note"`
+}
+
+// OpenAppsec is the part of a site's firewall open-appsec reads. Mode is shared
+// with ModSecurity and maps detect to detect-learn and block to prevent-learn.
+type OpenAppsec struct {
+	Confidence Confidence            `json:"confidence"`
+	Exceptions []OpenAppsecException `json:"exceptions"`
+}
+
+// DefaultOpenAppsec is the settings an open-appsec site starts from: high only.
+func DefaultOpenAppsec() OpenAppsec {
+	return OpenAppsec{Confidence: ConfidenceHigh, Exceptions: []OpenAppsecException{}}
+}
+
 // Challenge limits and defaults.
 const (
 	MinDifficulty     = 8
@@ -112,13 +171,19 @@ type Challenge struct {
 
 // Config is one site's firewall.
 type Config struct {
-	Mode          Mode        `json:"mode"`
-	Paranoia      int         `json:"paranoia"`
-	RateLimit     RateLimit   `json:"rate_limit"`
-	PathBlocklist []string    `json:"path_blocklist"`
-	IPRules       IPRules     `json:"ip_rules"`
-	Exclusions    []Exclusion `json:"exclusions"`
-	Challenge     Challenge   `json:"challenge"`
+	// Engine is "" in every row stored before the engine field existed, which
+	// Normalize reads as ModSecurity.
+	Engine        EngineKind `json:"engine"`
+	Mode          Mode       `json:"mode"`
+	Paranoia      int        `json:"paranoia"`
+	RateLimit     RateLimit  `json:"rate_limit"`
+	PathBlocklist []string   `json:"path_blocklist"`
+	IPRules       IPRules    `json:"ip_rules"`
+	// Paranoia and Exclusions apply to ModSecurity only. They stay on the config
+	// whatever the engine, so switching engines does not lose them.
+	Exclusions []Exclusion `json:"exclusions"`
+	OpenAppsec OpenAppsec  `json:"open_appsec"`
+	Challenge  Challenge   `json:"challenge"`
 }
 
 // DefaultChallenge is a challenge that is off.
@@ -135,12 +200,14 @@ func DefaultChallenge() Challenge {
 // Default is a site with the firewall off.
 func Default() Config {
 	return Config{
+		Engine:        EngineModSecurity,
 		Mode:          ModeOff,
 		Paranoia:      1,
 		RateLimit:     RateLimit{RequestsPerSecond: 10, Burst: 20},
 		PathBlocklist: []string{},
 		IPRules:       IPRules{Allow: []string{}, Deny: []string{}},
 		Exclusions:    []Exclusion{},
+		OpenAppsec:    DefaultOpenAppsec(),
 		Challenge:     DefaultChallenge(),
 	}
 }
@@ -158,11 +225,31 @@ func invalid(field, format string, args ...any) error {
 }
 
 // UsesModSecurity reports whether the config needs the ModSecurity module.
-func (c Config) UsesModSecurity() bool { return c.Mode == ModeDetect || c.Mode == ModeBlock }
+func (c Config) UsesModSecurity() bool {
+	return c.effectiveEngine() == EngineModSecurity && c.inspecting()
+}
+
+// UsesOpenAppsec reports whether the config needs the open-appsec module.
+func (c Config) UsesOpenAppsec() bool {
+	return c.effectiveEngine() == EngineOpenAppsec && c.inspecting()
+}
+
+// inspecting reports whether the mode asks the engine to read requests.
+func (c Config) inspecting() bool { return c.Mode == ModeDetect || c.Mode == ModeBlock }
+
+// effectiveEngine reads "" as ModSecurity, so a row stored before the field
+// existed needs no rewrite. Normalize writes the same value, so a normalized
+// config's Engine field is already set.
+func (c Config) effectiveEngine() EngineKind {
+	if c.Engine == "" {
+		return EngineModSecurity
+	}
+	return c.Engine
+}
 
 // IsDefault reports whether the config asks nginx for nothing at all.
 func (c Config) IsDefault() bool {
-	return !c.UsesModSecurity() && !c.RateLimit.Enabled && !c.Challenge.Enabled &&
+	return !c.UsesModSecurity() && !c.UsesOpenAppsec() && !c.RateLimit.Enabled && !c.Challenge.Enabled &&
 		len(c.PathBlocklist) == 0 && len(c.IPRules.Allow) == 0 && len(c.IPRules.Deny) == 0
 }
 
@@ -243,6 +330,14 @@ func ValidTurnstileSecret(s string) bool { return validKey(s, MaxTurnstileKey) }
 // prefixes. Everything that reaches a template went through here, so a template
 // never has to escape what it writes.
 func (c Config) Normalize() (Config, error) {
+	switch engine := EngineKind(strings.ToLower(strings.TrimSpace(string(c.Engine)))); engine {
+	case EngineModSecurity, EngineOpenAppsec:
+		c.Engine = engine
+	case "":
+		c.Engine = EngineModSecurity
+	default:
+		return Config{}, invalid("engine", "must be modsecurity or open-appsec")
+	}
 	switch c.Mode {
 	case ModeOff, ModeDetect, ModeBlock:
 	case "":
@@ -299,6 +394,12 @@ func (c Config) Normalize() (Config, error) {
 		return Config{}, err
 	}
 	c.Exclusions = ex
+
+	oa, err := normalizeOpenAppsec(c.OpenAppsec)
+	if err != nil {
+		return Config{}, err
+	}
+	c.OpenAppsec = oa
 
 	ch, err := normalizeChallenge(c.Challenge)
 	if err != nil {
@@ -416,6 +517,94 @@ func normalizeExclusions(in []Exclusion) ([]Exclusion, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// normalizeOpenAppsec validates the open-appsec part. It runs for every engine,
+// because a switch back to ModSecurity must not lose what was set here.
+func normalizeOpenAppsec(oa OpenAppsec) (OpenAppsec, error) {
+	switch conf := Confidence(strings.ToLower(strings.TrimSpace(string(oa.Confidence)))); conf {
+	case ConfidenceCritical, ConfidenceHigh, ConfidenceMedium:
+		oa.Confidence = conf
+	case "":
+		oa.Confidence = DefaultOpenAppsec().Confidence
+	default:
+		return OpenAppsec{}, invalid("open_appsec.confidence", "must be critical, high or medium")
+	}
+	if len(oa.Exceptions) > MaxExclusions {
+		return OpenAppsec{}, invalid("open_appsec.exceptions", "at most %d exceptions", MaxExclusions)
+	}
+	out := make([]OpenAppsecException, 0, len(oa.Exceptions))
+	for i, e := range oa.Exceptions {
+		f := fmt.Sprintf("open_appsec.exceptions[%d]", i)
+		var err error
+		switch e.Kind {
+		case ExceptionPath:
+			e.SourceIP, e.Param = "", ""
+			e.Path = strings.TrimSpace(e.Path)
+			if e.Path == "/" {
+				return OpenAppsec{}, invalid(f+".path", "/ would exempt the whole site; turn the engine off instead")
+			}
+			err = checkPath(f+".path", e.Path)
+		case ExceptionSourceIP:
+			e.Path, e.Param = "", ""
+			// The same normalization the IP rules get, so the two lists the
+			// renderer writes cannot disagree about a network.
+			addrs, aerr := normalizeAddrs(f+".source_ip", []string{e.SourceIP})
+			if aerr != nil {
+				return OpenAppsec{}, aerr
+			}
+			e.SourceIP = addrs[0]
+		case ExceptionParam:
+			e.Path, e.SourceIP = "", ""
+			e.Param = strings.TrimSpace(e.Param)
+			if !validArg(e.Param) {
+				return OpenAppsec{}, invalid(f+".param", "must be 1-64 letters, digits or _ . - [ ]")
+			}
+		default:
+			return OpenAppsec{}, invalid(f+".kind", "must be path, source_ip or param")
+		}
+		if err != nil {
+			return OpenAppsec{}, err
+		}
+		e.Note = strings.Join(strings.Fields(e.Note), " ")
+		if len([]rune(e.Note)) > MaxNote {
+			return OpenAppsec{}, invalid(f+".note", "is longer than %d characters", MaxNote)
+		}
+		out = append(out, e)
+	}
+	oa.Exceptions = sortOpenAppsecExceptions(out)
+	return oa, nil
+}
+
+// sortOpenAppsecExceptions makes the order of a site's exceptions its own, not
+// the order the operator happened to enter them, so re-saving an unchanged form
+// writes nothing.
+func sortOpenAppsecExceptions(in []OpenAppsecException) []OpenAppsecException {
+	out := make([]OpenAppsecException, 0, len(in))
+	seen := map[OpenAppsecException]bool{}
+	for _, e := range in {
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.SourceIP != b.SourceIP {
+			return a.SourceIP < b.SourceIP
+		}
+		if a.Param != b.Param {
+			return a.Param < b.Param
+		}
+		return a.Note < b.Note
+	})
+	return out
 }
 
 func validArg(a string) bool {
