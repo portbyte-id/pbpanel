@@ -111,10 +111,11 @@ func (s *Service) Emit(ctx context.Context, e Event) {
 			s.logger.Error("notify: emit panicked; event dropped", "kind", e.Kind, "panic", p)
 		}
 	}()
-	s.emit(ctx, e)
+	s.emit(ctx, e, true)
 }
 
-func (s *Service) emit(ctx context.Context, e Event) {
+// emit records e. routing false records it for the bell only (D10).
+func (s *Service) emit(ctx context.Context, e Event, routing bool) {
 	now := s.now()
 	n, err := Normalize(e, now)
 	if err != nil {
@@ -131,7 +132,7 @@ func (s *Service) emit(ctx context.Context, e Event) {
 	var stored StoredEvent
 	err = s.repo.st.WithTx(dctx, func(tx *sql.Tx) error {
 		var err error
-		stored, err = s.record(dctx, tx, n, pol, now)
+		stored, err = s.record(dctx, tx, n, pol, now, routing)
 		return err
 	})
 	if err != nil {
@@ -144,7 +145,7 @@ func (s *Service) emit(ctx context.Context, e Event) {
 
 // record stores the event, updates its condition state and routes it. It runs
 // inside the caller's transaction.
-func (s *Service) record(ctx context.Context, q querier, e Event, pol policy, now time.Time) (StoredEvent, error) {
+func (s *Service) record(ctx context.Context, q querier, e Event, pol policy, now time.Time, routing bool) (StoredEvent, error) {
 	id, err := s.repo.insertEvent(ctx, q, e)
 	if err != nil {
 		return StoredEvent{}, fmt.Errorf("notify: insert event: %w", err)
@@ -170,6 +171,9 @@ func (s *Service) record(ctx context.Context, q querier, e Event, pol policy, no
 		if err := s.repo.putState(ctx, q, st); err != nil {
 			return StoredEvent{}, err
 		}
+		if !routing {
+			return stored, nil
+		}
 		return stored, s.route(ctx, q, id, e, sev, pol, now)
 	}
 
@@ -180,6 +184,9 @@ func (s *Service) record(ctx context.Context, q querier, e Event, pol policy, no
 	st.LastEventID = id
 	if err := s.repo.putState(ctx, q, st); err != nil {
 		return StoredEvent{}, err
+	}
+	if !routing {
+		return stored, nil
 	}
 	return stored, s.route(ctx, q, id, e, e.Severity, pol, now)
 }
