@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
 	"github.com/portbyte-id/server-panel/internal/guard"
@@ -125,6 +126,18 @@ func (m *Manager) WAFOverview(ctx context.Context) (WAFOverview, error) {
 // site's marked block and its firewall files, and applied through confedit like
 // every other change: `nginx -t` runs on the result before nginx reloads, and a
 // rejection puts every file and the stored settings back.
+// wafApplyTimeout bounds one firewall apply: the nginx reload plus the agent's
+// policy load, which is slow while the agent is busy.
+const wafApplyTimeout = 5 * time.Minute
+
+// wafApplyContext detaches an apply from the caller's context. The HTTP request
+// is cancelled when the client disconnects, and a cancelled context kills the
+// agent's --apply-policy mid-run and strands the rollback. The apply must finish
+// or fail on its own clock, so it runs on a context that outlives the request.
+func wafApplyContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), wafApplyTimeout)
+}
+
 func (m *Manager) SetWAF(ctx context.Context, domain string, in waf.Config) (WAFResult, error) {
 	if m.waf == nil {
 		return WAFResult{}, ErrNoWAF
@@ -499,7 +512,9 @@ func (m *Manager) SetWAFGlobal(ctx context.Context, in waf.Global) (WAFGlobalRes
 	if err != nil {
 		return WAFGlobalResult{}, restore(err)
 	}
-	res, err := m.ap.Apply(ctx, confedit.Change{Files: files, Services: services, Reason: "firewall: global"})
+	applyCtx, cancel := wafApplyContext(ctx)
+	defer cancel()
+	res, err := m.ap.Apply(applyCtx, confedit.Change{Files: files, Services: services, Reason: "firewall: global"})
 	if err != nil {
 		return WAFGlobalResult{}, restore(err)
 	}

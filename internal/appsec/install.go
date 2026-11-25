@@ -5,9 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// agentIPCSocket is the agent's HTTP transaction handler socket. nginx workers
+// register against it at start or reload. It appears only after the agent has
+// created its shared-memory queues, which can be seconds after the unit reports
+// active, so the install waits for it before reloading nginx.
+const agentIPCSocket = "/dev/shm/check-point/cp-nano-http-transaction-handler-1"
 
 // InstallOptions are what one install run needs from its caller.
 type InstallOptions struct {
@@ -104,6 +112,9 @@ func (m *Manager) Install(ctx context.Context, opts InstallOptions) error {
 	// Last, and only when nginx is running: a stopped nginx has nothing to reload
 	// and will register at its next start, which is the same guarantee.
 	if out, err := m.run.Run(ctx, m.nginxActiveCommand()); err == nil && strings.TrimSpace(string(out)) == "active" {
+		if err := m.waitAgentIPC(ctx, say); err != nil {
+			return err
+		}
 		say("reloading nginx so it registers against the agent")
 		if out, err := m.run.Run(ctx, m.ReloadNginxCommand()); err != nil {
 			return fmt.Errorf("appsec: reload nginx: %w: %s", err, strings.TrimSpace(string(out)))
@@ -237,4 +248,26 @@ func tail(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// waitAgentIPC polls until the agent's IPC socket exists, so the nginx reload that
+// follows registers its workers against a live agent. A unit that is active with
+// no socket after the timeout fails the install: otherwise the reload would leave
+// every worker uninspected, and nothing would say so.
+func (m *Manager) waitAgentIPC(ctx context.Context, say func(string)) error {
+	deadline := time.Now().Add(m.ipcTimeout)
+	for {
+		if fi, err := m.stat(agentIPCSocket); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			say("the agent's IPC socket is up")
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("appsec: the agent is active but %s never appeared; nginx would register with nothing", agentIPCSocket)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(m.ipcPoll):
+		}
+	}
 }

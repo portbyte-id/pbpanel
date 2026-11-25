@@ -2,7 +2,11 @@ package waf
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/portbyte-id/server-panel/internal/confedit"
@@ -85,6 +89,9 @@ func (s *OpenAppsecService) Validate(ctx context.Context) (string, error) {
 // non-zero exit from the *script interpreter* rather than the script's own
 // deliberate `exit 1` — and a timeout.
 func (s *OpenAppsecService) Reload(ctx context.Context) error {
+	if err := ensureDefaultPolicy(s.policy); err != nil {
+		return err
+	}
 	out, err := s.run.Run(ctx, OpenAppsecCtl, "--apply-policy", s.policy)
 	text := string(out)
 	// The script's own "the policy did not change" exit is a rejection the panel
@@ -95,6 +102,28 @@ func (s *OpenAppsecService) Reload(ctx context.Context) error {
 	}
 	if err != nil && !strings.Contains(text, "New policy applied") {
 		return fmt.Errorf("open-appsec apply-policy failed: %w: %s", err, strings.TrimSpace(text))
+	}
+	return nil
+}
+
+// ensureDefaultPolicy writes the agent's all-inactive policy when the panel's
+// policy file is absent. A rollback of the first enable restores "no policy
+// file", so the agent would be asked to load a path that does not exist ("Invalid
+// policy path") and keep the rejected policy in force. The default leaves every
+// host inactive, which is the state before any site used the engine.
+func ensureDefaultPolicy(path string) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("open-appsec policy %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("open-appsec policy directory: %w", err)
+	}
+	if err := os.WriteFile(path, RenderOpenAppsecPolicy(nil), 0o644); err != nil {
+		return fmt.Errorf("open-appsec default policy: %w", err)
 	}
 	return nil
 }

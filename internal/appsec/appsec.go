@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // The installed agent's fixed locations, all as measured on the Ubuntu sandbox
@@ -402,6 +403,9 @@ type Manager struct {
 	removeAll     func(string) error
 	fetch         FetchFunc
 	modulePresent func(context.Context) (bool, error)
+	// ipcTimeout bounds the wait for the agent's IPC socket; ipcPoll is its step.
+	ipcTimeout time.Duration
+	ipcPoll    time.Duration
 }
 
 // New returns the manager.
@@ -435,6 +439,12 @@ func New(opts Options) *Manager {
 	}
 	if m.readFile == nil {
 		m.readFile = os.ReadFile
+	}
+	if m.ipcTimeout == 0 {
+		m.ipcTimeout = 60 * time.Second
+	}
+	if m.ipcPoll == 0 {
+		m.ipcPoll = time.Second
 	}
 	if m.stat == nil {
 		m.stat = os.Stat

@@ -1,8 +1,11 @@
 package waf
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -40,13 +43,13 @@ func TestOpenAppsecServiceApply(t *testing.T) {
 	}}
 	// The vendor script's own success path ends in `exit 1`.
 	ok.err = map[string]error{"/etc/cp/scripts/open-appsec-ctl.sh": errors.New("exit status 1")}
-	s := NewOpenAppsecService(ok, "/www/policy.yaml", nil)
+	s := NewOpenAppsecService(ok, filepath.Join(t.TempDir(), "local_policy.yaml"), nil)
 	if err := s.Reload(context.Background()); err != nil {
 		t.Errorf("a successful apply reported an error: %v", err)
 	}
 
 	missing := &fakeRunner{err: map[string]error{"/etc/cp/scripts/open-appsec-ctl.sh": errors.New("no such file")}}
-	err := NewOpenAppsecService(missing, "/www/policy.yaml", nil).Reload(context.Background())
+	err := NewOpenAppsecService(missing, filepath.Join(t.TempDir(), "local_policy.yaml"), nil).Reload(context.Background())
 	if err == nil {
 		t.Fatal("an apply that never ran reported success")
 	}
@@ -62,7 +65,7 @@ func TestOpenAppsecServiceRejectsAnUnchangedPolicy(t *testing.T) {
 		out: map[string]string{"/etc/cp/scripts/open-appsec-ctl.sh": "Policy didn't change please verify that you have a legal new policy"},
 		err: map[string]error{"/etc/cp/scripts/open-appsec-ctl.sh": errors.New("exit status 1")},
 	}
-	err := NewOpenAppsecService(r, "/www/policy.yaml", nil).Reload(context.Background())
+	err := NewOpenAppsecService(r, filepath.Join(t.TempDir(), "local_policy.yaml"), nil).Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "rejected") {
 		t.Errorf("err = %v, want a rejection", err)
 	}
@@ -88,5 +91,39 @@ func TestOpenAppsecServiceValidate(t *testing.T) {
 	}
 	if s.Name() != "open-appsec" {
 		t.Errorf("Name = %q", s.Name())
+	}
+}
+
+// A rollback of the first enable restores "no policy file". The agent must still
+// be handed a file it can load: the all-inactive default, not a missing path.
+func TestOpenAppsecReloadWritesDefaultPolicyWhenAbsent(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "waf", "open-appsec", "local_policy.yaml")
+	r := &fakeRunner{out: map[string]string{"/etc/cp/scripts/open-appsec-ctl.sh": "New policy applied.\n"}}
+	s := NewOpenAppsecService(r, policy, nil)
+	if err := s.Reload(context.Background()); err != nil {
+		t.Fatalf("reload over an absent policy: %v", err)
+	}
+	got, err := os.ReadFile(policy)
+	if err != nil {
+		t.Fatalf("the default policy was not written: %v", err)
+	}
+	if !bytes.Equal(got, RenderOpenAppsecPolicy(nil)) {
+		t.Errorf("the written policy is not the all-inactive default")
+	}
+}
+
+// An existing policy is what the apply must load; the default must not replace it.
+func TestOpenAppsecReloadKeepsExistingPolicy(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "local_policy.yaml")
+	mine := []byte("kept\n")
+	if err := os.WriteFile(policy, mine, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{out: map[string]string{"/etc/cp/scripts/open-appsec-ctl.sh": "New policy applied.\n"}}
+	if err := NewOpenAppsecService(r, policy, nil).Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got, _ := os.ReadFile(policy); !bytes.Equal(got, mine) {
+		t.Errorf("an existing policy was overwritten: %q", got)
 	}
 }

@@ -398,6 +398,13 @@ func TestInstallRunsTheStepsInOrder(t *testing.T) {
 	// The install leaves the watchdog present, which is what makes Status report the
 	// agent installed afterwards.
 	h.fs.files[filepath.Join(FilesystemRoot, "watchdog", "cp-nano-watchdog")] = []byte("x")
+	// The agent's IPC socket is up, which the install waits for before reloading nginx.
+	h.m.stat = func(name string) (os.FileInfo, error) {
+		if name == agentIPCSocket {
+			return socketInfo{}, nil
+		}
+		return h.fs.stat(name)
+	}
 
 	var lines []string
 	err := h.m.Install(context.Background(), InstallOptions{
