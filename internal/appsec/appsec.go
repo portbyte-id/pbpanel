@@ -138,13 +138,17 @@ func SupportedCodenames() []string {
 // Architecture is the agent archive's architecture directory. The vendor
 // publishes only x86_64 today; anything else is refused rather than guessed at.
 func Architecture() (string, error) {
-	switch runtime.GOARCH {
+	switch goarch {
 	case "amd64":
 		return "x86_64", nil
 	default:
-		return "", fmt.Errorf("appsec: open-appsec publishes no agent for %s; only amd64 is supported", runtime.GOARCH)
+		return "", fmt.Errorf("appsec: open-appsec publishes no agent for %s; only amd64 is supported", goarch)
 	}
 }
+
+// goarch is the host architecture; a variable so tests can run the same
+// assertions on an arm64 runner.
+var goarch = runtime.GOARCH
 
 var (
 	// ErrNotInstalled is returned when an operation needs an agent that is not there.
