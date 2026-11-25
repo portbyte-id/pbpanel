@@ -34,7 +34,7 @@ import { Button } from "@/components/ui/button"
 import { Select } from "@/components/ui/select"
 import { api, type FMEntry, type FMListing } from "@/lib/api"
 import { uploadQueue } from "@/lib/uploadQueue"
-import { cn } from "@/lib/utils"
+import { cn, tablistKeyDown } from "@/lib/utils"
 
 /**
  * The file manager (M3 3.10).
@@ -239,6 +239,7 @@ export function FilesPage() {
       <div
         className="border-border flex shrink-0 flex-wrap items-center gap-1 border-b"
         role="tablist"
+        onKeyDown={tablistKeyDown}
         aria-label="Files views"
       >
         {(["files", "trash"] as const).map((t) => (
@@ -247,6 +248,7 @@ export function FilesPage() {
             type="button"
             role="tab"
             aria-selected={tab === t}
+            tabIndex={tab === t ? 0 : -1}
             onClick={() => setTab(t)}
             className={cn(
               "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm font-medium capitalize",

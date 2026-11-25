@@ -94,7 +94,7 @@ function NodePanel() {
                 id={`${id}-version`}
                 value={version}
                 onChange={(e) => setVersion(e.target.value)}
-                placeholder="24 or 22.11.0"
+                placeholder="24 or 22.11.0…"
                 autoComplete="off"
                 spellCheck={false}
                 aria-invalid={bad}
@@ -141,7 +141,7 @@ function NodePanel() {
               {data.node.map((n) => (
                 <li key={n.version} className="flex flex-wrap items-center gap-3 py-3 text-sm first:pt-0 last:pb-0">
                   <span className="w-24 font-medium tabular-nums">{n.version}</span>
-                  <code className="text-muted-foreground flex-1 truncate text-xs">{n.path}</code>
+                  <code translate="no" className="text-muted-foreground flex-1 truncate text-xs">{n.path}</code>
                   {n.used_by.length > 0 ? (
                     <Badge variant="secondary">Used by {n.used_by.join(", ")}</Badge>
                   ) : null}

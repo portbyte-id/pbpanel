@@ -199,7 +199,7 @@ export function IPCertSection({ onJob }: { onJob: (jobId: string) => void }) {
             id="panel-ip"
             value={value}
             onChange={(e) => setTyped(e.target.value)}
-            placeholder="203.0.113.10"
+            placeholder="203.0.113.10…"
             autoComplete="off"
             spellCheck={false}
             aria-describedby="panel-ip-hint"

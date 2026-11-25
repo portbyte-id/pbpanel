@@ -93,7 +93,7 @@ export function ProxyRouteEditor({
       {routes.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           No routes yet. The whole site is served as above; add a route to send one subpath, such
-          as <code>/api</code>, to an app or another server.
+          as <code translate="no">/api</code>, to an app or another server.
         </p>
       ) : (
         <ul className="flex flex-col gap-3">
@@ -108,7 +108,7 @@ export function ProxyRouteEditor({
                       id={`${id}-path-${i}`}
                       value={route.path}
                       onChange={(e) => update(i, { path: e.target.value })}
-                      placeholder="/api"
+                      placeholder="/api…"
                       autoComplete="off"
                       spellCheck={false}
                       disabled={disabled}
@@ -121,7 +121,7 @@ export function ProxyRouteEditor({
                       id={`${id}-target-${i}`}
                       value={route.target}
                       onChange={(e) => update(i, { target: e.target.value })}
-                      placeholder="http://127.0.0.1:3000"
+                      placeholder="http://127.0.0.1:3000…"
                       autoComplete="off"
                       spellCheck={false}
                       disabled={disabled}
@@ -149,8 +149,8 @@ export function ProxyRouteEditor({
                   <span className="flex flex-col gap-0.5">
                     Strip the prefix
                     <span className="text-muted-foreground">
-                      On: <code>/api/users</code> reaches the app as <code>/users</code>. Off: it
-                      arrives as <code>/api/users</code>.
+                      On: <code translate="no">/api/users</code> reaches the app as <code translate="no">/users</code>. Off: it
+                      arrives as <code translate="no">/api/users</code>.
                     </span>
                   </span>
                 </label>
@@ -283,7 +283,7 @@ export function CreateSiteForm({
             id={`${id}-domain`}
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
-            placeholder="example.com"
+            placeholder="example.com…"
             autoComplete="off"
             spellCheck={false}
             required
@@ -299,7 +299,7 @@ export function CreateSiteForm({
             id={`${id}-aliases`}
             value={aliases}
             onChange={(e) => setAliases(e.target.value)}
-            placeholder="www.example.com"
+            placeholder="www.example.com…"
             autoComplete="off"
             spellCheck={false}
             aria-invalid={field === "aliases"}
@@ -455,7 +455,7 @@ export function CreateSiteForm({
             Reverse proxy
           </h3>
           <p className="text-muted-foreground text-xs">
-            Send a subpath, such as <code>/api</code>, to an app or another server while the rest
+            Send a subpath, such as <code translate="no">/api</code>, to an app or another server while the rest
             of the site is served normally.
           </p>
         </div>

@@ -197,12 +197,12 @@ function SummaryStrip({ summary }: { summary: SSHSummary }) {
       <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Tile
           label="Failed attempts"
-          value={summary.failed.toLocaleString("en-US")}
+          value={summary.failed.toLocaleString()}
           tone={summary.failed > 0 ? "destructive" : undefined}
         />
-        <Tile label="Succeeded" value={summary.succeeded.toLocaleString("en-US")} />
-        <Tile label="Distinct IPs" value={summary.distinct_ips.toLocaleString("en-US")} />
-        <Tile label="Distinct users" value={summary.distinct_users.toLocaleString("en-US")} />
+        <Tile label="Succeeded" value={summary.succeeded.toLocaleString()} />
+        <Tile label="Distinct IPs" value={summary.distinct_ips.toLocaleString()} />
+        <Tile label="Distinct users" value={summary.distinct_users.toLocaleString()} />
       </dl>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -267,8 +267,8 @@ function TopList({
                 {pager.rows.map((r) => (
                   <tr key={r.key}>
                     <td className="px-3 py-1.5 font-mono text-xs break-all">{r.label || "—"}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{r.failed.toLocaleString("en-US")}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{r.total.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{r.failed.toLocaleString()}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{r.total.toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -304,8 +304,8 @@ function AttemptTable({
   return (
     <section aria-label="Login attempts" className="flex flex-col gap-2">
       <p className="text-muted-foreground text-xs" aria-live="polite">
-        Showing {rows.length.toLocaleString("en-US")} of {total.toLocaleString("en-US")} attempts
-        {truncated ? ` (the newest ${fetched.toLocaleString("en-US")} are loaded)` : ""}.{" "}
+        Showing {rows.length.toLocaleString()} of {total.toLocaleString()} attempts
+        {truncated ? ` (the newest ${fetched.toLocaleString()} are loaded)` : ""}.{" "}
         {paused ? "Paused — resume to catch up." : "Newest first."}
       </p>
 
@@ -319,7 +319,7 @@ function AttemptTable({
             search={query}
             onSearchChange={setQuery}
             searchLabel="Search login attempts"
-            placeholder="Search IP, username, port or method"
+            placeholder="Search IP, username, port or method…"
           />
           <div
             className="focus-visible:ring-ring relative max-h-[36rem] overflow-auto rounded-lg border focus-visible:ring-2 focus-visible:outline-none"

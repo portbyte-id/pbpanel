@@ -735,7 +735,7 @@ export function ServicesSection({ limit, filters = false }: { limit?: number; fi
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter by name or detail"
+            placeholder="Filter by name or detail…"
             aria-label="Filter services"
             className="h-7 max-w-64"
           />

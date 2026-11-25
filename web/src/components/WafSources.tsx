@@ -135,7 +135,7 @@ export function SourcesPanel({ range }: { range: TrafficRange }) {
                     <th scope="row" className="py-1.5 text-left font-mono font-normal break-all">
                       {r.ip}
                     </th>
-                    <td className="py-1.5 text-right tabular-nums">{r.blocked.toLocaleString("en-US")}</td>
+                    <td className="py-1.5 text-right tabular-nums">{r.blocked.toLocaleString()}</td>
                     <td className="py-1.5 pl-3">{r.country ? countryName(r.country) : "Unknown"}</td>
                   </tr>
                 ))}
@@ -148,15 +148,15 @@ export function SourcesPanel({ range }: { range: TrafficRange }) {
       {(data.unlocated > 0 || data.untracked > 0) && (
         <p className="text-muted-foreground text-xs">
           {data.unlocated > 0 &&
-            `${data.unlocated.toLocaleString("en-US")} requests came from addresses no country covers, such as private networks. `}
+            `${data.unlocated.toLocaleString()} requests came from addresses no country covers, such as private networks. `}
           {data.untracked > 0 &&
-            `${data.untracked.toLocaleString("en-US")} requests are not attributed: the monitor keeps only the busiest addresses in each interval.`}
+            `${data.untracked.toLocaleString()} requests are not attributed: the monitor keeps only the busiest addresses in each interval.`}
         </p>
       )}
 
       <p className="text-muted-foreground text-xs">
         {geo.installed
-          ? `Country data from the DB-IP country database, ${geo.month}, ${geo.entries.toLocaleString("en-US")} ranges. `
+          ? `Country data from the DB-IP country database, ${geo.month}, ${geo.entries.toLocaleString()} ranges. `
           : ""}
         <a className="underline underline-offset-4" href={geo.attribution_url} target="_blank" rel="noreferrer">
           {geo.attribution}
@@ -209,9 +209,9 @@ export function CountriesTable({ range }: { range: TrafficRange }) {
                   <th scope="row" className="px-3 py-1.5 text-left font-normal">
                     {countryName(c.code)}
                   </th>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{c.requests.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{c.blocked.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{c.addresses.toLocaleString("en-US")}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{c.requests.toLocaleString()}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{c.blocked.toLocaleString()}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{c.addresses.toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>

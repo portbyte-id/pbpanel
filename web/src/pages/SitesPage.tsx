@@ -140,7 +140,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
       <p className="text-sm font-medium">Add your first site</p>
       <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
         A site answers for one or more domains. It can serve files from a folder, run PHP, and
-        pass subpaths such as <code>/api</code> to apps on this server — all at once.
+        pass subpaths such as <code translate="no">/api</code> to apps on this server — all at once.
       </p>
       <Button className="mt-4" onClick={() => setCreating(true)}>
         <Plus aria-hidden="true" />
@@ -153,7 +153,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
     </p>
   ) : (
     <div className="flex flex-col gap-3">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter sites" placeholder="Filter sites">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter sites" placeholder="Filter sites…">
         <TableFilter
           label="Type"
           value={kindFilter}

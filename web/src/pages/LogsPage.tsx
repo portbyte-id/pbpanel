@@ -100,7 +100,7 @@ export function SourceList({
           type="search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Name or kind"
+          placeholder="Name or kind…"
           autoComplete="off"
         />
       </div>

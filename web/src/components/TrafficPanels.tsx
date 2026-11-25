@@ -151,7 +151,7 @@ export function ResponseMix({ totals }: { totals: TrafficTotals }) {
   const other = Math.max(0, totals.requests - totals.s2xx - totals.s3xx - totals.s4xx - totals.s5xx)
   const rows = CLASS_SERIES.map((c) => ({ ...c, value: totals[c.key] }))
   return (
-    <Panel title="Response mix" aside={`${totals.requests.toLocaleString("en-US")} responses`}>
+    <Panel title="Response mix" aside={`${totals.requests.toLocaleString()} responses`}>
       <SplitBar
         label={`Responses: ${rows.map((r) => `${r.value} ${r.label}`).join(", ")}`}
         segments={[...rows.map((r) => ({ key: r.key, value: r.value, color: r.color })), { key: "other", value: other, color: "var(--muted-foreground)" }]}
@@ -161,7 +161,7 @@ export function ResponseMix({ totals }: { totals: TrafficTotals }) {
           <li key={r.key} className="flex items-center gap-2">
             <span aria-hidden="true" className="inline-block size-2.5 shrink-0 rounded-sm" style={{ background: r.color }} />
             <span className="flex-1">{r.label}</span>
-            <span className="tabular-nums">{r.value.toLocaleString("en-US")}</span>
+            <span className="tabular-nums">{r.value.toLocaleString()}</span>
             <span className="text-muted-foreground w-12 text-right text-xs tabular-nums">{percent(r.value, totals.requests)}</span>
           </li>
         ))}
@@ -221,11 +221,11 @@ export function FirewallActivity({
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
         <span className="flex items-center gap-1.5">
           <span aria-hidden="true" className="bg-destructive inline-block size-2.5 rounded-sm" />
-          <span className="tabular-nums font-medium">{blocked.toLocaleString("en-US")}</span> blocked
+          <span className="tabular-nums font-medium">{blocked.toLocaleString()}</span> blocked
         </span>
         <span className="flex items-center gap-1.5">
           <span aria-hidden="true" className="bg-warning inline-block size-2.5 rounded-sm" />
-          <span className="tabular-nums font-medium">{detected.toLocaleString("en-US")}</span> detected only
+          <span className="tabular-nums font-medium">{detected.toLocaleString()}</span> detected only
         </span>
       </div>
 
@@ -243,7 +243,7 @@ export function FirewallActivity({
                   <span className="text-muted-foreground min-w-0 flex-1 truncate" title={r.message}>
                     {r.message}
                   </span>
-                  <span className="tabular-nums">{r.count.toLocaleString("en-US")}</span>
+                  <span className="tabular-nums">{r.count.toLocaleString()}</span>
                 </div>
                 <div aria-hidden="true" className="bg-muted h-1 rounded-full">
                   <div className="bg-primary/70 h-1 rounded-full" style={{ width: `${(r.count / peak) * 100}%` }} />

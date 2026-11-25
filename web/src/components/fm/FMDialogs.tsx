@@ -1,3 +1,4 @@
+import { canAutoFocus } from "@/lib/utils"
 import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -86,7 +87,7 @@ export function NameDialog({
               id="fm-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              autoFocus
+              autoFocus={canAutoFocus()}
               spellCheck={false}
             />
           </div>
@@ -156,7 +157,7 @@ export function ConfirmDialog({
               id="fm-confirm"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              autoFocus
+              autoFocus={canAutoFocus()}
               spellCheck={false}
               autoComplete="off"
             />
@@ -232,7 +233,7 @@ export function ExtractDialog({
               id="fm-extract-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              autoFocus
+              autoFocus={canAutoFocus()}
               spellCheck={false}
             />
             <p className="text-muted-foreground text-xs font-mono break-all">{dest}</p>

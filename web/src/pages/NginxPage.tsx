@@ -242,7 +242,7 @@ export function BuildCard() {
                   id="nginx-version"
                   list="nginx-versions"
                   value={draft}
-                  placeholder="1.30 or 1.30.1"
+                  placeholder="1.30 or 1.30.1…"
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={draftError !== null}

@@ -168,7 +168,7 @@ function ContainersTab() {
           {errorText(control.error, "The action failed.")}
         </p>
       )}
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers…">
         <TableFilter label="State" value={stateFilter} onChange={setStateFilter} options={stateOptions} />
       </TableToolbar>
       {pager.total === 0 ? (
@@ -387,7 +387,7 @@ function ProcessPane({ id }: { id: string | null }) {
   if (top.error) return <ErrorState error={top.error} fallback="The processes could not be loaded." onRetry={() => void top.refetch()} />
   return (
     <div className="flex flex-col">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter processes" placeholder="Filter processes" />
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter processes" placeholder="Filter processes…" />
       {pager.total === 0 ? (
         <p className="text-muted-foreground text-sm" role="status">
           No rows match the filters.
@@ -457,7 +457,7 @@ function MonitorTab({ active }: { active: boolean }) {
   }
   return (
     <div className="flex flex-col gap-2">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers" />
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter containers" placeholder="Filter containers…" />
       {pager.total === 0 ? (
         <p className="text-muted-foreground text-sm" role="status">
           No rows match the filters.
@@ -537,7 +537,7 @@ function ImagesTab() {
 
   return (
     <div className="flex flex-col gap-3">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter images" placeholder="Filter images">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter images" placeholder="Filter images…">
         <TableFilter
           label="Use"
           value={usedFilter}
@@ -660,7 +660,7 @@ function VolumesTab() {
 
   return (
     <div className="flex flex-col gap-3">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter volumes" placeholder="Filter volumes">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter volumes" placeholder="Filter volumes…">
         <TableFilter
           label="Use"
           value={usedFilter}

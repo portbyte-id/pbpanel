@@ -51,7 +51,7 @@ function Inline({ text }: { text: string }): ReactNode {
   return parts.map((part, i) => {
     if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
       return (
-        <code key={i} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em]">
+        <code translate="no" key={i} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em]">
           {part.slice(1, -1)}
         </code>
       )

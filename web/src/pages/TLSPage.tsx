@@ -186,7 +186,7 @@ function AddCertificateCard() {
           <Input
             id="tls-cert-name"
             value={name}
-            placeholder="shop.example.com"
+            placeholder="shop.example.com…"
             autoComplete="off"
             spellCheck={false}
             onChange={(e) => {
@@ -311,7 +311,7 @@ export function CertificateTable({
         search={search}
         onSearchChange={setSearch}
         searchLabel="Search certificates"
-        placeholder="Search by name or issuer"
+        placeholder="Search by name or issuer…"
       >
         <TableFilter label="Source" value={source} onChange={setSource} options={SOURCE_FILTERS} />
       </TableToolbar>

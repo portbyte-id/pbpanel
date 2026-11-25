@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { ApiError, type SiteDetail, type SiteRewrite } from "@/lib/api"
 import type { LogSource } from "@/lib/logs"
-import { cn } from "@/lib/utils"
+import { cn, tablistKeyDown } from "@/lib/utils"
 import {
   type ConfigSource,
   useDeleteSite,
@@ -283,7 +283,7 @@ function SiteProxyRoutes({ detail }: { detail: SiteDetail }) {
           Reverse proxy
         </h3>
         <p className="text-muted-foreground text-xs">
-          Send a subpath, such as <code>/api</code>, to an app or another server. The rest of the
+          Send a subpath, such as <code translate="no">/api</code>, to an app or another server. The rest of the
           site is served by its folder
           {detail.php_version ? " and PHP" : ""}.
         </p>
@@ -469,7 +469,7 @@ function SiteLogs({ domain, php }: { domain: string; php: boolean }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div role="tablist" aria-label="Log files" className="flex flex-wrap gap-1">
+      <div role="tablist" aria-label="Log files" onKeyDown={tablistKeyDown} className="flex flex-wrap gap-1">
         {streams.map((s) => (
           <ConfigTab key={s.id} active={current.id === s.id} onClick={() => setPicked(s.id)}>
             {s.label}
@@ -499,7 +499,7 @@ function SiteConfig({ detail }: { detail: SiteDetail }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div role="tablist" aria-label="Configuration files" className="flex flex-wrap gap-1">
+      <div role="tablist" aria-label="Configuration files" onKeyDown={tablistKeyDown} className="flex flex-wrap gap-1">
         <ConfigTab active={selected === "site"} onClick={() => setSelected("site")}>
           Site file
         </ConfigTab>
@@ -533,6 +533,7 @@ function ConfigTab({
       type="button"
       role="tab"
       aria-selected={active}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={cn(
         "focus-visible:ring-ring rounded-md px-2.5 py-1.5 text-xs outline-none focus-visible:ring-2",

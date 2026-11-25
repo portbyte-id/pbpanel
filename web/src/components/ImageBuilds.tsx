@@ -280,7 +280,7 @@ export function ExtensionPicker({
             id={`${id}-pecl`}
             value={draft}
             spellCheck={false}
-            placeholder="for example igbinary"
+            placeholder="for example igbinary…"
             aria-invalid={peclError !== null}
             aria-describedby={`${id}-pecl-hint`}
             onChange={(e) => {

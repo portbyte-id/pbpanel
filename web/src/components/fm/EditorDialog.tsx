@@ -1,3 +1,4 @@
+import { canAutoFocus, tablistKeyDown } from "@/lib/utils"
 import { gotoLine, openSearchPanel } from "@codemirror/search"
 import type { EditorView } from "@codemirror/view"
 import {
@@ -198,6 +199,15 @@ export function EditorDialog({
   const current = tabs.find((t) => t.path === active) ?? null
   const dirty = tabs.filter(isDirty)
   const crlf = current?.file ? isCRLF(current.file.content) : false
+
+  // A reload or tab close would drop unsaved edits: ask the browser to confirm.
+  const hasDirty = dirty.length > 0
+  useEffect(() => {
+    if (!hasDirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [hasDirty])
 
   useEffect(() => {
     writePrefs(prefs)
@@ -547,12 +557,12 @@ export function EditorDialog({
                 </Button>
               </div>
               <p className="text-muted-foreground truncate px-2 pt-1 text-xs" title={dir}>
-                Directory: <code className="text-foreground font-mono">{dir}</code>
+                Directory: <code translate="no" className="text-foreground font-mono">{dir}</code>
               </p>
               <div className="px-2 py-2">
                 <Input
                   aria-label="Filter this folder"
-                  placeholder="Filter this folder"
+                  placeholder="Filter this folder…"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   className="h-8 text-xs"
@@ -569,7 +579,7 @@ export function EditorDialog({
                 >
                   <Input
                     aria-label="New file name"
-                    autoFocus
+                    autoFocus={canAutoFocus()}
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     className="h-8 text-xs"
@@ -645,6 +655,7 @@ export function EditorDialog({
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div
               role="tablist"
+              onKeyDown={tablistKeyDown}
               aria-label="Open files"
               className="border-border bg-muted/30 flex min-w-0 overflow-x-auto border-b"
             >
@@ -661,6 +672,7 @@ export function EditorDialog({
                       type="button"
                       role="tab"
                       aria-selected={isActive}
+                      tabIndex={isActive ? 0 : -1}
                       title={t.path}
                       onClick={() => setActive(t.path)}
                       className={`flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-sm ${

@@ -148,7 +148,7 @@ function PathBrowser({
         >
           <ArrowUp aria-hidden="true" />
         </Button>
-        <code className="min-w-0 flex-1 truncate text-xs" title={path}>
+        <code translate="no" className="min-w-0 flex-1 truncate text-xs" title={path}>
           {path}
         </code>
       </div>

@@ -22,6 +22,8 @@ function prefersDark(): boolean {
 export function applyTheme(mode: ThemeMode = read()) {
   const dark = mode === "dark" || (mode === "system" && prefersDark())
   document.documentElement.classList.toggle("dark", dark)
+  // Keep the browser chrome (mobile address bar) in step with --background.
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1c1917" : "#fbfaf8")
 }
 
 /** The chosen mode and a setter that persists it. "system" follows the OS live. */

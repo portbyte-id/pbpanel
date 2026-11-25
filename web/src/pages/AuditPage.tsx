@@ -102,7 +102,7 @@ export function AuditPage() {
         </p>
       </div>
 
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter audit entries" placeholder="Filter this page">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter audit entries" placeholder="Filter this page…">
         <TableFilter label="Result" value={resultFilter} onChange={setResultFilter} options={resultOptions} />
       </TableToolbar>
 
@@ -171,7 +171,7 @@ function AuditRow({
       </td>
       <td className="px-3 py-1.5 text-xs">
         <div className="flex flex-col gap-1">
-          <code className="text-muted-foreground break-all">{summarize(entry.detail)}</code>
+          <code translate="no" className="text-muted-foreground break-all">{summarize(entry.detail)}</code>
           {jobId && (
             <Button
               variant="link"

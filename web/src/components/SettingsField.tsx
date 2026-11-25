@@ -159,7 +159,7 @@ function SettingControl({
             {...shared}
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="30m"
+            placeholder="30m…"
             spellCheck={false}
             className="w-full font-mono"
           />

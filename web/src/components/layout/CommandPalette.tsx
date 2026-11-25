@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { builtSections, type NavItem } from "@/components/layout/nav"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { useSites } from "@/lib/queries"
-import { cn } from "@/lib/utils"
+import { canAutoFocus, cn } from "@/lib/utils"
 
 /**
  * Jump to any page or site by name. Pages are the whole navigation; sites come
@@ -56,7 +56,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         <div className="border-border flex items-center gap-2 border-b px-3">
           <Search className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
           <input
-            autoFocus
+            autoFocus={canAutoFocus()}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
@@ -79,7 +79,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             className="placeholder:text-muted-foreground h-10 w-full bg-transparent text-sm outline-none"
           />
         </div>
-        <ul className="max-h-72 overflow-y-auto p-1" role="listbox" aria-label="Pages and sites">
+        <ul className="max-h-72 overflow-y-auto overscroll-contain p-1" role="listbox" aria-label="Pages and sites">
           {results.length === 0 && <li className="text-muted-foreground px-3 py-6 text-center text-sm">Nothing matches “{query}”.</li>}
           {results.map((item, i) => (
             <li key={item.path} role="option" aria-selected={i === active}>

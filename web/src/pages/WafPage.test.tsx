@@ -276,7 +276,7 @@ describe("WafPage", () => {
 
     const mix = screen.getByRole("region", { name: "Response mix" })
     expect(mix).toHaveTextContent("2xx success")
-    expect(mix).toHaveTextContent("11,000")
+    expect(mix).toHaveTextContent((11000).toLocaleString())
     // The tile comes first; the sites table has a column of the same name.
     expect(screen.getAllByText("Error rate")[0].closest("div")).toHaveTextContent("8.5%")
 

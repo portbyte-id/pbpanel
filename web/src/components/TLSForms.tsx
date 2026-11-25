@@ -280,7 +280,7 @@ export function UploadCertForm({
           className={mono}
           value={chain}
           onChange={(e) => setChain(e.target.value)}
-          placeholder="Intermediate certificates, if your CA gave you a separate file"
+          placeholder="Intermediate certificates, if your CA gave you a separate file…"
           spellCheck={false}
           autoComplete="off"
         />
@@ -486,7 +486,7 @@ export function PanelIssueForm({
           id={`${id}-host`}
           value={hostname}
           onChange={(e) => setHostname(e.target.value)}
-          placeholder="panel.example.com"
+          placeholder="panel.example.com…"
           autoComplete="off"
           spellCheck={false}
           aria-invalid={problem !== null}

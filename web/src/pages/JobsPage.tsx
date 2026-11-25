@@ -111,7 +111,7 @@ function JobTable({
 
   return (
     <div className="flex flex-col">
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter jobs" placeholder="Filter jobs">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter jobs" placeholder="Filter jobs…">
         <TableFilter label="State" value={stateFilter} onChange={setStateFilter} options={stateOptions} />
       </TableToolbar>
       {pager.total === 0 ? (

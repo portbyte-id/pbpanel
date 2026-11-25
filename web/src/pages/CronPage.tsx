@@ -126,7 +126,7 @@ export function CronPage() {
         </div>
       ) : (
         <div className="flex flex-col">
-          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter cron jobs" placeholder="Filter jobs">
+          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter cron jobs" placeholder="Filter jobs…">
             <TableFilter
               label="Status"
               value={enabledFilter}
@@ -350,7 +350,7 @@ export function RunHistory({ job }: { job: CronJob }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {error}
-      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter runs" placeholder="Filter runs">
+      <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter runs" placeholder="Filter runs…">
         <TableFilter label="Result" value={resultFilter} onChange={setResultFilter} options={resultOptions} />
       </TableToolbar>
       {/* Only the run list scrolls. The output panel keeps its place under it, so

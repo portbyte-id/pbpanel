@@ -308,7 +308,7 @@ export function AppsTable({
         <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-sm">{empty}</p>
       ) : (
         <div className="flex flex-col">
-          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter apps" placeholder="Filter apps">
+          <TableToolbar search={filter} onSearchChange={setFilter} searchLabel="Filter apps" placeholder="Filter apps…">
             <TableFilter
               label="State"
               value={runFilter}

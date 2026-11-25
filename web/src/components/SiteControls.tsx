@@ -74,7 +74,7 @@ export function SiteControls({
             id={`${id}-aliases`}
             value={aliases}
             onChange={(e) => setAliases(e.target.value)}
-            placeholder="www.example.com"
+            placeholder="www.example.com…"
             disabled={namesOff}
             autoComplete="off"
             spellCheck={false}
@@ -108,7 +108,7 @@ export function SiteControls({
                   {f.attached ? "connected" : "detached"}
                 </Badge>
               </div>
-              <code className="text-muted-foreground text-xs break-all">include {f.include};</code>
+              <code translate="no" className="text-muted-foreground text-xs break-all">include {f.include};</code>
               {!f.attached && f.reason && (
                 <p className="text-muted-foreground text-xs">{f.reason}</p>
               )}

@@ -129,7 +129,7 @@ export function FirewallRuleForm({
           id={`${id}-ports`}
           value={ports}
           onChange={(e) => setPorts(e.target.value)}
-          placeholder="443, 8000-8100"
+          placeholder="443, 8000-8100…"
           inputMode="numeric"
           autoComplete="off"
           spellCheck={false}
@@ -169,7 +169,7 @@ export function FirewallRuleForm({
           id={`${id}-source`}
           value={source}
           onChange={(e) => setSource(e.target.value)}
-          placeholder="203.0.113.0/24"
+          placeholder="203.0.113.0/24…"
           autoComplete="off"
           spellCheck={false}
           aria-invalid={invalid("source")}

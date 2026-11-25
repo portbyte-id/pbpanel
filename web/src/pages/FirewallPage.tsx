@@ -366,7 +366,7 @@ function RulesSection({ fw }: { fw: FirewallState }) {
         search={query}
         onSearchChange={setQuery}
         searchLabel="Search allow rules"
-        placeholder="Search port, protocol, source or comment"
+        placeholder="Search port, protocol, source or comment…"
       >
         <TableFilter
           label="Protocol"
@@ -551,7 +551,7 @@ function BlocklistSection() {
             id={`${id}-addr`}
             value={addr}
             onChange={(e) => setAddr(e.target.value)}
-            placeholder="198.51.100.7"
+            placeholder="198.51.100.7…"
             autoComplete="off"
             spellCheck={false}
             aria-invalid={add.error !== null}
@@ -591,7 +591,7 @@ function BlocklistSection() {
             search={query}
             onSearchChange={setQuery}
             searchLabel="Search blocked addresses"
-            placeholder="Search address or comment"
+            placeholder="Search address or comment…"
           />
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-sm">
@@ -687,7 +687,7 @@ function AllowlistSection() {
             id={`${id}-addr`}
             value={addr}
             onChange={(e) => setAddr(e.target.value)}
-            placeholder="198.51.100.7"
+            placeholder="198.51.100.7…"
             autoComplete="off"
             spellCheck={false}
             aria-invalid={add.error !== null}
@@ -727,7 +727,7 @@ function AllowlistSection() {
             search={query}
             onSearchChange={setQuery}
             searchLabel="Search allowed addresses"
-            placeholder="Search address or comment"
+            placeholder="Search address or comment…"
           />
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-sm">

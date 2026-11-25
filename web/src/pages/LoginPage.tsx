@@ -1,3 +1,4 @@
+import { canAutoFocus } from "@/lib/utils"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { Eye, EyeOff } from "lucide-react"
 import { useEffect, useState, type FormEvent } from "react"
@@ -93,7 +94,7 @@ export function LoginPage() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              autoFocus
+              autoFocus={canAutoFocus()}
               required
             />
           </div>

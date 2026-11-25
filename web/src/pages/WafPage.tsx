@@ -251,13 +251,13 @@ function SecurityCard({
           small
           label="Error rate"
           value={percent(errors, t.requests)}
-          hint={`${t.s4xx.toLocaleString("en-US")} 4xx · ${t.s5xx.toLocaleString("en-US")} 5xx`}
+          hint={`${t.s4xx.toLocaleString()} 4xx · ${t.s5xx.toLocaleString()} 5xx`}
         />
         <Stat
           small
           label="Blocked by firewall"
           value={events ? compactCount(events.by_action.blocked) : "—"}
-          hint={events ? `${events.by_action.detected.toLocaleString("en-US")} detected only` : undefined}
+          hint={events ? `${events.by_action.detected.toLocaleString()} detected only` : undefined}
         />
         <Stat small label="Average latency" value={`${Math.round(t.avg_ms)} ms`} hint={`slowest ${Math.round(t.max_ms)} ms`} />
       </dl>
@@ -392,7 +392,7 @@ function SitesTable({
         search={search}
         onSearchChange={setSearch}
         searchLabel="Search sites"
-        placeholder="Search by domain"
+        placeholder="Search by domain…"
       >
         <TableFilter
           label="Engine"
@@ -453,12 +453,12 @@ function SitesTable({
                         <Badge variant={e === "open-appsec" ? "info" : "secondary"}>{ENGINE_LABEL[e]}</Badge>
                       )}
                     </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString("en-US")}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.requests.toLocaleString()}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.errors.toLocaleString()}</td>
                     <td className="text-muted-foreground px-3 py-1.5 text-right text-xs tabular-nums">
                       {percent(s.errors, s.requests)}
                     </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{s.waf_events.toLocaleString("en-US")}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{s.waf_events.toLocaleString()}</td>
                     <td className="px-3 py-1.5">
                       {m ? (
                         <Badge variant={m.mode === "block" ? "success" : m.mode === "detect" ? "info" : "destructive"}>
@@ -582,7 +582,7 @@ function TopTable({
                           : "text-right tabular-nums")
                       }
                     >
-                      {typeof cell === "number" ? cell.toLocaleString("en-US") : cell}
+                      {typeof cell === "number" ? cell.toLocaleString() : cell}
                       {i === 0 && typeof r[1] === "number" && (
                         <div aria-hidden="true" className="bg-muted mt-1 h-0.5 rounded-full">
                           <div

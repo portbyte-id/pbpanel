@@ -374,7 +374,7 @@ export function AppForm({
               disabled={app !== null}
               autoComplete="off"
               spellCheck={false}
-              placeholder="my-app"
+              placeholder="my-app…"
               required
               aria-invalid={invalid("name")}
               aria-describedby={describedBy("name")}
@@ -476,7 +476,7 @@ export function AppForm({
                 value={args}
                 onChange={(e) => setArgs(e.target.value)}
                 spellCheck={false}
-                placeholder="One per line"
+                placeholder="One per line…"
                 aria-invalid={invalid("args")}
                 aria-describedby={describedBy("args")}
               />
@@ -537,7 +537,7 @@ export function AppForm({
               value={env}
               onChange={(e) => setEnv(e.target.value)}
               spellCheck={false}
-              placeholder="KEY=value, one per line"
+              placeholder="KEY=value, one per line…"
               aria-invalid={invalid("env")}
               aria-describedby={describedBy("env")}
             />
@@ -568,7 +568,7 @@ export function AppForm({
                 onChange={(e) => setPort(e.target.value)}
                 inputMode="numeric"
                 autoComplete="off"
-                placeholder="optional"
+                placeholder="optional…"
                 aria-invalid={invalid("port")}
                 aria-describedby={describedBy("port")}
               />
@@ -607,7 +607,7 @@ export function AppForm({
               id={`${id}-domain`}
               value={domain}
               onChange={(e) => setDomain(e.target.value)}
-              placeholder="app.example.com"
+              placeholder="app.example.com…"
               autoComplete="off"
               spellCheck={false}
               aria-invalid={invalid("domain")}
@@ -621,7 +621,7 @@ export function AppForm({
               id={`${id}-aliases`}
               value={aliases}
               onChange={(e) => setAliases(e.target.value)}
-              placeholder="www.app.example.com"
+              placeholder="www.app.example.com…"
               autoComplete="off"
               spellCheck={false}
               disabled={domain.trim() === ""}

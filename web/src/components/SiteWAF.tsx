@@ -264,7 +264,7 @@ function WafForm({
               </p>
               {engine === "open-appsec" && draft.mode !== "off" && (
                 <p className="text-muted-foreground text-xs" data-testid="appsec-mode-name">
-                  In the agent&apos;s own words this mode is <code>{OPENAPPSEC_MODE_LABEL[draft.mode]}</code>.
+                  In the agent&apos;s own words this mode is <code translate="no">{OPENAPPSEC_MODE_LABEL[draft.mode]}</code>.
                 </p>
               )}
               {engine === "open-appsec" && !openAppsecReady && (
@@ -427,7 +427,7 @@ function WafForm({
             <ListEditor
               label="Blocked paths"
               help="A request whose path starts with one of these gets 403. For example /wp-admin or /.git."
-              placeholder="/wp-admin"
+              placeholder="/wp-admin…"
               items={draft.path_blocklist}
               max={WAF_LIMITS.paths}
               validate={(p) =>
@@ -456,7 +456,7 @@ function WafForm({
               <ListEditor
                 label="Always allow these IPs"
                 help="Addresses or CIDR ranges. When this list is not empty, every other address gets 403."
-                placeholder="203.0.113.0/24"
+                placeholder="203.0.113.0/24…"
                 items={draft.ip_rules.allow}
                 max={WAF_LIMITS.ips}
                 validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
@@ -465,7 +465,7 @@ function WafForm({
               <ListEditor
                 label="Always block these IPs"
                 help="Addresses or CIDR ranges that get 403. A block wins over an allow."
-                placeholder="198.51.100.7"
+                placeholder="198.51.100.7…"
                 items={draft.ip_rules.deny}
                 max={WAF_LIMITS.ips}
                 validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
@@ -816,7 +816,7 @@ function ExceptionEditor({
             <Input
               id={`${id}-source`}
               value={sourceIP}
-              placeholder="203.0.113.0/24"
+              placeholder="203.0.113.0/24…"
               autoComplete="off"
               spellCheck={false}
               className="font-mono"
@@ -831,7 +831,7 @@ function ExceptionEditor({
             <Input
               id={`${id}-param`}
               value={param}
-              placeholder="comment"
+              placeholder="comment…"
               autoComplete="off"
               spellCheck={false}
               className="font-mono"
@@ -846,7 +846,7 @@ function ExceptionEditor({
             id={`${id}-note`}
             value={note}
             maxLength={WAF_LIMITS.note}
-            placeholder="Why this is safe"
+            placeholder="Why this is safe…"
             autoComplete="off"
             onChange={(e) => setNote(e.target.value)}
           />
@@ -1010,7 +1010,7 @@ function ChallengeSection({
         <ListEditor
           label="Never check these paths"
           help="Path prefixes programs call, not browsers: APIs, webhooks, feeds. They cannot pass a check."
-          placeholder="/api/"
+          placeholder="/api/…"
           items={ch.exempt_paths}
           max={WAF_LIMITS.paths}
           validate={(p) =>
@@ -1025,7 +1025,7 @@ function ChallengeSection({
         <ListEditor
           label="Never check these IPs"
           help="Addresses or CIDR ranges, such as your uptime monitor or office."
-          placeholder="203.0.113.0/24"
+          placeholder="203.0.113.0/24…"
           items={ch.exempt_ips}
           max={WAF_LIMITS.ips}
           validate={(v) => (isValidIPEntry(v) ? null : "Not an IP address or CIDR range.")}
@@ -1173,7 +1173,7 @@ function ExclusionTable({
         search={search}
         onSearchChange={setSearch}
         searchLabel="Search exclusions"
-        placeholder="Search by rule, path or note"
+        placeholder="Search by rule, path or note…"
       >
         <TableFilter
           label="Exclusion type"
@@ -1331,7 +1331,7 @@ function ExclusionEditor({
             min={1}
             max={WAF_LIMITS.maxRuleId}
             inputMode="numeric"
-            placeholder="942100"
+            placeholder="942100…"
             value={rule}
             onChange={(e) => setRule(e.target.value)}
           />
@@ -1342,7 +1342,7 @@ function ExclusionEditor({
             <Input
               id={`${id}-path`}
               value={path}
-              placeholder="/admin/save"
+              placeholder="/admin/save…"
               autoComplete="off"
               spellCheck={false}
               className="font-mono"
@@ -1357,7 +1357,7 @@ function ExclusionEditor({
             <Input
               id={`${id}-arg`}
               value={arg}
-              placeholder="comment"
+              placeholder="comment…"
               autoComplete="off"
               spellCheck={false}
               className="font-mono"
@@ -1372,7 +1372,7 @@ function ExclusionEditor({
             id={`${id}-note`}
             value={note}
             maxLength={WAF_LIMITS.note}
-            placeholder="Why this is safe"
+            placeholder="Why this is safe…"
             autoComplete="off"
             onChange={(e) => setNote(e.target.value)}
           />

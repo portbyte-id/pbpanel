@@ -519,7 +519,7 @@ export function toMillis(t: string | number): number {
 export function compactCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
-  return n.toLocaleString("en-US")
+  return n.toLocaleString()
 }
 
 export function statusClass(status: number): "2xx" | "3xx" | "4xx" | "5xx" | "other" {

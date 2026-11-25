@@ -44,7 +44,7 @@ function HistoryTable({
         search={search}
         onSearchChange={setSearch}
         searchLabel="Search versions"
-        placeholder="Search by version or change"
+        placeholder="Search by version or change…"
       />
       {filtered.length === 0 ? (
         <p className="text-muted-foreground text-sm">No version matches the search.</p>
@@ -192,7 +192,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <code className="text-muted-foreground text-xs">{file.data.path}</code>
+        <code translate="no" className="text-muted-foreground text-xs">{file.data.path}</code>
         {dirty && <Badge variant="outline">unsaved changes</Badge>}
       </div>
 
@@ -205,7 +205,7 @@ export function ConfigFilePanel({ source }: { source: ConfigSource }) {
       {links.length > 0 && (
         <p role="status" className="border-border rounded-md border p-3 text-sm">
           This file no longer includes the panel's file for {links.join(", ")}, so the matching
-          controls have no effect until the <code>include</code> line is back.
+          controls have no effect until the <code translate="no">include</code> line is back.
         </p>
       )}
 

@@ -243,7 +243,7 @@ function RenewalLine({ cert }: { cert: CertView }) {
           Last renewal failed{when ? ` on ${when}` : ""}.
         </span>
         {cert.last_renewal_error && (
-          <code className="text-xs break-words whitespace-pre-wrap">{cert.last_renewal_error}</code>
+          <code translate="no" className="text-xs break-words whitespace-pre-wrap">{cert.last_renewal_error}</code>
         )}
         <span className="text-muted-foreground text-xs">The panel retries automatically.</span>
       </span>

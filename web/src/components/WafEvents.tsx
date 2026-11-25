@@ -219,7 +219,7 @@ export function WafEvents() {
             className="w-48"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="URI or message"
+            placeholder="URI or message…"
             autoComplete="off"
             spellCheck={false}
           />

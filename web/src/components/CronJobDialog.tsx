@@ -48,8 +48,8 @@ const textarea =
 export function ShellNote({ allowed }: { allowed: boolean | null }) {
   return (
     <p className="text-muted-foreground text-xs" data-testid="shell-note">
-      A shell job stores your script as a file and runs it with <code>/bin/sh</code>. It is refused
-      unless the <code>{ALLOW_SHELL_KEY}</code> setting is on
+      A shell job stores your script as a file and runs it with <code translate="no">/bin/sh</code>. It is refused
+      unless the <code translate="no">{ALLOW_SHELL_KEY}</code> setting is on
       {allowed === false && " and it is off now"}. Turn it on under Cron on the{" "}
       <Link to="/settings" className="underline underline-offset-2">
         Settings page
@@ -191,7 +191,7 @@ export function CronJobForm({
           disabled={job !== null}
           autoComplete="off"
           spellCheck={false}
-          placeholder="nightly-backup"
+          placeholder="nightly-backup…"
           required
           aria-invalid={invalid("name")}
           aria-describedby={describedBy("name")}
@@ -208,14 +208,14 @@ export function CronJobForm({
           autoComplete="off"
           spellCheck={false}
           className="font-mono"
-          placeholder="0 3 * * *"
+          placeholder="0 3 * * *…"
           required
           aria-invalid={invalid("schedule")}
           aria-describedby={describedBy("schedule") ?? `${id}-schedule-hint`}
         />
         {fieldError("schedule")}
         <p id={`${id}-schedule-hint`} className="text-muted-foreground text-xs">
-          Five fields: minute, hour, day of month, month, day of week. <code>0 3 * * *</code> is every
+          Five fields: minute, hour, day of month, month, day of week. <code translate="no">0 3 * * *</code> is every
           day at 03:00. A run missed while the panel was down is not made up.
         </p>
       </div>
@@ -282,7 +282,7 @@ export function CronJobForm({
           {fieldError("argv")}
           <p id={`${id}-argv-hint`} className="text-muted-foreground text-xs">
             One per line. The first line is the program and must be an absolute path. Nothing is
-            passed through a shell, so <code>*</code>, <code>|</code> and <code>&gt;</code> have no
+            passed through a shell, so <code translate="no">*</code>, <code translate="no">|</code> and <code translate="no">&gt;</code> have no
             special meaning.
           </p>
         </div>
@@ -298,7 +298,7 @@ export function CronJobForm({
             autoComplete="off"
             spellCheck={false}
             className="font-mono"
-            placeholder="/www/scripts/backup.sh"
+            placeholder="/www/scripts/backup.sh…"
             aria-invalid={invalid("script_path")}
             aria-describedby={describedBy("script_path")}
           />
@@ -334,7 +334,7 @@ export function CronJobForm({
             autoComplete="off"
             spellCheck={false}
             className="font-mono"
-            placeholder="optional"
+            placeholder="optional…"
             aria-invalid={invalid("workdir")}
             aria-describedby={describedBy("workdir")}
           />
@@ -351,7 +351,7 @@ export function CronJobForm({
             onChange={(e) => setTimeoutText(e.target.value)}
             inputMode="numeric"
             autoComplete="off"
-            placeholder="3600"
+            placeholder="3600…"
             aria-invalid={invalid("timeout_seconds")}
             aria-describedby={describedBy("timeout_seconds")}
           />
@@ -365,7 +365,7 @@ export function CronJobForm({
             onChange={(e) => setRetention(e.target.value)}
             inputMode="numeric"
             autoComplete="off"
-            placeholder="50"
+            placeholder="50…"
             aria-invalid={invalid("retention")}
             aria-describedby={describedBy("retention")}
           />
