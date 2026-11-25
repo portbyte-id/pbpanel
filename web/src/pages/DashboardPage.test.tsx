@@ -15,6 +15,8 @@ import { AlertsPanel, DashboardPage, MetricTiles } from "@/pages/DashboardPage"
 import { snap } from "@/test/helpers"
 
 vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
   Link: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string }) => (
     <a href={String(to)} className={className}>
       {children}
@@ -36,6 +38,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       site: vi.fn(),
       cronJobs: vi.fn(),
       audit: vi.fn(),
+      request: vi.fn(),
     },
   }
 })
@@ -131,6 +134,8 @@ function setup(over: { certs?: CertView[]; sites?: SiteDetail[]; auditFails?: bo
 describe("DashboardPage", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) (fn as ReturnType<typeof vi.fn>).mockReset()
+    // History and alert rules are not what these tests look at: recording is "off".
+    vi.mocked(api.request).mockRejectedValue(new ApiError(409, "conflict", "history is off"))
   })
 
   it("shows the metric tiles, leaving loopback out of the network rates", async () => {

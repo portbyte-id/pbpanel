@@ -389,3 +389,51 @@ fields. A write that omits a secret keeps its stored value; `""` clears it.
 Channel write body: `name`, `type` (`smtp`, `webhook`, `telegram`, `discord`), `enabled`, `min_severity`,
 `kinds`, `quiet_start`/`quiet_end` (`HH:MM`, local time), `send_resolved`, `config` (non-secret fields),
 `secret` (secret fields only: `password`, `hmac_secret`, `bot_token`, `webhook_url`).
+
+## Metrics history
+
+Stored history of the host, disks, services and sites (`docs/design/metrics-history-plan.md` §4.4).
+Every route needs a session. Without a history database (a failed start) the routes answer 503. The
+four chart routes answer `409` while `metrics.enabled` is off; status and clear keep working.
+
+Every chart response is **columnar**: `step` (seconds per point), `t` (unix start of each point) and
+one array per series, the same length as `t`. A point with no data is `null`, never interpolated:
+that is a daemon that was down, or a series that did not exist yet. The finest tier whose retention
+reaches back to the start of the range is used, and `step` is raised so that no series has more than
+1 500 points.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/metrics/host?range=` | `cpu`, `cpu_max`, `load1`, `load1_max`, `load5`, `load15`, `mem_used`, `mem_avail`, `swap_used`, `net_rx`, `net_tx` |
+| `GET /api/metrics/disks?range=` | `mounts: [{mount, used_pct, used_pct_max, used, rd_bps, wr_bps}]`; IO is `null` for a device that could not be mapped |
+| `GET /api/metrics/services?range=&name=` | `services: [{name, state, up_frac, cpu, cpu_max, rss, rss_max}]`; `state` is the worst state in the bucket (1 running, 2 starting, 3 stopping, 4 stopped, 5 failed, 6 missing, 7 unknown) |
+| `GET /api/metrics/sites/{domain}?range=` | `req`, `s2`..`s5`, `bytes`, `rt_p50`, `rt_p95`, `urt_p50`, `urt_p95` (seconds); 404 for a domain that is not a site |
+| `GET /api/metrics/status` | file and WAL size, rows and oldest timestamp per tier, last flush, last error, rows dropped |
+| `POST /api/metrics/clear` | deletes the whole history (audit-logged); alert rules are not touched |
+
+`range` is one of `1h`, `6h`, `24h`, `7d`, `30d`, `90d` (default `1h`), or `from` and `to` as unix
+seconds. Anything else is `400`. For a site, a minute with no requests while the daemon was recording
+is `0`; a minute the daemon did not record is `null`. Percentiles are interpolated inside a fixed
+histogram bin and are good to about 20%.
+
+### Alert rules
+
+Threshold alerts evaluated against the one-minute history after every flush. Rules and their state
+live in `panel.db` (migration 0024), so a history reset does not touch them. An alert goes
+`ok -> pending -> firing -> clearing -> ok`: it fires once its value has stayed past `threshold` for
+`for_seconds`, and clears once it has stayed past `clear_threshold` for `clear_for_seconds`. A
+notification (`metrics.threshold`) goes out on the fire and on the clear, and not in between.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/alerts` | `{rules: [{id, kind, target, threshold, clear_threshold, for_seconds, clear_for_seconds, severity, enabled, builtin, states: [{target, state, since, value}]}], kinds}` |
+| `POST /api/alerts/rules` | create (201); omitted `target` is `*`, `enabled` defaults to true, `for_seconds` and `clear_for_seconds` to 300 |
+| `PUT /api/alerts/rules/{id}` | change a rule; omitted fields keep their value. A built-in rule keeps its `kind` and `target` |
+| `DELETE /api/alerts/rules/{id}` | delete (204); a built-in rule answers 409: switch it off instead |
+
+`kind` is one of `disk_pct`, `mem_pct`, `swap_pct`, `load_per_core`, `cpu_pct`, `service_down` (the
+value is the percent of the minute the service was not running), `cert_days` (days left, so it fires
+at or below the threshold and `clear_threshold` must be at least `threshold`) and `site_5xx_pct`
+(judged only on minutes with 50 or more requests). The host-wide kinds always target `host`. A bad
+value answers `422` with the name of the field. Switching a firing rule off, deleting it, or losing the
+target's data resolves its alerts first.

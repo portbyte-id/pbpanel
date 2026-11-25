@@ -1,6 +1,6 @@
 # Metrics history: plan
 
-Status: **plan, not started; decisions unratified.** Migration number reserved: **0024** (panel.db).
+Status: **built on branch `metrics-history`; host gate (§6) not run; step 0 spike not run (see Handover); decisions unratified.** Migration number: **0024** (panel.db), taken.
 Sibling contract: `internal/notify` (owned by `notifications-plan.md`, written in parallel).
 
 Written after reading the sampler and service grid (`internal/sysinfo/sampler.go`, `proc.go`,
@@ -369,3 +369,43 @@ Done when every item has a recorded answer in this file and D6/D7/§4.3 are conf
 - Anomaly detection, forecasting ("disk full in 3 days"), custom metric expressions.
 - Notification channels, routing, repeat/escalation policy (notifications plan).
 - EL (Rocky/RHEL) and cgroup v1 (M9).
+
+## Handover (built on branch `metrics-history`)
+
+Commits, in order: `metrics.db` + `store.OpenFS` + `internal/hist`; host/disk recorder, rollups,
+retention, site minute storage; per-service usage (cgroup v2, `/proc`); `urt` in `pbpanel` and
+`wafmon` minutes; query API + `Metrics` settings group + daemon wiring; threshold alerts
+(migration 0024); smoke 12; the UI. Gate at each step: `go test ./cmd/... ./internal/...` in WSL,
+CI golangci-lint, `scripts/lint-conventions.sh`; vitest 573/573 and `tsc` for the UI.
+
+**Differences from the plan as written**
+
+- Step 0 was **not run**. Service cgroup paths are not guessed: units use systemd's `ControlGroup`
+  property from one batched `systemctl show`, containers use `/proc/<pid>/cgroup` of the inspected
+  main process, apps use `/proc/<pid>`. cgroup v1 hosts get state without CPU/RSS. The `urt`
+  value shapes are handled for `-`, `a, b` and `a : b` from nginx's documentation, not observed.
+  The §4.3 WAL-per-commit estimate is unmeasured: the soak (`12-metrics-soak.sh`) is the first
+  measurement.
+- Rollups are one `INSERT ... SELECT` per family behind a persisted watermark in `meta`, with a
+  15 s grace so the newest minute is rolled one flush late. Site quarter-hours merge histograms in Go.
+- Host-wide rules (`mem_pct`, `swap_pct`, `load_per_core`, `cpu_pct`) always have target `host`.
+  `service_down` watches the percent of the minute not running (fires at 100, clears at 0).
+  `swap_pct` and `load_per_core` take swap size and core count from the live snapshot, since the
+  tables do not store them.
+- A flush that fails (full disk) falls back to the in-memory snapshot for `disk_pct`.
+- Site minutes with no requests while the daemon was recording are `0` in the site chart; minutes it
+  did not record are `null`. A line arriving after its minute was handed over is counted as late
+  (`Collector.LateLines`), not re-added; nothing drains while a log has unread backlog.
+- Chart routes answer 409 while `metrics.enabled` is off (status and clear still work).
+- Disk IO in the dashboard is the sum over mounts; two mounts on one device would count it twice.
+
+**Not verified**
+
+- The host gate (§6) has never run; `12-metrics-history.sh` was dry-run only. Reboot (item 7) and
+  the 24 h soak (item 8) are manual.
+- The UI was looked at in a browser against a fixture server (dashboard, site Metrics, Settings →
+  Metrics); hover and keyboard are tested in jsdom only, and the 409/503 states and the "upstream
+  time not available" note were not seen in a browser. Playwright was not run.
+- The service sparkline matches history to service rows by name; confirm on a host that the names
+  (e.g. `panel-php-8.4`, `app:<name>`) agree.
+- EL (Rocky/RHEL) and cgroup v1 stay in M9.

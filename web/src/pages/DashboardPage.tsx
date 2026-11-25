@@ -5,7 +5,10 @@ import { useMemo, useState, type ReactNode } from "react"
 
 import { ApplyError } from "@/components/ApplyError"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { HistoryCard } from "@/components/HistoryCard"
+import { OpenAlertsCard } from "@/components/OpenAlerts"
 import { Panel } from "@/components/Panel"
+import { ServiceTrend } from "@/components/ServiceTrend"
 import { Sparkline } from "@/components/Sparkline"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { deriveAlerts, type AlertLink, type DashboardAlert } from "@/lib/alerts"
 import { ApiError } from "@/lib/api"
 import { describeError } from "@/lib/errors"
+import { useServicesHistory, type ServicesHistory } from "@/lib/metrics"
 import {
   useAudit,
   useControlService,
@@ -65,10 +69,12 @@ export function DashboardPage() {
     <div className="flex flex-col gap-3">
       <HealthBar alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} live={live} />
       <MetricsSection live={live} />
+      <HistoryCard />
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <ServicesSection limit={8} />
         <div className="flex flex-col gap-3">
           <AlertsPanel alerts={health.alerts} unchecked={health.unchecked} checking={health.checking} />
+          <OpenAlertsCard />
           {live.latest && <DisksPanel disks={live.latest.disks} />}
         </div>
       </div>
@@ -620,12 +626,16 @@ export function ServiceGrid({
   services,
   busyName,
   onAct,
+  trends,
 }: {
   services: ServiceRow[]
   /** The row whose action is in flight; its buttons are disabled. */
   busyName: string | null
   onAct: (row: ServiceRow, action: ServiceAction) => void
+  /** The last hour per service. Passing it adds the trend column; null while it loads or fails. */
+  trends?: ServicesHistory | null
 }) {
+  const byName = new Map((trends?.services ?? []).map((s) => [s.name, s]))
   if (services.length === 0) {
     return <p className="text-muted-foreground px-3 py-3 text-sm">No services are reported.</p>
   }
@@ -638,7 +648,12 @@ export function ServiceGrid({
             key={row.name}
             data-testid="service-card"
             data-service={row.name}
-            className="hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5 md:grid-cols-[minmax(0,16.25rem)_minmax(0,1fr)_7rem_13.75rem]"
+            className={cn(
+              "hover:bg-accent/30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-1.5",
+              trends === undefined
+                ? "md:grid-cols-[minmax(0,16.25rem)_minmax(0,1fr)_7rem_13.75rem]"
+                : "md:grid-cols-[minmax(0,16.25rem)_minmax(0,1fr)_7rem_6rem_13.75rem]",
+            )}
           >
             <div className="min-w-0">
               <p className="text-sm leading-5 font-medium break-all">{row.name}</p>
@@ -654,7 +669,17 @@ export function ServiceGrid({
               <span className={cn("size-1.5 rounded-full", stateDot(row.state))} aria-hidden="true" />
               {row.state}
             </span>
-            <div className="col-start-2 row-start-1 flex justify-end gap-1 md:col-start-4">
+            {trends !== undefined && (
+              <div className="hidden min-w-0 md:block" data-testid="service-trend">
+                <ServiceTrend history={byName.get(row.name)} t={trends?.t ?? []} />
+              </div>
+            )}
+            <div
+              className={cn(
+                "col-start-2 row-start-1 flex justify-end gap-1",
+                trends === undefined ? "md:col-start-4" : "md:col-start-5",
+              )}
+            >
               {actions.map((a) => (
                 <Button
                   key={a}
@@ -684,6 +709,8 @@ type ServiceFilter = "all" | "problems" | "running"
  */
 export function ServicesSection({ limit, filters = false }: { limit?: number; filters?: boolean }) {
   const services = useServices()
+  // One request for the whole grid: the last hour of every service.
+  const trends = useServicesHistory("1h")
   const control = useControlService()
   const [confirming, setConfirming] = useState<{ row: ServiceRow; action: ServiceAction } | null>(null)
   const [query, setQuery] = useState("")
@@ -769,6 +796,7 @@ export function ServicesSection({ limit, filters = false }: { limit?: number; fi
           services={visible}
           busyName={control.isPending ? (control.variables?.name ?? null) : null}
           onAct={act}
+          trends={trends.data ?? null}
         />
       )}
 

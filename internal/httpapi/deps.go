@@ -77,6 +77,14 @@ type Deps struct {
 	// /api/notify answering 503.
 	Notify NotifyService
 
+	// Metrics is the stored history: host, disk, service and site charts, and the
+	// alert rules. Nil leaves /api/metrics and /api/alerts answering 503.
+	Metrics MetricsService
+
+	// Alerts is the threshold alert rules over the metrics history. Nil leaves
+	// /api/alerts answering 503.
+	Alerts AlertsService
+
 	// WAFMon is the traffic monitor and WAF event reader. Nil leaves
 	// /api/waf/traffic, /requests and /events answering 503.
 	WAFMon WAFMonitor

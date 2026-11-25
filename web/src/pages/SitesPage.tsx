@@ -15,7 +15,7 @@ import { matchesQuery } from "@/lib/table"
 import { useApps, useSites, useTLSCerts } from "@/lib/queries"
 import { sitesTabs, tabFromSearch, tabOfSite, type SitesTab } from "@/lib/sitesTabs"
 import { AppsTable } from "@/pages/AppsPage"
-import { SiteDetailDialog } from "@/pages/SiteDetailPage"
+import { SiteDetailDialog, sectionFromSearch } from "@/pages/SiteDetailPage"
 
 export function kindLabel(kind: Site["kind"]): string {
   if (kind === "php") return "PHP"
@@ -68,11 +68,12 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
   const certs = useTLSCerts()
   // `?proxy=<url>` comes from an app's "Add domain" button: the dialog opens on
   // "Another server" with the app's address filled in.
-  const { proxy, tab: tabParam, waf_rule, waf_path } = useSearch({ strict: false }) as {
+  const { proxy, tab: tabParam, waf_rule, waf_path, section } = useSearch({ strict: false }) as {
     proxy?: string
     tab?: unknown
     waf_rule?: number
     waf_path?: string
+    section?: unknown
   }
   const tab = tabFromSearch(tabParam)
   const current = sitesTabs.find((t) => t.value === tab) ?? sitesTabs[0]
@@ -306,6 +307,7 @@ export function SitesPage({ openDomain }: { openDomain?: string } = {}) {
           key={openDomain}
           domain={openDomain}
           wafPrefill={waf_rule === undefined ? undefined : { rule: waf_rule, path: waf_path }}
+          initialSection={sectionFromSearch(section)}
           onClose={() => void navigate({ to: "/sites", search: { tab } })}
         />
       )}

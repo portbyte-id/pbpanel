@@ -186,6 +186,15 @@ func serve(ctx context.Context, _ []string) error {
 	// downloaded before; the first download is an action on the WAF page.
 	geo := geoip.NewStore(filepath.Join(layout.Root, "panel", "geoip"))
 	go wafCollector.Run(ctx)
+	mstack := newMetrics(ctx, st, reg, layout, notifySvc, certSource(tlsSvc), m7.sampler, m7.services, wafCollector, siteList, logger)
+	var metricsSvc httpapi.MetricsService
+	var alertsSvc httpapi.AlertsService
+	if mstack != nil {
+		metricsSvc = mstack.Service
+		if mstack.Alerts != nil {
+			alertsSvc = mstack.Alerts
+		}
+	}
 
 	// listener is assigned below; Rebind runs only on requests, which cannot
 	// arrive before it is serving.
@@ -221,6 +230,8 @@ func serve(ctx context.Context, _ []string) error {
 		Sysinfo:        m7.Sysinfo,
 		Logs:           m7.Logs,
 		Cron:           m7.Cron,
+		Metrics:        metricsSvc,
+		Alerts:         alertsSvc,
 		WAFMon:         wafCollector,
 		Geo:            geo,
 		SSHAuth:        m7.SSHAuth,
@@ -253,6 +264,7 @@ func serve(ctx context.Context, _ []string) error {
 
 	go sweepSessions(ctx, authSvc, logger)
 	waitM7 := m7.start(ctx, logger)
+	waitMetrics := mstack.start(ctx)
 	if tlsSvc != nil {
 		tlsSvc.startAutoIP(ctx, reg, auditW, logger)
 	}
@@ -274,6 +286,7 @@ func serve(ctx context.Context, _ []string) error {
 	// Cron cancels the jobs it started when ctx ends; give them the grace period
 	// to record their outcome.
 	waitM7(stopGrace)
+	waitMetrics(stopGrace)
 	return nil
 }
 

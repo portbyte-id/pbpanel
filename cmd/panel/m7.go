@@ -60,9 +60,10 @@ type m7Stack struct {
 	Cron    httpapi.CronService
 	SSHAuth httpapi.SSHAuthMonitor
 
-	sampler *sysinfo.Sampler
-	cron    *cron.Service
-	rotator *logs.Rotator
+	sampler  *sysinfo.Sampler
+	services *sysinfo.Services
+	cron     *cron.Service
+	rotator  *logs.Rotator
 }
 
 // sysinfoFacade is the sampler and the service allowlist as one value, which is
@@ -120,6 +121,7 @@ func newM7(st *store.Store, reg *settings.Registry, layout install.Layout, appsS
 		logger.Error("host metrics are not available", "error", err)
 	} else {
 		m.sampler = sampler
+		m.services = services
 		m.Sysinfo = sysinfoFacade{sampler, services}
 	}
 
@@ -258,7 +260,7 @@ func (a sysinfoApps) List(ctx context.Context) ([]sysinfo.AppState, error) {
 	}
 	out := make([]sysinfo.AppState, 0, len(list))
 	for _, s := range list {
-		out = append(out, sysinfo.AppState{Name: s.Name, State: s.State})
+		out = append(out, sysinfo.AppState{Name: s.Name, State: s.State, PID: s.PID})
 	}
 	return out, nil
 }

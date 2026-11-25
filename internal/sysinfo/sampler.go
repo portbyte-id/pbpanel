@@ -3,6 +3,8 @@ package sysinfo
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,6 +31,11 @@ type DiskStat struct {
 	FreeBytes  uint64 `json:"free_bytes"`
 	// UsedPercent is used / (used + available), the way df computes Use%.
 	UsedPercent float64 `json:"used_percent"`
+	// IO is true when the device was found in /proc/diskstats, so the two rates
+	// below mean something. They are zero until there are two samples.
+	IO               bool    `json:"io"`
+	ReadBytesPerSec  float64 `json:"read_bytes_per_sec"`
+	WriteBytesPerSec float64 `json:"write_bytes_per_sec"`
 }
 
 // NetRate is one interface's throughput since the previous sample.
@@ -79,6 +86,10 @@ type reading struct {
 	cpu   CPUTimes
 	cores []CPUTimes
 	net   map[string]NetCounters
+	// disk is /proc/diskstats by device name, nil when it could not be read.
+	disk map[string]DiskCounters
+	// diskName maps a mount point to its diskstats name, for the mounts that have one.
+	diskName map[string]string
 }
 
 // Sampler takes a Snapshot of the host on an interval and keeps the last few in a
@@ -184,6 +195,20 @@ func (s *Sampler) Sample(ctx context.Context) (Snapshot, error) {
 			n.RxBytesPerSec = rate(old.RxBytes, n.RxBytes, dt)
 			n.TxBytesPerSec = rate(old.TxBytes, n.TxBytes, dt)
 		}
+		for i := range snap.Disks {
+			d := &snap.Disks[i]
+			name, ok := cur.diskName[d.Mount]
+			if !d.IO || !ok || dt <= 0 {
+				continue
+			}
+			before, okp := p.disk[name]
+			after, oka := cur.disk[name]
+			if !okp || !oka {
+				continue
+			}
+			d.ReadBytesPerSec = rate(before.SectorsRead*SectorBytes, after.SectorsRead*SectorBytes, dt)
+			d.WriteBytesPerSec = rate(before.SectorsWrite*SectorBytes, after.SectorsWrite*SectorBytes, dt)
+		}
 	}
 	s.prev = &cur
 	s.publish(snap)
@@ -271,6 +296,20 @@ func (s *Sampler) read() (Snapshot, reading, error) {
 		return snap, cur, err
 	}
 	snap.Disks = []DiskStat{}
+	cur.disk = s.readDiskstats()
+	cur.diskName = map[string]string{}
+	var dmNames map[string]string
+	for _, m := range DiskMounts(mounts) {
+		if cur.disk == nil {
+			break
+		}
+		if strings.HasPrefix(m.Device, "/dev/mapper/") && dmNames == nil {
+			dmNames = s.readDMNames()
+		}
+		if name, ok := DiskstatsName(m.Device, dmNames, cur.disk); ok {
+			cur.diskName[m.Point] = name
+		}
+	}
 	for _, m := range DiskMounts(mounts) {
 		u, err := s.src.Disk(m.Point)
 		if err != nil || u.TotalBytes == 0 {
@@ -283,9 +322,44 @@ func (s *Sampler) read() (Snapshot, reading, error) {
 		if denom := u.UsedBytes + u.FreeBytes; denom > 0 {
 			d.UsedPercent = clampPercent(float64(u.UsedBytes) / float64(denom) * 100)
 		}
+		_, d.IO = cur.diskName[m.Point]
 		snap.Disks = append(snap.Disks, d)
 	}
 	return snap, cur, nil
+}
+
+// readDiskstats is best effort: a host without /proc/diskstats still samples,
+// its disks just have no IO figures.
+func (s *Sampler) readDiskstats() map[string]DiskCounters {
+	b, err := s.src.ReadProc("diskstats")
+	if err != nil {
+		return nil
+	}
+	m, err := ParseDiskstats(b)
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// readDMNames maps device-mapper names to kernel names ("vg0-root" -> "dm-0")
+// from /sys/block/dm-N/dm/name, when the Source can read sysfs. Device-mapper
+// numbers are dense, so the walk stops at the first missing one.
+func (s *Sampler) readDMNames() map[string]string {
+	sys, ok := s.src.(SysSource)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for i := range 1024 {
+		kernel := "dm-" + strconv.Itoa(i)
+		b, err := sys.ReadSys("block/" + kernel + "/dm/name")
+		if err != nil {
+			break
+		}
+		out[strings.TrimSpace(string(b))] = kernel
+	}
+	return out
 }
 
 // publish appends to the ring and fans out to subscribers without ever blocking:

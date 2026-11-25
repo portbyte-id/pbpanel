@@ -25,10 +25,29 @@ type Source interface {
 	Disk(mount string) (DiskUsage, error)
 }
 
+// SysSource is an optional second seam: a Source that also implements it can
+// read files under /sys, which the disk-IO device mapping needs (LVM and
+// dm-crypt names live in /sys/block/dm-N/dm/name). A Source without it simply
+// has no IO figures for mapper devices.
+type SysSource interface {
+	ReadSys(name string) ([]byte, error)
+}
+
 // HostSource reads the running machine.
 type HostSource struct {
 	// ProcRoot is the procfs mount point. Empty means /proc.
 	ProcRoot string
+	// SysRoot is the sysfs mount point. Empty means /sys.
+	SysRoot string
+}
+
+// ReadSys implements SysSource.
+func (h HostSource) ReadSys(name string) ([]byte, error) {
+	root := h.SysRoot
+	if root == "" {
+		root = "/sys"
+	}
+	return os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
 }
 
 // ReadProc implements Source.

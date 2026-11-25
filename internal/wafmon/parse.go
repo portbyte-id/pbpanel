@@ -28,8 +28,35 @@ type Request struct {
 	Agent     string    `json:"agent"`
 	RequestID string    `json:"request_id"`
 
+	// URT is the upstream response time in milliseconds, summed over retries.
+	URT float64 `json:"-"`
+
 	// hasMS is false for a line in the plain `combined` format.
 	hasMS bool
+	// hasURT is false for a line without upstream time, or one that did not
+	// reach an upstream (nginx writes "-": a static file, a cache hit).
+	hasURT bool
+}
+
+// parseUpstreamTime reads $upstream_response_time: seconds, several values
+// separated by ", " (retries) or " : " (internal redirects), "-" for none. It
+// returns the sum in milliseconds, and false when no part was a number.
+func parseUpstreamTime(v string) (float64, bool) {
+	var sum float64
+	var any bool
+	for _, p := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ':' }) {
+		p = strings.TrimSpace(p)
+		if p == "" || p == "-" {
+			continue
+		}
+		s, err := strconv.ParseFloat(p, 64)
+		if err != nil || s < 0 {
+			continue
+		}
+		sum += s * 1000
+		any = true
+	}
+	return sum, any
 }
 
 // ParseAccess parses a line in either the `pbpanel` format
@@ -90,6 +117,14 @@ func ParseAccess(line string) (Request, bool) {
 	agent, rest, ok := quoted(rest)
 	if !ok {
 		return r, false
+	}
+	// urt is quoted because its value can hold spaces; take it out before the
+	// rest is split into fields.
+	if i := strings.Index(rest, `urt="`); i >= 0 {
+		if v, after, ok := strings.Cut(rest[i+len(`urt="`):], `"`); ok {
+			r.URT, r.hasURT = parseUpstreamTime(v)
+			rest = rest[:i] + " " + after
+		}
 	}
 	for _, f := range strings.Fields(rest) {
 		switch {

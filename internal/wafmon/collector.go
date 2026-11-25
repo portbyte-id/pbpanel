@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -212,6 +213,14 @@ type Collector struct {
 	events ring[Event]
 	reqSeq uint64
 	evSeq  uint64
+
+	// minutes feeds the metrics history (see minute.go). drained is the newest
+	// minute handed over per site; late counts lines that came after theirs.
+	minutes map[string]map[int64]*Minute
+	drained map[string]int64
+	late    uint64
+	// backlog is true while any log has unread bytes, which holds drains back.
+	backlog atomic.Bool
 }
 
 // New returns a Collector for the logs in o.Dir.
@@ -219,6 +228,7 @@ func New(o Options) *Collector {
 	c := &Collector{
 		dir: o.Dir, appsecDir: o.AppsecDir, now: o.Now, log: o.Logger,
 		tails: map[string]*tail{}, sites: map[string]*siteData{}, appsecTails: map[string]*tail{},
+		minutes: map[string]map[int64]*Minute{}, drained: map[string]int64{},
 	}
 	if c.appsecDir == "" {
 		c.appsecDir = DefaultAppsecDir
@@ -258,6 +268,8 @@ type tail struct {
 	// the middle of a line, and after a line longer than MaxLine.
 	skip    bool
 	pending []byte
+	// backlog is true when the last read left bytes in the file unread.
+	backlog bool
 }
 
 // read returns the complete lines written since the last call.
@@ -288,6 +300,7 @@ func (t *tail) read(path string) ([]string, error) {
 		}
 	}
 	n := min(fi.Size()-t.offset, maxReadPerPoll)
+	t.backlog = fi.Size()-t.offset > n
 	if n <= 0 {
 		return nil, nil
 	}
@@ -392,12 +405,19 @@ func (c *Collector) Poll() {
 		live[d] = true
 	}
 
+	backlog := false
+	for _, t := range c.tails {
+		backlog = backlog || t.backlog
+	}
+	c.backlog.Store(backlog)
+
 	c.mu.Lock()
 	for d := range c.sites {
 		if !live[d] {
 			delete(c.sites, d)
 		}
 	}
+	c.pruneMinutes(live, c.now())
 	horizon := c.now().Add(-Retention).Unix() / int64(Step.Seconds())
 	for _, s := range c.sites {
 		for k := range s.buckets {
@@ -554,6 +574,7 @@ func (c *Collector) ingest(domain string, audit bool, lines []string) {
 		c.reqs.push(r)
 		if !r.Time.Before(horizon) {
 			c.bucketFor(domain, r.Time).add(r)
+			c.addMinute(domain, r)
 		}
 	}
 }
