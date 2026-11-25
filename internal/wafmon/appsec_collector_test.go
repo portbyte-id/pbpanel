@@ -212,9 +212,11 @@ func TestAppsecReopensAReplacedFile(t *testing.T) {
 		t.Fatalf("events = %d, want 1", got.Total)
 	}
 
-	// Replace the file: a new inode with a shorter body, as a rotation rename or
-	// a truncate-and-rewrite leaves behind.
-	if err := os.Remove(filepath.Join(f.appsecDir, name)); err != nil {
+	// Replace the file the way a rotation does: rename the old one away, so the
+	// new file is guaranteed a different inode. Removing it instead lets the
+	// filesystem hand the same inode back, and with an equal-length body the
+	// collector cannot tell the file was replaced.
+	if err := os.Rename(filepath.Join(f.appsecDir, name), filepath.Join(f.appsecDir, "rotated.bak")); err != nil {
 		t.Fatal(err)
 	}
 	f.writeEvent(name, f.now, f.event("a.test", "/2", "198.51.100.4", "Prevent", f.now))
