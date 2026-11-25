@@ -3,7 +3,10 @@
 package main
 
 import (
+	"bufio"
+	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -38,4 +41,13 @@ func readPassword() (string, bool) {
 	}()
 
 	return readLine(os.Stdin)
+}
+
+// readLine reads one line, without its newline, from r.
+func readLine(r io.Reader) (string, bool) {
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && line == "" {
+		return "", false
+	}
+	return strings.TrimRight(line, "\r\n"), true
 }
