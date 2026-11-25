@@ -5,6 +5,7 @@ import { ApplyError } from "@/components/ApplyError"
 import { ConfigFilePanel } from "@/components/ConfigFilePanel"
 import { ProxyRouteEditor, routesFromDrafts, type RouteDraft } from "@/components/CreateSiteDialog"
 import { SiteControls } from "@/components/SiteControls"
+import { SiteMetrics } from "@/components/SiteMetrics"
 import { SitePHP } from "@/components/SitePHP"
 import { SiteTLS } from "@/components/SiteTLS"
 import { SiteWAF, type WafPrefill } from "@/components/SiteWAF"
@@ -35,7 +36,35 @@ import {
 import { TailViewer } from "@/pages/LogsPage"
 import { kindLabel } from "@/pages/SitesPage"
 
-export type SiteSection = "domains" | "proxy" | "config" | "ssl" | "waf" | "php" | "rewrite" | "logs" | "delete"
+export type SiteSection =
+  | "domains"
+  | "proxy"
+  | "config"
+  | "ssl"
+  | "waf"
+  | "php"
+  | "rewrite"
+  | "metrics"
+  | "logs"
+  | "delete"
+
+const SECTION_IDS: readonly string[] = [
+  "domains",
+  "proxy",
+  "config",
+  "ssl",
+  "waf",
+  "php",
+  "rewrite",
+  "metrics",
+  "logs",
+  "delete",
+]
+
+/** The `?section=` value as a section, or undefined when it is missing or unknown. */
+export function sectionFromSearch(value: unknown): SiteSection | undefined {
+  return typeof value === "string" && SECTION_IDS.includes(value) ? (value as SiteSection) : undefined
+}
 
 /**
  * One site, as a dialog over the sites list. `/sites/<domain>` opens it, so a link
@@ -45,10 +74,13 @@ export function SiteDetailDialog({
   domain,
   onClose,
   wafPrefill,
+  initialSection,
 }: {
   domain: string
   onClose: () => void
   wafPrefill?: WafPrefill
+  /** The section to open on, from `?section=`. A WAF prefill wins: it opens Firewall. */
+  initialSection?: SiteSection
 }) {
   const { data } = useSite(domain)
 
@@ -64,7 +96,7 @@ export function SiteDetailDialog({
             {data ? `Added ${new Date(data.created_at).toLocaleString()}` : "Loading the site…"}
           </DialogDescription>
         </DialogHeader>
-        <SiteDetailBody domain={domain} onGone={onClose} wafPrefill={wafPrefill} />
+        <SiteDetailBody domain={domain} onGone={onClose} wafPrefill={wafPrefill} initialSection={initialSection} />
       </DialogContent>
     </Dialog>
   )
@@ -80,6 +112,7 @@ export function siteSectionList(php: boolean): { id: SiteSection; label: string 
     { id: "waf", label: "Firewall" },
     ...(php ? [{ id: "php" as const, label: "PHP version" }] : []),
     ...(php ? [{ id: "rewrite" as const, label: "URL rewrite" }] : []),
+    { id: "metrics", label: "Metrics" },
     { id: "logs", label: "Logs" },
     { id: "delete", label: "Reset or delete" },
   ]
@@ -106,6 +139,7 @@ function SiteSectionContent({
       {section === "waf" && <SiteWAF domain={detail.domain} prefill={wafPrefill} />}
       {section === "php" && detail.php_version && <SitePHP detail={detail} />}
       {section === "rewrite" && detail.php_version && <SiteRewriteSection detail={detail} />}
+      {section === "metrics" && <SiteMetrics domain={detail.domain} />}
       {section === "logs" && <SiteLogs domain={detail.domain} php={detail.php_version !== null} />}
       {section === "delete" && <DangerZone detail={detail} onGone={onGone} />}
     </>
@@ -148,13 +182,15 @@ export function SiteDetailBody({
   domain,
   onGone,
   wafPrefill,
+  initialSection,
 }: {
   domain: string
   onGone: () => void
   wafPrefill?: WafPrefill
+  initialSection?: SiteSection
 }) {
   const { data, isPending, error } = useSite(domain)
-  const [section, setSection] = useState<SiteSection>(wafPrefill ? "waf" : "domains")
+  const [section, setSection] = useState<SiteSection>(wafPrefill ? "waf" : (initialSection ?? "domains"))
 
   if (isPending) {
     return (

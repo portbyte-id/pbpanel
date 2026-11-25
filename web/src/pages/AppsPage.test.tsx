@@ -87,6 +87,7 @@ describe("the app dialog's domain menu", () => {
       "Config",
       "SSL",
       "Firewall",
+      "Metrics",
       "Site logs",
       "Reset or delete",
       "App logs",

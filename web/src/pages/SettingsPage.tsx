@@ -1,5 +1,8 @@
 import { SkeletonRows } from "@/components/ui/skeleton"
+import { useSearch } from "@tanstack/react-router"
 import { useEffect, useMemo, useState } from "react"
+
+import { AlertRules, ClearHistory } from "@/components/AlertRules"
 
 import { PanelCertCard } from "@/components/PanelCert"
 import { SettingField } from "@/components/SettingsField"
@@ -11,6 +14,9 @@ import { useSaveSettings, useSettings } from "@/lib/queries"
 
 /** The one tab that is not a registry group: the panel's own certificate. */
 const PANEL_CERT_TAB = "Panel certificate"
+
+/** The registry group that holds the `metrics.*` keys; the history tools sit under it. */
+const METRICS_GROUP = "Metrics"
 
 /**
  * The Settings page, generated from the registry.
@@ -27,6 +33,7 @@ export function SettingsPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [tab, setTab] = useState<string | null>(null)
+  const { tab: tabParam } = useSearch({ strict: false }) as { tab?: string }
 
   const effective = useMemo(() => {
     const out: Record<string, string> = {}
@@ -85,7 +92,8 @@ export function SettingsPage() {
         : "The settings could not be saved."
       : null
 
-  const activeTab = tab ?? data?.groups[0]?.name ?? PANEL_CERT_TAB
+  const fromLink = [...(data?.groups ?? []).map((g) => g.name), PANEL_CERT_TAB].find((n) => n === tabParam)
+  const activeTab = tab ?? fromLink ?? data?.groups[0]?.name ?? PANEL_CERT_TAB
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
@@ -130,6 +138,12 @@ export function SettingsPage() {
                   ))}
                 </CardContent>
               </Card>
+              {group.name === METRICS_GROUP && (
+                <div className="mt-3 flex flex-col gap-3">
+                  <ClearHistory />
+                  <AlertRules />
+                </div>
+              )}
             </TabsContent>
           ))}
           <TabsContent value={PANEL_CERT_TAB}>
