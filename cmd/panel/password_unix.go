@@ -80,3 +80,12 @@ func readLine(r io.Reader) (string, bool) {
 	}
 	return strings.TrimSuffix(string(line), "\r"), true
 }
+
+// readLine reads one line, without its newline, from r.
+func readLine(r io.Reader) (string, bool) {
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && line == "" {
+		return "", false
+	}
+	return strings.TrimRight(line, "\r\n"), true
+}
