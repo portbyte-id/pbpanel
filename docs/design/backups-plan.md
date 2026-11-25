@@ -1,6 +1,6 @@
 # Site and panel backups: plan
 
-Status: **plan, not started; decisions unratified.** Migration number reserved: `0023`. Scope:
+Status: **plan complete; decisions unratified; step 0 not run (needs the Ubuntu sandbox).** Migration number reserved: `0023`. Scope:
 Ubuntu first; EL (Rocky/RHEL) stays in **M9**.
 
 Written after reading `internal/store` (`store.go`, `migrate.go`, all of `migrations/0001`-`0021`),
@@ -51,7 +51,7 @@ of a panel archive, nothing more.
 | SQLite | `modernc.org/sqlite v1.62.0`, WAL, 4-conn pool. The driver conn has `NewBackup(dstURI) (*sqlite.Backup, error)` with `Step/Remaining/PageCount/Finish` (verified in the module cache, `conn.go:1425`, `backup.go`), reachable through `sql.Conn.Raw`. `store.Open` runs forward migrations on open | `internal/store/store.go`, `migrate.go` |
 | Secrets | `data/secret.key` (32 B, 0600, dir 0700) feeds secretbox: HKDF → AES-256-GCM, value `v1:<keyid>:<b64>`, aad = `table.column:rowkey` (`tls/store.go:272`). The aad names rows, not hosts, so **panel.db + the same secret.key open on any host**. secretbox's own doc says a db backup leaking without the key must not leak secrets | `internal/secretbox/secretbox.go`, `internal/install/layout.go:96` |
 | Sealed columns | `acme_accounts.key_sealed`, `.registration_sealed`, `dns_providers.credentials_sealed`. The challenge page also derives keys from secret.key | `migrations/0012_tls.sql`, `cmd/panel/nginx.go:69` |
-| Plaintext secrets in db | Settings marked `Secret` (`waf.turnstile.secret`, ACME EAB HMAC key) are only masked in the UI, stored plain in `settings` **(assumed from `settings.go:72` "masks while typing"; no secretbox call in `internal/settings`)**; `admin` password hash; `sessions` | `internal/settings/keys.go:398,437` |
+| Plaintext secrets in db | Settings marked `Secret` (`waf.turnstile.secret`, ACME EAB HMAC key) are only masked in the UI, stored plain in `settings` **(verified: `settings.go:72` masks only in the UI; `internal/settings` makes no secretbox call; X2)**; `admin` password hash; `sessions` | `internal/settings/keys.go:398,437` |
 | Site rows | `sites` (domain PK, kind, root, proxy_target, php_version, rewrite), `site_aliases`, `site_proxy_routes`, `site_waf` (JSON), `php_pools` (domain PK, JSON), `certs` (domain UNIQUE, `provider` names a `dns_providers` row). No foreign keys enforced | `migrations/0007,0008,0012,0013,0017,0019,0020` |
 | Web root | Default `/www/services/sites/<domain>`; may be any folder in the `sites.web_roots` allowlist; app workdirs default inside it | `sites/manager.go:239,364`, `internal/webroots` |
 | Site files on disk | `/www/panel/nginx/sites/<domain>.conf` and `nginx/includes/<domain>/`, operator-editable raw (`sites/files.go:44`, `ErrDetached`), so the disk is **not** derivable from rows alone | `internal/nginx/paths.go:98-110` |
@@ -61,6 +61,7 @@ of a panel archive, nothing more.
 | Safe extraction | fm's `extractRun` writes beneath a directory descriptor (`openat`, `O_NOFOLLOW`, `O_EXCL`), rejects escapes, devices, links through archive-made symlinks, and lying sizes; a tree walk feeds tar/zip sinks | `internal/fm/archive_linux.go:23-120,486-700` |
 | Disk space | `unix.Statfs` already used | `internal/fm/fs_linux.go:353`, `internal/sysinfo/source_linux.go` |
 | Dependencies | Only lego, `x/crypto`, `x/net`, `x/sys`, sqlite. No S3, zstd or age library | `go.mod` |
+| Firewall at boot | `panel-firewall.service` (`internal/install/unit.go:22-37`) runs `panel firewall restore` before `network-pre.target`, replaying the **confirmed** ruleset stored in `fw_state` (`migrations/0010_firewall.sql`, `firewall/service.go:443`). The 60 s confirm timer covers only pending applies; `Recover` rolls a pending one back on start. The boot replay has no timer | same |
 | www account | Fixed UID/GID 1500 on every host, so numeric ownership in a tar is portable | `internal/install/layout.go:37` |
 
 ## 3. Decisions (unratified)
@@ -70,10 +71,10 @@ of a panel archive, nothing more.
 | D1 | Archive engine: restic/kopia-style chunked dedup, or full archives | **Full `tar` + zstd per run, GFS retention.** Dedup means a content-addressed repository, index, locking, prune and repair: a project of its own, and its failure modes (corrupt index) are worse than the problem. Typical panel sites are MB-GB; a daily full fits. Revisit only with measured sizes (§7 R1). Shelling out to a downloaded restic binary is rejected: a third-party root binary, a second key model |
 | D2 | Compression library | **`github.com/klauspost/compress/zstd`** (pure Go, no cgo, one module). gzip from stdlib is the fallback if the dependency is refused: ~30% larger, ~3x slower |
 | D3 | S3 client | **Vendor a minimal SigV4 client** in `internal/backup/s3` (PUT, multipart create/upload/complete/abort, GET with Range, HEAD, DELETE, ListObjectsV2; path-style and virtual-host). ~600 lines + tests against MinIO. `aws-sdk-go-v2` or `minio-go` would multiply `go.mod` for four verbs. Test matrix: MinIO (CI, Docker), R2/B2/AWS by hand at the host gate |
-| D4 | Encryption | **Every archive is encrypted, local ones too** (site archives carry `privkey.pem`; panel archives carry `secret.key`). Own small format from `x/crypto` (already a dep): per-archive random 32 B data key, body in 64 KiB XChaCha20-Poly1305 chunks (STREAM: counter nonce + last-chunk flag, header as aad), data key wrapped by the backup key. No `age` dependency |
-| D5 | Backup key and `secret.key` | **The backup key is derived from an operator passphrase (argon2id), never from `secret.key`**, so a fresh host can open an archive with only the passphrase. The derived key is stored sealed (secretbox) for unattended runs; the passphrase itself is never stored. Panel archives **include `secret.key` inside the encryption**, so a restore brings back ACME accounts, DNS credentials and challenge keys intact. No backups run until a passphrase is set. Shown once: "lose this passphrase and every archive is unreadable" |
-| D6 | Passphrase change | **Keyring, not re-encryption.** A change adds a new key ID; old IDs stay sealed in `backup_keys` so old archives still open on this host. On a fresh host, an old archive needs the passphrase it was made with; the archive header names its key ID and creation date to make that obvious |
-| D7 | Site rows in the archive | **A trimmed copy of `panel.db`** (online backup → delete every row not belonging to the site, drop global/secret tables' rows → `VACUUM`), with its `schema_migrations` version. Restore opens it with the panel's own migrations, bringing old archives forward for free, then copies rows. Archives from a **newer** schema are refused. A test fails when a migration adds a table not classified site-scoped or global in `backup/tables.go` |
+| D4 | Encryption | **Every archive is encrypted, local ones too** (site archives carry `privkey.pem`; panel archives carry `secret.key`). **Use `filippo.io/age`, as X1 in `ops-roadmap.md` recommends**, not a hand-written format: each archive is encrypted to the keyring's public recipient (X25519 stanza) and streamed in age's authenticated 64 KiB chunks. Encrypting needs only the public recipient, so unattended runs never need the passphrase. This replaces the earlier XChaCha20 STREAM design (still in git history at `1079a4b`); if X1 is refused, that design stands unchanged |
+| D5 | Backup key and `secret.key` | **The backup identity is an age X25519 key, random and never derived from `secret.key`.** Its secret is sealed (secretbox) in `backup_keys`, so verification runs unattended. Each identity is also written to every target as a keyring file encrypted with an operator passphrase (age scrypt), so a fresh host with only the passphrase can open an archive. The passphrase itself is never stored. Panel archives **include `secret.key` inside the encryption**, so a restore brings back ACME accounts, DNS credentials and challenge keys intact. No backups run until a passphrase is set. Shown once: "lose this passphrase and every archive is unreadable" |
+| D6 | Passphrase change | **Keyring, not re-encryption.** A change adds a new identity and makes it current; old identities stay sealed in `backup_keys`, so old archives still open on this host. Each keyring file `keyring/<key_id>.age` holds one identity and is encrypted with the passphrase in force when it was created; old keyring files are never rewritten. The object name carries the key ID (§4.2), so a fresh host asks for exactly one passphrase |
+| D7 | Site rows in the archive | **A trimmed copy of `panel.db`** (online backup → delete every row not belonging to the site, drop global/secret tables' rows → `VACUUM`), with its `schema_migrations` version. Restore opens it with the panel's own migrations, bringing old archives forward for free, then copies rows. Archives from a **newer** schema are refused. A test fails when a migration adds a table not classified in `backup/tables.go` (classification in §4.8). The site trim also copies the one `dns_providers` row that a site's certificate names |
 | D8 | Schedules | **Per-plan cron expression** in `backup_plans`, evaluated by **one** built-in `backup.scheduler` (job `backups`, `*/15 * * * *`, root) using `cron.Schedule.Next` against `last_run_at`. Per-plan cron rows are impossible without changing built-ins to take arguments. A second built-in `backup.verify` (job `backup-verify`, weekly `50 4 * * 0`) runs test restores |
 | D9 | Cron entries "tied to a site" | **None exist structurally** (`cron_jobs` has no site column). Include cron jobs whose `workdir` or `script_path` lies under the site root as `related`; restore offers them, **created disabled**, only if the name is free. Same treatment for apps whose `workdir` is under the root |
 | D10 | Restoring a site that exists | **Restore replaces it** after a confirm naming what is lost, taking an automatic pre-restore backup of the current site first. Restore-as-another-domain is out of scope |
@@ -88,8 +89,8 @@ of a panel archive, nothing more.
 `internal/backup` (Linux-only parts behind `_linux.go`, like `internal/fm`):
 
 - `backup.go` - `Service`: plans, runs, retention, one-run-at-a-time mutex, `notify.Emitter`.
-- `format/` - container: header, key wrap, STREAM chunks, zstd, tar writer/reader, manifest.
-- `keys.go` - argon2id KDF, keyring sealed with secretbox (aad `backup_keys.key:<id>`).
+- `format/` - age wrapping, zstd, tar writer/reader, manifest.
+- `keys.go` - age identities: generate; the secret sealed with secretbox (aad `backup_keys.identity:<id>`); passphrase-protected keyring files (age scrypt).
 - `target.go` - `Target` interface `{Put(ctx,key,r,size), Get(ctx,key,off) io.ReadCloser, List(ctx,prefix), Delete(ctx,key), Stat(ctx,key), Free(ctx) (int64, bool)}`; `local.go`, `s3/`.
 - `site.go`, `panel.go` - the `Part`s (§4.6); `tables.go` - table classification.
 - `restore_linux.go` - reuses fm's descriptor-based extractor, refactored to accept a `*tar.Reader`
@@ -99,13 +100,13 @@ of a panel archive, nothing more.
 ### 4.2 Archive format (`.pbk`)
 
 ```
-"PBBK\x00\x01"                      magic + format version
-u32 len | header JSON               authenticated as aad of every chunk
-  {format:1, kind:"site"|"panel", name, created, panel_version, schema_version,
-   host, key_id, kdf:{alg:"argon2id",t,m,p,salt}, wrapped_key, zstd:true}
-STREAM chunks: 64 KiB plaintext -> XChaCha20-Poly1305, nonce = prefix||counter||last
-  plaintext = zstd(tar)
+age v1 file: one X25519 stanza per recipient (the keyring's public key, §4.3)
+  payload = age STREAM (64 KiB authenticated chunks) over zstd(tar)
 ```
+
+age supplies the magic, the header MAC and the chunk authentication, so this format has no
+version of its own. The panel's metadata (kind, name, created, panel and schema version, host) is
+the first tar member, `manifest.json` (§4.2 members), inside the encryption.
 
 Tar members, in order (manifest first so verification can stream):
 
@@ -118,18 +119,20 @@ Tar members, in order (manifest first so verification can stream):
 | `ssl/fullchain.pem`, `ssl/privkey.pem` | if a cert exists | the panel's own `panel.crt/key` |
 | `root/...` | web root: files, dirs, symlinks (never followed), hardlinks; no devices/fifos/sockets | - |
 
-Object names: `<prefix>/<kind>/<name>/<UTC yyyymmddThhmmssZ>-<rand4>.pbk` and `.idx`. The sidecar
-index is the manifest alone in the same container format.
+Object names: `<prefix>/<kind>/<name>/<UTC yyyymmddThhmmssZ>-<key_id>-<rand4>.pbk` and `.idx`. The
+key ID is a public hash of the recipient, so a fresh host knows which keyring file to unlock. The
+sidecar index is the manifest alone, encrypted to the same recipient. Keyring files live at
+`<prefix>/keyring/<key_id>.age`.
 
 ### 4.3 Data model: `migrations/0023_backups.sql`
 
 ```sql
 CREATE TABLE backup_keys (          -- D5/D6 keyring
-    id          TEXT PRIMARY KEY,   -- short hash of the derived key
-    kdf         TEXT NOT NULL,      -- JSON params + salt
-    key_sealed  TEXT NOT NULL,      -- secretbox, aad backup_keys.key:<id>
-    current     INTEGER NOT NULL DEFAULT 0 CHECK (current IN (0,1)),
-    created_at  TEXT NOT NULL
+    id               TEXT PRIMARY KEY,  -- short hash of the recipient (public)
+    recipient        TEXT NOT NULL,     -- age1... public key; encrypting needs only this
+    identity_sealed  TEXT NOT NULL,     -- age secret key, secretbox, aad backup_keys.identity:<id>
+    current          INTEGER NOT NULL DEFAULT 0 CHECK (current IN (0,1)),
+    created_at       TEXT NOT NULL
 );
 CREATE TABLE backup_targets (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,18 +267,36 @@ confirmed) or into a chosen folder through fm's policy (deny list applies).
 **Panel restore on a fresh host** (CLI): `pbp install` → `pbp restore panel s3://...` (asks for
 passphrase) → verify header, key, manifest → write `panel.db` (via `NewRestore` into a new file, then
 rename) and `secret.key` 0600 → keep the host-specific settings that would lock the operator out
-(`panel.bind`, `panel.domain`) **unless** `--keep-network` is passed; print what was reset →
+(`panel.bind`, `panel.domain`) and the confirmed firewall ruleset in `fw_state` (R8) **unless** `--keep-network` is passed; print what was reset →
 `systemctl start panel`. Boot reconcile then reports sites as needing their runtime: the operator
-installs nginx/PHP versions from the Store **(assumed: reconcile fails soft without nginx; checked in
-step 0)**, then runs "Restore all sites from latest" (a Backups page action: one job, each site in
+installs nginx/PHP versions from the Store **(verified: `sites/reconcile.go:79-101` records a missing nginx build in its status and logs it; the daemon keeps serving. What the UI shows is still step 0)**, then runs "Restore all sites from latest" (a Backups page action: one job, each site in
 turn, report per site).
 
 **Verify** (`backup.verify`, and the weekly built-in on the newest `ok` archive per plan and
-target): download → authenticate every chunk → stream tar, recompute sha256 of `verify_sample`% of
+target): download → decrypt (age authenticates every chunk) → stream tar, recompute sha256 of `verify_sample`% of
 entries against the manifest → open `db/*.sqlite` copy and run `PRAGMA integrity_check` and the
 forward migration in a temp dir → for panel archives check `secret.key` opens a sealed value
 from the restored db. Nothing touches live files. Result on the row; `backup.verify_failed`
 (critical) on failure, resolved on the next pass.
+
+### 4.8 Row classification (`internal/backup/tables.go`)
+
+Every table as of migration `0021`. Panel archives copy the whole file (§4.6), so this table
+governs **site** archives only. The test in §5 step 4 fails for any table not listed here.
+
+| Class | Tables | Site archive |
+|---|---|---|
+| site | `sites`, `site_aliases`, `site_waf`, `site_proxy_routes`, `php_pools`, `certs` | rows whose domain is the site |
+| related | `apps`, `cron_jobs` | only when `workdir` (cron: or `script_path`) lies under the web root; restored **disabled** and only if the name is free (D9). `apps.env` can hold secrets; it sits inside the encryption like everything else |
+| referenced | `dns_providers` | the one row `certs.provider` names, `credentials_sealed` copied as is. It opens only where `secret.key` is the same (R3). Elsewhere the cert restores and DNS renewal shows "credentials unreadable: re-enter" |
+| config history | `config_history` | rows whose `path` is one of the site's own nginx files (`sites/<domain>.conf`, `includes/<domain>/…`) |
+| global | `settings`, `nginx_settings`, `php_settings`, `php_versions`, `fw_rules`, `fw_blocklist`, `fw_allowlist`, `fw_state`, `fw_pending`, `waf_global`, `acme_accounts`, `image_builds`, `image_pointers`, `cron_runs`, `jobs`, `job_output`, `audit_log`, `fm_trash`, `fm_uploads` | never in a site archive |
+| auth | `admin`, `sessions` | `admin` only in panel archives (the operator keeps the old password, §6 item 9); `sessions` never |
+| ledger | `schema_migrations` | not copied; its version becomes the archive's `schema_version` |
+
+`sites.php_version` names a `php_versions` row that is not copied: a restore needs that runtime
+installed, which §4.7 already requires. `acme_accounts` is not copied either: a restored
+certificate needs no account, and renewal registers a new one if the old is missing.
 
 ## 5. Steps
 
@@ -287,22 +308,30 @@ changed code, vitest for UI steps) and is committed on its own.
 - Online backup via `sql.Conn.Raw` → `NewBackup` while the daemon writes (jobs, audit): page counts,
   time for a 50 MB db, `integrity_check` of the copy, WAL state after.
 - Trim recipe for D7 on a copy of the real `panel.db`: which tables are site-scoped, size after `VACUUM`.
-- zstd level 3 vs gzip on a real WordPress root (size, MB/s, RSS); argon2id parameters that cost
-  ~1 s and ≤64 MiB on the sandbox.
+- zstd level 3 vs gzip on a real WordPress root (size, MB/s, RSS); the age scrypt work factor for keyring
+  files. The default N=2^18, r=8 needs about 256 MiB (128·N·r bytes), so measure N=2^16 and 2^17 for a
+  cost near 1 s within 64 MiB.
 - SigV4 against MinIO in Docker and one real provider the operator has (R2 or B2): path-style vs
   virtual-host, multipart minimums, ListObjectsV2 pagination, `x-amz-content-sha256: UNSIGNED-PAYLOAD`
   acceptance, B2/R2 quirks (checksum headers, no `x-amz-storage-class`).
 - Boot with a restored `panel.db` on a host without nginx installed: what reconcile and the UI show.
+- Firewall (R8): take a `panel.db` whose confirmed ruleset names another SSH port, run
+  `panel firewall restore` on a host, and record whether SSH stays reachable. Confirm that the
+  restore CLI's clear step is needed, not just convenient.
+- Crypto (X1): round trip one archive with `age` on the sandbox and record the size overhead and
+  MB/s against the zstd measurement above.
 
 Done when each item has a recorded answer in this file and D1-D3, D7 are confirmed or amended.
 
 ### Step 1: container format and keys
 
-- `internal/backup/format`: header, STREAM writer/reader, zstd, tar wrapper, manifest types.
-  `internal/backup/keys.go`: argon2id, keyring, seal/open via secretbox.
+- `internal/backup/format`: age writer/reader (recipient and identity wrapping), zstd, tar wrapper,
+  manifest types. `internal/backup/keys.go`: age identity generation, keyring files (age scrypt),
+  seal/open of the identity via secretbox.
 - Migration `0023_backups.sql` (whole schema at once) + migration test.
-- Tests: round trip; truncated stream, swapped/reordered/dropped chunk, flipped header byte, wrong
-  key id, wrong passphrase all fail closed; last-chunk flag enforced; fuzz the reader.
+- Tests: round trip; truncated, tampered and reordered ciphertext, wrong identity and wrong
+  passphrase fail closed (age authenticates; a test pins that); a two-recipient archive opens with
+  either identity; keyring file round trip; fuzz the zstd/tar reader.
 - Done when a 1 GiB synthetic stream round-trips at bounded memory (<64 MiB).
 
 ### Step 2: targets
@@ -381,7 +410,8 @@ On the current Ubuntu sandbox (re-confirm the IP) with MinIO started in Docker b
    → `pbp restore panel s3://...` with the passphrase → start → log in with the **old** password →
    ACME account and DNS provider open (no `ErrUnknownKey`) → install nginx + PHP from the Store →
    Restore all sites → the site serves over TLS with the old certificate.
-10. Reboot the restored host: everything comes back.
+10. Reboot the restored host: everything comes back, and SSH stays reachable after the firewall unit
+    runs at boot (R8).
 
 Manual, once: one run against a real R2 or B2 bucket the operator provides. EL: M9.
 
@@ -401,9 +431,12 @@ Manual, once: one run against a real R2 or B2 bucket the operator provides. EL: 
 - **R6 Vendored SigV4.** Provider quirks surface late; MinIO in CI plus one real provider by hand.
 - **R7 Inconsistent live copies** (D13): an app writing during the walk. Warned, not prevented.
 - **R8 Host-specific state in panel.db** (bind address, panel domain, firewall rules naming the old
-  SSH port, panel cert for the old IP): the CLI resets the network-binding settings by default; the
-  firewall's 60 s confirm timer protects the rest **(assumed: the firewall reapplies from db at
-  boot under that timer; checked in step 0)**.
+  SSH port, panel cert for the old IP): the CLI resets the network-binding settings by default.
+  **Correction:** the 60 s confirm timer does not cover the firewall at boot. `panel-firewall.service`
+  replays the last *confirmed* ruleset with no timer (§2, *Firewall at boot*), so a ruleset written
+  for the old host's SSH port could cut off SSH on the restored host. The restore CLI therefore clears
+  the confirmed ruleset (leaving the boot unit nothing to replay) unless `--keep-network` is passed,
+  and the operator re-applies from the Firewall page under the timer. Step 0 and §6 item 10 test this.
 - **R9 Memory.** Streaming throughout; no member is buffered whole. Asserted by the 1 GiB test.
 
 ## 8. Out of scope
@@ -417,3 +450,26 @@ Manual, once: one run against a real R2 or B2 bucket the operator provides. EL: 
 - Multi-server, multi-user retention policies, object lock/immutability (may come later as an S3
   header on the target).
 - EL (Rocky/RHEL) host gate: M9.
+
+## 9. Ratification and revision log
+
+Before step 1 starts, ratify in this order:
+
+1. **X1 (age)**: decides D4–D6, §4.2, §4.3 and step 1. If refused, the earlier XChaCha20 STREAM
+   design in git history at `1079a4b` stands, and step 1 keeps it.
+2. **X2 (plain-text secret settings)**: the roadmap puts it first. Backups do not depend on it for
+   safety, since the archive is encrypted, but the panel.db copy is cleaner with it done.
+3. **R8**: an operator OK for the restore CLI to clear the confirmed firewall ruleset on a panel
+   restore (`--keep-network` opts out).
+4. **D1–D3, D7**: confirmed or amended by step 0, which is not run. It needs the Ubuntu sandbox
+   (re-confirm the IP, start MinIO in Docker).
+
+Revision log for this pass:
+
+- Closed the `(assumed)` claims in §2 and §4.7: `internal/settings` has no sealing call; reconcile
+  records a missing nginx build and keeps the daemon serving (`sites/reconcile.go:79-101`).
+- Corrected R8: the firewall boot replay has no confirm timer. The restore CLI now clears the
+  confirmed ruleset, and step 0 and §6 test it.
+- Moved D4–D6, §4.2, §4.3 and step 1 from argon2id plus a custom STREAM format to age, per X1.
+- Added §4.8, a classification of every table as of 0021, and the one `dns_providers` row a site
+  certificate needs.
