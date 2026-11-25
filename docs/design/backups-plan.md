@@ -1,6 +1,6 @@
 # Site and panel backups: plan
 
-Status: **plan complete; decisions unratified; step 0 not run (needs the Ubuntu sandbox).** Migration number reserved: `0023`. Scope:
+Status: **plan complete; X1 (age) ratified 2026-11-25; other decisions unratified; step 0 not run (needs the Ubuntu sandbox).** Migration number reserved: `0023`. Scope:
 Ubuntu first; EL (Rocky/RHEL) stays in **M9**.
 
 Written after reading `internal/store` (`store.go`, `migrate.go`, all of `migrations/0001`-`0021`),
@@ -455,8 +455,8 @@ Manual, once: one run against a real R2 or B2 bucket the operator provides. EL: 
 
 Before step 1 starts, ratify in this order:
 
-1. **X1 (age)**: decides D4–D6, §4.2, §4.3 and step 1. If refused, the earlier XChaCha20 STREAM
-   design in git history at `1079a4b` stands, and step 1 keeps it.
+1. **X1 (age)**: ratified 2026-11-25. D4–D6, §4.2, §4.3 and step 1 are written for age. The earlier
+   XChaCha20 STREAM design stays in git history at `1079a4b` for reference only.
 2. **X2 (plain-text secret settings)**: the roadmap puts it first. Backups do not depend on it for
    safety, since the archive is encrypted, but the panel.db copy is cleaner with it done.
 3. **R8**: an operator OK for the restore CLI to clear the confirmed firewall ruleset on a panel

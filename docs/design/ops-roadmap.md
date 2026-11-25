@@ -1,6 +1,6 @@
 # Operations roadmap: six plans and how they fit
 
-Status: **plans written 2026-11-25, none started; every decision unratified.**
+Status: **plans written 2026-11-25, none started; X1 ratified 2026-11-25 (age); the other decisions unratified.**
 
 Six features, each with its own plan in this folder. This note fixes what they share, the order to
 build them, and the decisions that cross plan boundaries. Each plan's own §3 lists its local decisions.
