@@ -1,6 +1,6 @@
 # Notifications and alerts: plan
 
-Status: **plan, not started; decisions unratified.** Migration number reserved: `0022`.
+Status: **steps 1-5 built on branch `notify-plan`; step 6 partly wired (engine and dispatcher run in the daemon, producers not yet); steps 6 producers, 7, 8 and the host gate not done; decisions D1-D13 still unratified.** Telegram and Discord request shapes are still "(assumed)" (the doc check could not run). Migration `0022` in use.
 
 Written after reading the dashboard alerts (`web/src/lib/alerts.ts`, `web/src/pages/DashboardPage.tsx`),
 the job manager (`internal/jobs/jobs.go`, `events.go`), the cron service (`internal/cron/builtin.go`,

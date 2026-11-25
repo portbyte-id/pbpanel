@@ -193,9 +193,12 @@ func serve(ctx context.Context, _ []string) error {
 			return listener.Certs()
 		}
 	}
+	// The engine runs even without a secret key; only storing a channel is refused.
+	_, notifyAdmin := newNotify(ctx, st, reg, layout, logger)
 	handler, err := httpapi.New(httpapi.Deps{
 		Store:          st,
 		Settings:       reg,
+		Notify:         notifyAdmin,
 		Auth:           authSvc,
 		Audit:          auditW,
 		Jobs:           jobsMgr,
