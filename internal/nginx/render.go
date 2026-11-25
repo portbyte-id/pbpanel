@@ -128,13 +128,16 @@ include {{.WAFMainDir}}/*.conf;
 `
 
 // LogFormat is the access log format of new sites: combined, plus the request
-// time and the request id. The traffic monitor reads the time from it, and the
-// id ties a line to the firewall's audit event for the same request. Older site
-// files keep the plain combined format, which the monitor also reads.
+// time, the request id and the upstream time. The traffic monitor reads the
+// times from it, and the id ties a line to the firewall's audit event for the
+// same request. The upstream time is quoted because nginx writes several values
+// ("0.010, 0.004") when a request was retried, and "-" for a static file. Older
+// site files keep the plain combined format or the one without the upstream
+// time, which the monitor also reads.
 const LogFormat = "pbpanel"
 
 const httpIncludeTemplate = `# Managed by PB panel (Nginx settings). Rewritten on every save; edit it there.
-log_format ` + LogFormat + ` '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" rt=$request_time rid=$request_id';
+log_format ` + LogFormat + ` '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" rt=$request_time rid=$request_id urt="$upstream_response_time"';
 
 # The firewall's zones and maps, one file per site.
 include {{.WAFHTTPDir}}/*.conf;
