@@ -47,6 +47,108 @@ export function useRangeParam(): [MetricsRange, (next: MetricsRange) => void] {
   return [range, set]
 }
 
+/**
+ * A custom window: two local calendar dates (`YYYY-MM-DD`), both days included.
+ * The daemon takes unix seconds, so the dates become midnights in the browser's
+ * zone when the request is made; `to` is capped at now.
+ */
+export interface CustomSpan {
+  from: string
+  to: string
+}
+
+/** What a history chart asks for: a preset ending now, or a custom window. */
+export type HistorySpan = MetricsRange | CustomSpan
+
+/** The longest window the daemon answers; it refuses anything wider with 400. */
+export const MAX_CUSTOM_DAYS = 400
+
+const DAY_MS = 86_400_000
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** True for a real calendar date in `YYYY-MM-DD` form (not 2026-02-31). */
+export function isDateString(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE_RE.test(value)) return false
+  const [y, m, d] = value.split("-").map(Number)
+  const date = new Date(y, m - 1, d)
+  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d
+}
+
+/** The local calendar date of `date`, as `YYYY-MM-DD`. */
+export function localDateString(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** Local midnight at the start of `date`, moved by `plusDays`. */
+function localMidnight(date: string, plusDays = 0): Date {
+  const [y, m, d] = date.split("-").map(Number)
+  return new Date(y, m - 1, d + plusDays)
+}
+
+/** Why a custom window cannot be asked for, in words for the reader; null when it can. */
+export function customProblem(span: CustomSpan, now: Date = new Date()): string | null {
+  if (!isDateString(span.from) || !isDateString(span.to)) return "Pick a start date and an end date."
+  if (span.from > span.to) return "The start date is after the end date."
+  if (span.from > localDateString(now)) return "The start date is in the future."
+  const days = (localMidnight(span.to, 1).getTime() - localMidnight(span.from).getTime()) / DAY_MS
+  if (days > MAX_CUSTOM_DAYS) return `Pick a window of ${MAX_CUSTOM_DAYS} days or fewer.`
+  return null
+}
+
+/** The query string that asks the daemon for a span: `range=6h`, or `from=&to=` in unix seconds. */
+export function spanQuery(span: HistorySpan, nowMs: number = Date.now()): string {
+  if (typeof span === "string") return `range=${encodeURIComponent(span)}`
+  const from = Math.floor(localMidnight(span.from).getTime() / 1000)
+  const end = Math.floor(localMidnight(span.to, 1).getTime() / 1000)
+  const to = Math.min(end, Math.floor(nowMs / 1000))
+  return `from=${from}&to=${to}`
+}
+
+/** A stable string for a span, for react-query keys: the same window keeps its cache entry. */
+export function spanKey(span: HistorySpan): string {
+  return typeof span === "string" ? span : `${span.from}..${span.to}`
+}
+
+/** The window's name for a card's note: "6 hours", or "2026-11-01 to 2026-11-10". */
+export function spanName(span: HistorySpan): string {
+  if (typeof span === "string") return RANGE_NAMES[span]
+  return span.from === span.to ? span.from : `${span.from} to ${span.to}`
+}
+
+/**
+ * The span the URL asks for: `?from=&to=` when both are dates, otherwise the
+ * preset from `?range=`. Setting one drops the other, so a link has one window.
+ */
+export function useSpanParam(): [
+  HistorySpan,
+  { preset: (next: MetricsRange) => void; custom: (next: CustomSpan) => void },
+] {
+  const search = useSearch({ strict: false }) as { range?: unknown; from?: unknown; to?: unknown }
+  const navigate = useNavigate()
+  const span: HistorySpan =
+    isDateString(search.from) && isDateString(search.to)
+      ? { from: search.from, to: search.to }
+      : rangeFromSearch(search.range)
+  const write = (patch: Record<string, unknown>, drop: string[]) => {
+    void navigate({
+      search: ((prev: Record<string, unknown>) => {
+        const next = { ...prev }
+        for (const key of drop) delete next[key]
+        return { ...next, ...patch }
+      }) as never,
+      replace: true,
+    })
+  }
+  return [
+    span,
+    {
+      preset: (next) => write({ range: next }, ["from", "to"]),
+      custom: (next) => write({ from: next.from, to: next.to }, ["range"]),
+    },
+  ]
+}
+
 export type Col = (number | null)[]
 
 export interface HostHistory {
@@ -128,16 +230,16 @@ export interface MetricsStatus {
   dropped: number
 }
 
-function path(kind: string, range: MetricsRange): string {
-  return `/api/metrics/${kind}?range=${encodeURIComponent(range)}`
+function path(kind: string, span: HistorySpan): string {
+  return `/api/metrics/${kind}?${spanQuery(span)}`
 }
 
-export function hostHistory(range: MetricsRange, client: ApiClient = api): Promise<HostHistory> {
-  return client.request<HostHistory>(path("host", range))
+export function hostHistory(span: HistorySpan, client: ApiClient = api): Promise<HostHistory> {
+  return client.request<HostHistory>(path("host", span))
 }
 
-export function disksHistory(range: MetricsRange, client: ApiClient = api): Promise<DisksHistory> {
-  return client.request<DisksHistory>(path("disks", range))
+export function disksHistory(span: HistorySpan, client: ApiClient = api): Promise<DisksHistory> {
+  return client.request<DisksHistory>(path("disks", span))
 }
 
 export function servicesHistory(range: MetricsRange, client: ApiClient = api): Promise<ServicesHistory> {
@@ -158,8 +260,8 @@ export function clearMetrics(client: ApiClient = api): Promise<void> {
 
 export const metricsKeys = {
   all: ["metrics"] as const,
-  host: (range: MetricsRange) => ["metrics", "host", range] as const,
-  disks: (range: MetricsRange) => ["metrics", "disks", range] as const,
+  host: (span: HistorySpan) => ["metrics", "host", spanKey(span)] as const,
+  disks: (span: HistorySpan) => ["metrics", "disks", spanKey(span)] as const,
   services: (range: MetricsRange) => ["metrics", "services", range] as const,
   site: (domain: string, range: MetricsRange) => ["metrics", "sites", domain, range] as const,
   status: ["metrics", "status"] as const,
@@ -179,12 +281,23 @@ const historyOptions = {
   refetchInterval: pollWhileVisible(HISTORY_POLL_MS),
 } as const
 
-export function useHostHistory(range: MetricsRange) {
-  return useQuery({ queryKey: metricsKeys.host(range), queryFn: () => hostHistory(range), ...historyOptions })
+/** `enabled: false` keeps a query idle, for a window that cannot be asked for. */
+export function useHostHistory(span: HistorySpan, enabled = true) {
+  return useQuery({
+    queryKey: metricsKeys.host(span),
+    queryFn: () => hostHistory(span),
+    enabled,
+    ...historyOptions,
+  })
 }
 
-export function useDisksHistory(range: MetricsRange) {
-  return useQuery({ queryKey: metricsKeys.disks(range), queryFn: () => disksHistory(range), ...historyOptions })
+export function useDisksHistory(span: HistorySpan, enabled = true) {
+  return useQuery({
+    queryKey: metricsKeys.disks(span),
+    queryFn: () => disksHistory(span),
+    enabled,
+    ...historyOptions,
+  })
 }
 
 export function useServicesHistory(range: MetricsRange) {

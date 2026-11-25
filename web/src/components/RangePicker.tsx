@@ -7,14 +7,15 @@ import { cn } from "@/lib/utils"
  * The history range as a segmented radio group. Native radios, so the arrow
  * keys, the single tab stop and the screen reader's "2 of 6" come from the
  * platform. The value belongs to the caller; the pages keep it in the URL with
- * `useRangeParam`.
+ * `useRangeParam` or `useSpanParam`. `null` means a custom window is showing, so
+ * no preset is ticked.
  */
 export function RangePicker({
   value,
   onChange,
   label = "History range",
 }: {
-  value: MetricsRange
+  value: MetricsRange | null
   onChange: (next: MetricsRange) => void
   label?: string
 }) {

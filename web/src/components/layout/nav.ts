@@ -8,6 +8,7 @@ import {
   FileText,
   FolderTree,
   Gauge,
+  ChartLine,
   Globe,
   ListChecks,
   LockKeyhole,
@@ -57,6 +58,13 @@ export const navGroups: NavGroup[] = [
         path: "/dashboard",
         description: "Health, resources and what needs attention",
         keywords: "home status cpu memory",
+      },
+      {
+        label: "Monitoring",
+        icon: ChartLine,
+        path: "/monitoring",
+        description: "CPU, memory, load, network and disk history over a preset or custom dates",
+        keywords: "history metrics charts graph cpu memory load disk network date range period",
       },
       {
         label: "Services",

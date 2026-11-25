@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor, within } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { HistoryCard } from "@/components/HistoryCard"
 import { ServiceTrend } from "@/components/ServiceTrend"
 import { api, ApiError } from "@/lib/api"
+import type { HistorySpan } from "@/lib/metrics"
 import { disksHistory, fill, hostHistory, servicesHistory } from "@/test/metricsFixtures"
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -28,11 +28,11 @@ function route(handlers: { host?: unknown; disks?: unknown }) {
   })
 }
 
-function renderCard() {
+function renderCard(span: HistorySpan = "1h") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <HistoryCard />
+      <HistoryCard span={span} />
     </QueryClientProvider>,
   )
 }
@@ -55,27 +55,19 @@ describe("HistoryCard", () => {
     expect(within(legend).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["/", "/www"])
   })
 
-  it("starts on one hour and asks the API for it", async () => {
+  it("asks the API for the span it was given and names it", async () => {
     route({ host: hostHistory(), disks: disksHistory() })
-    renderCard()
+    renderCard("7d")
     await screen.findByRole("figure", { name: "CPU" })
-    expect(screen.getByRole("radio", { name: "1 hour" })).toBeChecked()
-    expect(vi.mocked(api.request).mock.calls.map((c) => c[0])).toContain("/api/metrics/host?range=1h")
+    expect(vi.mocked(api.request).mock.calls.map((c) => c[0])).toContain("/api/metrics/host?range=7d")
+    expect(screen.getByText("7 days")).toBeInTheDocument()
   })
 
-  it("takes the range from the URL and writes a pick back to it", async () => {
-    router.search = { range: "7d" }
+  it("explains a custom window that cannot be asked for, and does not ask", async () => {
     route({ host: hostHistory(), disks: disksHistory() })
-    renderCard()
-    await screen.findByRole("figure", { name: "CPU" })
-    expect(screen.getByRole("radio", { name: "7 days" })).toBeChecked()
-    expect(vi.mocked(api.request).mock.calls.map((c) => c[0])).toContain("/api/metrics/host?range=7d")
-
-    await userEvent.setup().click(screen.getByRole("radio", { name: "6 hours" }))
-    expect(router.navigate).toHaveBeenCalledTimes(1)
-    const arg = router.navigate.mock.calls[0][0] as { search: (prev: object) => object; replace: boolean }
-    expect(arg.replace).toBe(true)
-    expect(arg.search({ other: "kept" })).toEqual({ other: "kept", range: "6h" })
+    renderCard({ from: "2026-11-10", to: "2026-11-01" })
+    expect(await screen.findByRole("alert")).toHaveTextContent("The start date is after the end date.")
+    expect(vi.mocked(api.request)).not.toHaveBeenCalled()
   })
 
   it("says history starts after the first minute when nothing is recorded yet", async () => {
