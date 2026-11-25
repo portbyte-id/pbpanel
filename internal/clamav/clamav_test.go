@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -243,10 +244,14 @@ func TestScan(t *testing.T) {
 	})
 	t.Run("clean scan uses the daemon", func(t *testing.T) {
 		r := &fakeRunner{answer: healthy}
-		m := New(Options{Run: r, Stat: statFor(ScanBinary)})
+		m := New(Options{Run: r, Stat: statFor(ScanBinary), CountFiles: func(string) int { return 42 }})
 		res, err := m.Scan(ctx, "/srv/www", nil)
 		if err != nil || res.Engine != "clamd" || len(res.Infected) != 0 {
 			t.Fatalf("res=%+v err=%v", res, err)
+		}
+		// clamdscan reports no count, so the daemon's comes from the tree.
+		if res.Scanned != 42 {
+			t.Errorf("scanned = %d, want 42", res.Scanned)
 		}
 		if !r.ran(DaemonScanBin + " --fdpass --multiscan /srv/www") {
 			t.Errorf("calls = %v", r.calls)
@@ -319,6 +324,25 @@ func TestScan(t *testing.T) {
 	})
 }
 
+func TestDefaultCountFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"a", "sub/b", "sub/deep/c"} {
+		p := filepath.Join(dir, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := defaultCountFiles(dir); n != 3 {
+		t.Errorf("count = %d, want 3 regular files (directories do not count)", n)
+	}
+	if n := defaultCountFiles(filepath.Join(dir, "missing")); n != 0 {
+		t.Errorf("count of a missing path = %d, want 0", n)
+	}
+}
+
 func TestUninstall(t *testing.T) {
 	ctx := context.Background()
 	if err := New(Options{Run: &fakeRunner{answer: healthy}, Stat: statFor()}).Uninstall(ctx, nil); !errors.Is(err, ErrNotInstalled) {
@@ -337,10 +361,16 @@ func TestUninstall(t *testing.T) {
 		}
 		return nil, fs.ErrNotExist
 	}
-	if err := New(Options{Run: r, Stat: stat}).Uninstall(ctx, nil); err != nil {
+	var removed []string
+	m := New(Options{Run: r, Stat: stat, RemoveAll: func(p string) error { removed = append(removed, p); return nil }})
+	if err := m.Uninstall(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !r.ran("apt-get purge -y clamav clamav-daemon clamdscan clamav-freshclam") {
+	// The purge leaves the downloaded .sign files, so the directory goes too.
+	if len(removed) != 1 || removed[0] != DatabaseDir {
+		t.Errorf("removed = %v, want [%s]", removed, DatabaseDir)
+	}
+	if !r.ran("apt-get purge -y --autoremove clamav clamav-daemon clamdscan clamav-freshclam") {
 		t.Errorf("calls = %v", r.calls)
 	}
 }

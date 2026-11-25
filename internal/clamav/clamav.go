@@ -15,8 +15,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -136,6 +138,12 @@ type Options struct {
 	// SocketWait and SocketPoll bound the wait for the daemon's socket after an
 	// install: clamd loads the signatures before it listens, which takes a minute.
 	SocketWait, SocketPoll time.Duration
+	// RemoveAll removes the signature directory after an uninstall. Nil means
+	// os.RemoveAll.
+	RemoveAll func(name string) error
+	// CountFiles counts the regular files under a path, for the daemon's scans:
+	// clamdscan reports no file count of its own. Nil walks the tree.
+	CountFiles func(path string) int
 }
 
 // Manager is the ClamAV lifecycle and scanner.
@@ -143,14 +151,40 @@ type Manager struct {
 	run        Runner
 	install    func(context.Context, []string) error
 	stat       func(string) (os.FileInfo, error)
+	removeAll  func(string) error
+	countFiles func(string) int
 	socketWait time.Duration
 	socketPoll time.Duration
 	scanning   atomic.Bool
 }
 
+// DatabaseDir is where the signatures live. The packages' purge leaves the
+// downloaded .sign files in it, so uninstall removes the directory itself.
+const DatabaseDir = "/var/lib/clamav"
+
+// defaultCountFiles counts the regular files under path. Errors are skipped: it
+// only sizes a scan, and the scanner reports anything it could not read.
+func defaultCountFiles(path string) int {
+	n := 0
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
 // New returns the manager.
 func New(o Options) *Manager {
-	m := &Manager{run: o.Run, install: o.Install, stat: o.Stat, socketWait: o.SocketWait, socketPoll: o.SocketPoll}
+	m := &Manager{run: o.Run, install: o.Install, stat: o.Stat, removeAll: o.RemoveAll, countFiles: o.CountFiles,
+		socketWait: o.SocketWait, socketPoll: o.SocketPoll}
+	if m.removeAll == nil {
+		m.removeAll = os.RemoveAll
+	}
+	if m.countFiles == nil {
+		m.countFiles = defaultCountFiles
+	}
 	if m.run == nil {
 		m.run = ExecRunner{}
 	}
@@ -305,7 +339,11 @@ func (m *Manager) Install(ctx context.Context, progress func(string)) error {
 	out, err := m.run.Run(fctx, Command{Name: FreshclamBin})
 	cancel()
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		line = strings.TrimSpace(line)
+		// freshclam tries to tell clamd to reload, which the packaged clamd.conf
+		// disables. It is noise here: the daemon is restarted below, and later it
+		// reloads changed signatures itself (SelfCheck, hourly).
+		if line != "" && !strings.Contains(line, "Clamd was NOT notified") {
 			say(line)
 		}
 	}
@@ -368,12 +406,16 @@ func (m *Manager) Uninstall(ctx context.Context, progress func(string)) error {
 		return ErrScanBusy
 	}
 	say("removing " + strings.Join(Packages, ", "))
-	args := append([]string{"purge", "-y"}, Packages...)
+	// --autoremove takes the libraries and base package only ClamAV needed.
+	args := append([]string{"purge", "-y", "--autoremove"}, Packages...)
 	if out, err := m.run.Run(ctx, Command{Name: "apt-get", Args: args}); err != nil {
 		return fmt.Errorf("clamav: apt-get purge: %w: %s", err, tail(string(out), 10))
 	}
 	if m.Status(ctx).Installed {
 		return fmt.Errorf("clamav: the packages were purged but %s is still present", ScanBinary)
+	}
+	if err := m.removeAll(DatabaseDir); err != nil {
+		return fmt.Errorf("clamav: remove %s: %w", DatabaseDir, err)
 	}
 	say("done")
 	return nil
@@ -411,9 +453,18 @@ func (m *Manager) Scan(ctx context.Context, path string, progress func(string)) 
 		cmd = Command{Name: DaemonScanBin, Args: []string{"--fdpass", "--multiscan", path}}
 		res.Engine = "clamd"
 	}
+	// clamdscan prints no file count, so the daemon's is the number of regular
+	// files under the path when the scan started.
+	files := 0
+	if res.Engine == "clamd" {
+		files = m.countFiles(path)
+	}
 	say(fmt.Sprintf("scanning %s with %s", path, res.Engine))
 	out, runErr := m.run.Run(ctx, cmd)
 	scanned, infected, problems := ParseScan(string(out))
+	if res.Engine == "clamd" {
+		scanned = files
+	}
 	res.Scanned, res.Infected, res.Errors = scanned, infected, problems
 	for _, f := range infected {
 		say(f.Path + ": " + f.Signature)
