@@ -113,8 +113,10 @@ func newMetrics(ctx context.Context, st *store.Store, reg *settings.Registry, la
 	return &metricsStack{Service: svc, Alerts: alerts, db: db, rec: rec}
 }
 
-// start runs the recorder until ctx ends, then closes the database. The returned
-// function waits for the final flush, for at most the grace period.
+// start runs the recorder until ctx ends. The returned function waits for its
+// final flush, for at most the grace period, and then closes the database. The
+// caller runs it after the HTTP listener has stopped, so a chart request that was
+// still in flight when the daemon was told to stop never finds the file closed.
 func (m *metricsStack) start(ctx context.Context) (wait func(grace time.Duration)) {
 	if m == nil {
 		return func(time.Duration) {}
@@ -124,7 +126,6 @@ func (m *metricsStack) start(ctx context.Context) (wait func(grace time.Duration
 	go func() {
 		defer wg.Done()
 		m.rec.Run(ctx)
-		_ = m.db.Close()
 	}()
 	return func(grace time.Duration) {
 		done := make(chan struct{})
@@ -133,6 +134,7 @@ func (m *metricsStack) start(ctx context.Context) (wait func(grace time.Duration
 		case <-done:
 		case <-time.After(grace):
 		}
+		_ = m.db.Close()
 	}
 }
 

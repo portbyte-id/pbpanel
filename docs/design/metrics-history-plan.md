@@ -1,6 +1,6 @@
 # Metrics history: plan
 
-Status: **plan, not started; decisions unratified.** Migration number reserved: **0024** (panel.db).
+Status: **built on branch `metrics-history`; host gate (§6) not run; step 0 spike not run (see Handover); decisions unratified.** Migration number: **0024** (panel.db), taken.
 Sibling contract: `internal/notify` (owned by `notifications-plan.md`, written in parallel).
 
 Written after reading the sampler and service grid (`internal/sysinfo/sampler.go`, `proc.go`,
