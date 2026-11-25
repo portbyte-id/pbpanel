@@ -78,6 +78,7 @@ func (s *server) routes() http.Handler {
 	s.sysinfoRoutes(mux)
 	s.logsRoutes(mux)
 	s.cronRoutes(mux)
+	s.notifyRoutes(mux)
 	s.wafMonRoutes(mux)
 	s.wafGeoRoutes(mux)
 	s.appsecRoutes(mux)
