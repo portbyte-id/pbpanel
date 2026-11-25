@@ -59,11 +59,19 @@ func (o DBObserver) Observe(ctx context.Context, now time.Time) (Observations, e
 		return nil, err
 	}
 
-	if err := o.perKey(ctx, `SELECT key, up_frac, 0 FROM svc_1m WHERE ts >= ? ORDER BY ts`, since, KindService,
-		func(name string, up, _ sql.NullFloat64) {
-			if up.Valid {
-				put(obs, RuleServiceDown, name, (1-up.Float64)*100)
+	// A unit that does not exist (not installed, or removed) is not down: it was
+	// never running, so it has no uptime to judge. Rows are read oldest first, so
+	// the newest row decides: a service that is missing now has no observation.
+	if err := o.perKey(ctx, `SELECT key, up_frac, state FROM svc_1m WHERE ts >= ? ORDER BY ts`, since, KindService,
+		func(name string, up, state sql.NullFloat64) {
+			if !up.Valid {
+				return
 			}
+			if state.Valid && int(state.Float64) == StateMissing {
+				delete(obs[RuleServiceDown], name)
+				return
+			}
+			put(obs, RuleServiceDown, name, (1-up.Float64)*100)
 		}); err != nil {
 		return nil, err
 	}

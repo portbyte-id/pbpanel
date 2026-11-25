@@ -502,6 +502,45 @@ func TestObserverReadsTheNewestRows(t *testing.T) {
 	}
 }
 
+// A unit that is not installed (or was removed) has no uptime to judge: it must
+// not raise service_down, while a unit that really is down still does.
+func TestObserverIgnoresServicesThatDoNotExist(t *testing.T) {
+	r, clk, d := newTestRecorder(t, Options{})
+	ctx := context.Background()
+	r.ObserveServices(base, []ServiceSample{
+		{Name: "ghost", State: StateMissing},
+		{Name: "gone", State: StateRunning},
+		{Name: "nginx", State: StateRunning},
+		{Name: "docker", State: StateFailed},
+	})
+	r.ObserveServices(base.Add(30*time.Second), []ServiceSample{
+		{Name: "ghost", State: StateMissing},
+		{Name: "gone", State: StateMissing},
+		{Name: "nginx", State: StateRunning},
+		{Name: "docker", State: StateFailed},
+	})
+	clk.t = base.Add(80 * time.Second)
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	obs, err := DBObserver{DB: d, Recorder: r}.Observe(ctx, clk.t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := obs[RuleServiceDown]["ghost"]; ok {
+		t.Errorf("a service that does not exist was judged down: %v", got)
+	}
+	if got, ok := obs[RuleServiceDown]["gone"]; ok {
+		t.Errorf("a service removed mid-minute was judged down: %v", got)
+	}
+	if got := obs[RuleServiceDown]["nginx"]; got != 0 {
+		t.Errorf("nginx down = %v, want 0", got)
+	}
+	if got := obs[RuleServiceDown]["docker"]; got != 100 {
+		t.Errorf("docker down = %v, want 100", got)
+	}
+}
+
 func TestObserverFallsBackToMemoryWhenTheFlushFails(t *testing.T) {
 	r, clk, d := newTestRecorder(t, Options{})
 	ctx := context.Background()
