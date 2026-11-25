@@ -79,6 +79,45 @@ requests and events, all in memory. New sites log in the `pbpanel` format
 `/events`, `/events/summary`, and `GET /api/waf/status` for every site's mode.
 The UI polls every two seconds while the page is open.
 
+## The open-appsec engine
+
+A site picks one inspection engine: ModSecurity + CRS (the default, everything
+above) or Check Point's open-appsec. Rate limit, path blocklist, IP rules, the
+challenge page and the block page are engine-independent.
+
+**Tracking warning.** The open-appsec agent keeps a continuous TLS connection to
+Check Point's cloud (`inext-agents.cloud.ngen.checkpoint.com`) even in local-policy
+mode. No supported flag turns it off (`--offline_mode` does not), the traffic is on
+the policy-apply path, and blocking it makes `--apply-policy` fail and the agent stop
+inspecting. Using this engine can subject the host and its traffic to Check Point's
+tracking. The Store card, the install confirmation, the site engine picker and the
+firewall overview all say so. Installing requires acknowledging the exact text
+(`appsec.Warning`). Evidence: `open-appsec-plan.md` §0.7 and §6.1.
+
+| Piece | Where |
+| --- | --- |
+| Attachment (nginx module) | built into the nginx build, `modules/ngx_cp_attachment_module.so` |
+| Agent | installed and removed from the Store (`appsec.install` / `appsec.uninstall` jobs); uninstall is refused while a site uses the engine |
+| Module loader | `waf/main/open-appsec.conf`, present while any site uses the engine |
+| Policy | `/etc/cp/conf/local_policy.yaml`, rendered from every open-appsec site, default practice `inactive` |
+| Events | the agent's numbered security logs, read by `wafmon` and tagged with the engine |
+
+`detect` maps to `detect-learn` and `block` to `prevent-learn`; confidence is the
+minimum that blocks (`critical`, `high`, `medium`). Sites that do not use the engine
+get `cp-nano-nginx-attachment off;`.
+
+Limits worth knowing:
+
+- **No path exceptions.** The agent's `urlPath` exception does not compile, so none
+  are rendered. `hostName` compiles but is not offered.
+- **A rejected policy is invisible.** `--apply-policy` exits 1 on success and failure
+  and prints "New policy applied" either way. Only the absence of
+  `Could not generate appsec local policy` in the orchestration log tells the truth
+  (`open-appsec-step4-findings.md`).
+- **One owner on the serving port.** A second nginx on `:80` makes results ambiguous.
+- **Footprint.** The agent idles near 219 MB RSS and about 10% of a core (step 0).
+- **Ubuntu only.** EL hosts are M9.
+
 ## Known limits
 
 - The monitor starts from the tail of each log, so history before a daemon
