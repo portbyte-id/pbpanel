@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,11 +70,32 @@ func healthy(c Command) ([]byte, error) {
 // own non-zero exit produces.
 func exitStatus(t *testing.T, code string) error {
 	t.Helper()
-	err := exec.Command("sh", "-c", "exit "+code).Run()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExitHelper$")
+	cmd.Env = append(os.Environ(), exitHelperEnv+"="+code)
+	err := cmd.Run()
 	if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 		t.Skip("cannot make an exit error on this host")
 	}
 	return err
+}
+
+// exitHelperEnv names the variable that turns this test binary into a child that
+// only exits with the code it is given. It is the stdlib's helper-process pattern:
+// no shell, and the same binary on every host.
+const exitHelperEnv = "CLAMAV_TEST_EXIT_CODE"
+
+// TestExitHelper is not a test on its own: it runs only in the child started by
+// exitStatus, and exits with the requested code.
+func TestExitHelper(t *testing.T) {
+	code := os.Getenv(exitHelperEnv)
+	if code == "" {
+		return
+	}
+	n, err := strconv.Atoi(code)
+	if err != nil {
+		t.Fatalf("bad exit code %q", code)
+	}
+	os.Exit(n)
 }
 
 func TestParseVersion(t *testing.T) {
@@ -350,7 +372,7 @@ func TestUninstall(t *testing.T) {
 	}
 	gone := false
 	r := &fakeRunner{answer: func(c Command) ([]byte, error) {
-		if c.Name == "apt-get" {
+		if len(c.Args) > 0 && c.Args[0] == "purge" {
 			gone = true
 		}
 		return healthy(c)
@@ -370,7 +392,9 @@ func TestUninstall(t *testing.T) {
 	if len(removed) != 1 || removed[0] != DatabaseDir {
 		t.Errorf("removed = %v, want [%s]", removed, DatabaseDir)
 	}
-	if !r.ran("apt-get purge -y --autoremove clamav clamav-daemon clamdscan clamav-freshclam") {
+	if !slices.ContainsFunc(r.calls, func(c string) bool {
+		return strings.HasSuffix(c, " purge -y --autoremove clamav clamav-daemon clamdscan clamav-freshclam")
+	}) {
 		t.Errorf("calls = %v", r.calls)
 	}
 }
