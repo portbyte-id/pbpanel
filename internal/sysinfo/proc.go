@@ -309,6 +309,71 @@ func DiskMounts(all []Mount) []Mount {
 	return out
 }
 
+// DiskCounters is one device of /proc/diskstats: sectors transferred since boot.
+type DiskCounters struct {
+	Name         string
+	SectorsRead  uint64
+	SectorsWrite uint64
+}
+
+// SectorBytes is the unit /proc/diskstats counts in, whatever the device's real
+// sector size is.
+const SectorBytes = 512
+
+// ParseDiskstats reads /proc/diskstats: "8 1 sda1 reads merged sectors ms
+// writes merged sectors ms ...". Lines too short to carry the write sectors
+// (very old kernels, partitions on some 2.4-era layouts) are skipped.
+func ParseDiskstats(data []byte) (map[string]DiskCounters, error) {
+	out := map[string]DiskCounters{}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) < 10 {
+			continue
+		}
+		rd, err := strconv.ParseUint(f[5], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("sysinfo: /proc/diskstats %s: %w", f[2], err)
+		}
+		wr, err := strconv.ParseUint(f[9], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("sysinfo: /proc/diskstats %s: %w", f[2], err)
+		}
+		out[f[2]] = DiskCounters{Name: f[2], SectorsRead: rd, SectorsWrite: wr}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("sysinfo: /proc/diskstats: %w", err)
+	}
+	return out, nil
+}
+
+// DiskstatsName maps a /proc/mounts device to its /proc/diskstats name. dmNames
+// maps a device-mapper name ("vg0-root") to its kernel name ("dm-0"); it may be
+// nil. ok is false when the device has no diskstats entry that can be told from
+// the mount alone (by-uuid links, /dev/root, ZFS datasets, overlay).
+func DiskstatsName(device string, dmNames map[string]string, known map[string]DiskCounters) (string, bool) {
+	var name string
+	switch {
+	case strings.HasPrefix(device, "/dev/mapper/"):
+		n, ok := dmNames[strings.TrimPrefix(device, "/dev/mapper/")]
+		if !ok {
+			return "", false
+		}
+		name = n
+	case strings.HasPrefix(device, "/dev/") && !strings.Contains(device[len("/dev/"):], "/"):
+		name = strings.TrimPrefix(device, "/dev/")
+	default:
+		return "", false
+	}
+	if _, ok := known[name]; !ok {
+		return "", false
+	}
+	return name, true
+}
+
 func clampPercent(p float64) float64 {
 	switch {
 	case p < 0:
