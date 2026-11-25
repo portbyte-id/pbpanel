@@ -27,6 +27,11 @@ var ErrInvalidTag = errors.New("the release tag is not valid")
 // window, which is 30 s, so five minutes is far past any healthy upgrade.
 const staleAfter = 5 * time.Minute
 
+// queuedStaleAfter is how long a queued upgrade may wait for its unit to write
+// the first phase. The unit does that within a second of starting, so a record
+// still queued after this long means the unit died before it could report.
+const queuedStaleAfter = 45 * time.Second
+
 var tagPattern = regexp.MustCompile(`^(latest|v?[0-9A-Za-z][0-9A-Za-z._-]{0,62})$`)
 
 // runner is the one command the starter needs. osdep.Runner satisfies it.
@@ -60,9 +65,16 @@ func (s *Starter) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	if st.Active() && s.now().Sub(st.UpdatedAt) > staleAfter {
-		st.Phase = PhaseInterrupted
-		st.Message = "the upgrade stopped reporting; check the host journal for pbp-upgrade-" + st.ID
+	if st.Active() {
+		limit := staleAfter
+		if st.Phase == PhaseQueued {
+			limit = queuedStaleAfter
+		}
+		if s.now().Sub(st.UpdatedAt) > limit {
+			st.Phase = PhaseInterrupted
+			st.Message = "the upgrade stopped reporting; check the host journal: journalctl -u pbp-upgrade-" + st.ID
+			st.Error = "the upgrade unit did not report progress"
+		}
 	}
 	return st, nil
 }

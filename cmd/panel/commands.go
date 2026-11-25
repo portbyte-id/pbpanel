@@ -31,8 +31,10 @@ func commandSet(stdout io.Writer) []*command {
 		{
 			name:    "upgrade",
 			summary: "download the latest release, replace the binary and migrate",
-			usage:   "pbp upgrade [--local | --version <tag>]",
-			maxArgs: 2,
+			usage:   "pbp upgrade [--local | --version <tag>] [--status-file <path>]",
+			// The panel starts this as a unit with `--status-file <path> --version
+			// <tag>`: four arguments. upgradePanel validates each option itself.
+			maxArgs: 4,
 			run: func(ctx context.Context, args []string) error {
 				return upgradePanel(ctx, stdout, args)
 			},

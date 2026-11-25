@@ -241,6 +241,21 @@ func TestVersionPrintsVersion(t *testing.T) {
 	}
 }
 
+// TestUpgradeAcceptsTheArgumentsThePanelPasses pins the exact argv the panel's
+// systemd-run unit uses. It once exceeded maxArgs, so the unit exited on a usage
+// error before it could write any status and the UI sat on "Queued".
+func TestUpgradeAcceptsTheArgumentsThePanelPasses(t *testing.T) {
+	cmds := commandSet(io.Discard)
+	argv := []string{"upgrade", "--status-file", "/www/panel/update/status.json", "--version", "v1.5.0"}
+	sel, err := selectCommand(argv, cmds)
+	if err != nil {
+		t.Fatalf("selectCommand(%q): %v", argv, err)
+	}
+	if sel.cmd == nil || sel.cmd.name != "upgrade" || len(sel.args) != 4 {
+		t.Fatalf("selection = %+v", sel)
+	}
+}
+
 // TestFirewallCommandsAreNotStubs pins that M4 landed: both commands must reach
 // the database, which a fresh data directory does not have.
 func TestFirewallCommandsAreNotStubs(t *testing.T) {

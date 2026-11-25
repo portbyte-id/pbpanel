@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { ReleaseNotes } from "@/components/ReleaseNotes"
 import { Button } from "@/components/ui/button"
@@ -40,12 +40,27 @@ export function UpdateDialog({
   const check = useCheckForUpdates()
   const start = useStartUpgrade()
   const [confirming, setConfirming] = useState(false)
+  // True once this page has watched an upgrade run. A "done" record left by an
+  // earlier upgrade must not reload the page, or it would reload forever.
+  const [sawActive, setSawActive] = useState(false)
 
   const release = info.data
   const latest = release?.latest ?? ""
   const upgrade = status.data
   const active = isUpgradeActive(upgrade?.phase)
   const finished = upgrade?.phase === "done"
+  const reloading = finished && sawActive
+
+  useEffect(() => {
+    if (active) setSawActive(true)
+  }, [active])
+
+  // The panel now serves the new web bundle; this tab still has the old one.
+  useEffect(() => {
+    if (!reloading) return
+    const timer = window.setTimeout(() => window.location.reload(), 3000)
+    return () => window.clearTimeout(timer)
+  }, [reloading])
   const showProgress = upgrade !== undefined && upgrade.phase !== "idle"
 
   const startUpgrade = () => {
@@ -71,6 +86,10 @@ export function UpdateDialog({
 
         {showProgress && upgrade && (
           <UpgradeProgress status={upgrade} reconnecting={status.isError && active} />
+        )}
+
+        {reloading && (
+          <p className="text-muted-foreground text-sm">Upgrade complete. Reloading to load the new version…</p>
         )}
 
         {release?.available && (
@@ -202,6 +221,10 @@ function UpgradeProgress({ status, reconnecting }: { status: UpgradeStatus; reco
           )
         })}
       </ol>
+
+      {status.message && !failed && !complete && (
+        <p className="text-muted-foreground text-xs">{status.message}</p>
+      )}
 
       {reconnecting && <p className="text-muted-foreground text-xs">Waiting for the panel to answer again…</p>}
 

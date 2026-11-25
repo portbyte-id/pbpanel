@@ -294,6 +294,29 @@ func TestStatusReportsAStalledUpgradeAsInterrupted(t *testing.T) {
 	}
 }
 
+func TestStatusReportsAnUpgradeThatNeverStartedAsInterrupted(t *testing.T) {
+	s := newStarter(t, &fakeRunner{})
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	if err := writeStatus(s.StatusFile, Status{ID: "q1", Phase: PhaseQueued, UpdatedAt: now.Add(-time.Minute), Log: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Phase != PhaseInterrupted || st.Error == "" {
+		t.Fatalf("queued upgrade that never reported = %+v", st)
+	}
+	// A download that is a minute quiet is still running.
+	if err := writeStatus(s.StatusFile, Status{ID: "d1", Phase: PhaseDownloading, UpdatedAt: now.Add(-time.Minute), Log: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Status(); st.Phase != PhaseDownloading {
+		t.Fatalf("a one-minute-quiet download = %+v, want it still downloading", st)
+	}
+}
+
 func TestStatusPathLivesUnderThePanelTree(t *testing.T) {
 	if got, want := StatusPath("/www/panel"), filepath.Join("/www/panel", "update", "status.json"); got != want {
 		t.Fatalf("StatusPath = %s, want %s", got, want)
