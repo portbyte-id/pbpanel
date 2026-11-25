@@ -24,9 +24,9 @@ import (
 )
 
 // Packages are the Ubuntu packages that make up the service: the scanner and its
-// libraries, the clamd daemon, and the freshclam signature updater. The daemon is
+// libraries, the clamd daemon, clamdscan (its client, a separate package), and the freshclam signature updater. The daemon is
 // what makes a scan fast; without it every scan loads the whole signature set.
-var Packages = []string{"clamav", "clamav-daemon", "clamav-freshclam"}
+var Packages = []string{"clamav", "clamav-daemon", "clamdscan", "clamav-freshclam"}
 
 // Units and binaries, as the Ubuntu packages lay them out.
 const (

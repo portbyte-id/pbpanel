@@ -236,7 +236,7 @@ open-appsec engine.
 ### Store: ClamAV
 
 The open-source antivirus scanner, installed from the distribution's packages
-(`clamav`, `clamav-daemon`, `clamav-freshclam`) and removed from the Store, as
+(`clamav`, `clamav-daemon`, `clamdscan`, `clamav-freshclam`) and removed from the Store, as
 jobs. Answers 503 on a panel built without it. Ubuntu only, like the rest of the
 package layer.
 
@@ -260,7 +260,7 @@ from files:
   "updater_active": true,
   "scanning": false,
   "reason": "",
-  "packages": ["clamav", "clamav-daemon", "clamav-freshclam"]
+  "packages": ["clamav", "clamav-daemon", "clamdscan", "clamav-freshclam"]
 }
 ```
 

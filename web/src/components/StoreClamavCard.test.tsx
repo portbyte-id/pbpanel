@@ -34,7 +34,7 @@ const availability = (over: Partial<ClamavAvailability> = {}): ClamavAvailabilit
   updater_active: false,
   scanning: false,
   reason: "ClamAV is not installed",
-  packages: ["clamav", "clamav-daemon", "clamav-freshclam"],
+  packages: ["clamav", "clamav-daemon", "clamdscan", "clamav-freshclam"],
   ...over,
 })
 
@@ -73,7 +73,7 @@ describe("StoreClamavCard", () => {
     renderCard()
 
     expect(await screen.findByRole("button", { name: /^install clamav/i })).toBeInTheDocument()
-    expect(screen.getByText(/clamav, clamav-daemon, clamav-freshclam/)).toBeInTheDocument()
+    expect(screen.getByText(/clamav, clamav-daemon, clamdscan, clamav-freshclam/)).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /uninstall/i })).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole("button", { name: /^install clamav/i }))

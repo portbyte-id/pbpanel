@@ -87,7 +87,7 @@ func TestClamavStatus(t *testing.T) {
 	if out["installed"] != true || out["version"] != "1.4.3" || out["signature_version"] != "27800" {
 		t.Errorf("status = %v", out)
 	}
-	if pk, _ := out["packages"].([]any); len(pk) != 3 {
+	if pk, _ := out["packages"].([]any); len(pk) != 4 {
 		t.Errorf("packages = %v", out["packages"])
 	}
 }

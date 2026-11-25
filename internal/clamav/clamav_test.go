@@ -176,7 +176,7 @@ func TestInstallOrder(t *testing.T) {
 	if err := m.Install(context.Background(), func(l string) { lines = append(lines, l) }); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(installed, ",") != "clamav,clamav-daemon,clamav-freshclam" {
+	if strings.Join(installed, ",") != "clamav,clamav-daemon,clamdscan,clamav-freshclam" {
 		t.Errorf("packages = %v", installed)
 	}
 	// The updater is stopped before freshclam runs and the daemon restarted after,
@@ -340,7 +340,7 @@ func TestUninstall(t *testing.T) {
 	if err := New(Options{Run: r, Stat: stat}).Uninstall(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !r.ran("apt-get purge -y clamav clamav-daemon clamav-freshclam") {
+	if !r.ran("apt-get purge -y clamav clamav-daemon clamdscan clamav-freshclam") {
 		t.Errorf("calls = %v", r.calls)
 	}
 }
