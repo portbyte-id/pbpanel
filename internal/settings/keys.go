@@ -31,6 +31,7 @@ const (
 	groupLogs     = "Logs"
 	groupRuntimes = "Runtimes"
 	groupNotify   = "Notifications"
+	groupMetrics  = "Metrics"
 )
 
 // Prebuilt runtime settings. nginx can be taken from a build a CI job already
@@ -586,8 +587,77 @@ func defaultKeys() []key {
 				Group:       groupNotify,
 			},
 		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsEnabled,
+				Type:        TypeBool,
+				Default:     "true",
+				Description: "Keep a history of CPU, load, memory, disks, network, services and site traffic, and evaluate alert thresholds against it. Off: nothing more is recorded and no alert is evaluated; the live dashboard is unchanged and the stored history is kept until you clear it.",
+				Group:       groupMetrics,
+			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsRawRetention,
+				Type:        TypeDuration,
+				Default:     "24h",
+				Description: "How long the finest samples are kept: 10 seconds for the host and disks, 30 seconds for services. Between 1h and 72h.",
+				Group:       groupMetrics,
+			},
+			check: rangeDuration(time.Hour, 72*time.Hour),
+		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsMinuteRetention,
+				Type:        TypeDuration,
+				Default:     "168h",
+				Description: "How long one-minute rows are kept (host, disks, services, and site traffic). Between 24h and 720h.",
+				Group:       groupMetrics,
+			},
+			check: rangeDuration(24*time.Hour, 720*time.Hour),
+		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsCoarseRetention,
+				Type:        TypeDuration,
+				Default:     "2160h",
+				Description: "How long five-minute rows (15-minute for sites) are kept, which is what the 30 and 90 day charts read. Between 168h and 8760h.",
+				Group:       groupMetrics,
+			},
+			check: rangeDuration(168*time.Hour, 8760*time.Hour),
+		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsSitesEnabled,
+				Type:        TypeBool,
+				Default:     "true",
+				Description: "Record per-site request counts, status classes, bytes and response times from the access logs.",
+				Group:       groupMetrics,
+			},
+		},
+		{
+			meta: Meta{
+				Name:        KeyMetricsAlertsEnabled,
+				Type:        TypeBool,
+				Default:     "true",
+				Description: "Evaluate the alert rules after every minute of history and send a notification when one fires or clears.",
+				Group:       groupMetrics,
+			},
+		},
 	}
 }
+
+// Metrics history keys (docs/design/metrics-history-plan.md §4.5). The recorder
+// subscribes to the registry, so a change applies without a restart; shortening a
+// retention deletes on the next hourly sweep.
+const (
+	KeyMetricsEnabled         = "metrics.enabled"
+	KeyMetricsRawRetention    = "metrics.raw_retention"
+	KeyMetricsMinuteRetention = "metrics.minute_retention"
+	KeyMetricsCoarseRetention = "metrics.coarse_retention"
+	KeyMetricsSitesEnabled    = "metrics.sites_enabled"
+	KeyMetricsAlertsEnabled   = "metrics.alerts_enabled"
+)
 
 // Notifications keys (docs/design/notifications-plan.md §4.4). The notify
 // package reads them on each event, so a change applies without a restart.

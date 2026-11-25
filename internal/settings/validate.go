@@ -182,6 +182,20 @@ func positiveDuration(value string) error {
 	return nil
 }
 
+// rangeDuration accepts a duration between min and max, both included.
+func rangeDuration(min, max time.Duration) func(string) error {
+	return func(value string) error {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("must be a duration such as 24h or 168h")
+		}
+		if d < min || d > max {
+			return fmt.Errorf("must be between %s and %s", min, max)
+		}
+		return nil
+	}
+}
+
 // checkKey is the boot-time guarantee: every registered key must have metadata
 // the Settings page can render and a default its own validator accepts.
 func checkKey(k key) error {

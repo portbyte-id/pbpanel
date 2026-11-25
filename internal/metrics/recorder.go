@@ -237,6 +237,12 @@ func (r *Recorder) SetRetention(ret Retention) {
 	r.mu.Unlock()
 }
 
+func (r *Recorder) retention() Retention {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ret
+}
+
 // Status reports the recorder's health.
 func (r *Recorder) Status() Status {
 	r.mu.Lock()

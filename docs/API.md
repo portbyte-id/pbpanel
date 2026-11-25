@@ -389,3 +389,29 @@ fields. A write that omits a secret keeps its stored value; `""` clears it.
 Channel write body: `name`, `type` (`smtp`, `webhook`, `telegram`, `discord`), `enabled`, `min_severity`,
 `kinds`, `quiet_start`/`quiet_end` (`HH:MM`, local time), `send_resolved`, `config` (non-secret fields),
 `secret` (secret fields only: `password`, `hmac_secret`, `bot_token`, `webhook_url`).
+
+## Metrics history
+
+Stored history of the host, disks, services and sites (`docs/design/metrics-history-plan.md` §4.4).
+Every route needs a session. Without a history database (a failed start) the routes answer 503. The
+four chart routes answer `409` while `metrics.enabled` is off; status and clear keep working.
+
+Every chart response is **columnar**: `step` (seconds per point), `t` (unix start of each point) and
+one array per series, the same length as `t`. A point with no data is `null`, never interpolated:
+that is a daemon that was down, or a series that did not exist yet. The finest tier whose retention
+reaches back to the start of the range is used, and `step` is raised so that no series has more than
+1 500 points.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/metrics/host?range=` | `cpu`, `cpu_max`, `load1`, `load1_max`, `load5`, `load15`, `mem_used`, `mem_avail`, `swap_used`, `net_rx`, `net_tx` |
+| `GET /api/metrics/disks?range=` | `mounts: [{mount, used_pct, used_pct_max, used, rd_bps, wr_bps}]`; IO is `null` for a device that could not be mapped |
+| `GET /api/metrics/services?range=&name=` | `services: [{name, state, up_frac, cpu, cpu_max, rss, rss_max}]`; `state` is the worst state in the bucket (1 running, 2 starting, 3 stopping, 4 stopped, 5 failed, 6 missing, 7 unknown) |
+| `GET /api/metrics/sites/{domain}?range=` | `req`, `s2`..`s5`, `bytes`, `rt_p50`, `rt_p95`, `urt_p50`, `urt_p95` (seconds); 404 for a domain that is not a site |
+| `GET /api/metrics/status` | file and WAL size, rows and oldest timestamp per tier, last flush, last error, rows dropped |
+| `POST /api/metrics/clear` | deletes the whole history (audit-logged); alert rules are not touched |
+
+`range` is one of `1h`, `6h`, `24h`, `7d`, `30d`, `90d` (default `1h`), or `from` and `to` as unix
+seconds. Anything else is `400`. For a site, a minute with no requests while the daemon was recording
+is `0`; a minute the daemon did not record is `null`. Percentiles are interpolated inside a fixed
+histogram bin and are good to about 20%.

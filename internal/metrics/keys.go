@@ -24,6 +24,13 @@ func newKeyCache() *keyCache {
 	return &keyCache{ids: map[seriesKey]int64{}}
 }
 
+// reset forgets every cached id, after the dictionary table was emptied.
+func (c *keyCache) reset() {
+	c.mu.Lock()
+	c.ids = map[seriesKey]int64{}
+	c.mu.Unlock()
+}
+
 // KeyID returns the dictionary id of a series, creating it on first use. It
 // commits on its own, outside any flush transaction, so a rolled-back flush can
 // never leave the cache pointing at an id that does not exist.

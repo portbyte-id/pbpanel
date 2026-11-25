@@ -553,7 +553,7 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 	r, _ := newTestRegistry(t)
 
 	groups := r.Groups()
-	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Firewall", "Cron", "Logs", "Runtimes", "Notifications"}
+	wantGroups := []string{"Panel", "Login", "Session", "PHP", "Sites", "Files", "TLS", "Firewall", "Cron", "Logs", "Runtimes", "Notifications", "Metrics"}
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("got %d groups, want %d: %+v", len(groups), len(wantGroups), groups)
 	}
@@ -579,6 +579,8 @@ func TestGroupsAreOrderedAndComplete(t *testing.T) {
 		"Runtimes": {"runtimes.prebuilt", "runtimes.url"},
 		"Notifications": {"notify.enabled", "notify.dedupe_window", "notify.rate.per_hour",
 			"notify.events.keep", "notify.events.retain_age", "notify.panel_url", "notify.label"},
+		"Metrics": {"metrics.enabled", "metrics.raw_retention", "metrics.minute_retention",
+			"metrics.coarse_retention", "metrics.sites_enabled", "metrics.alerts_enabled"},
 	}
 	seen := 0
 	for _, g := range groups {
